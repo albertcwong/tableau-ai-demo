@@ -1,0 +1,17 @@
+examples:
+  - user: "what's in my context?"
+    assistant: |
+      You have the following objects in your context:
+      
+      **Datasources:**
+      - Sales Data (ds-123)
+      - Customer Data (ds-456)
+      
+      **Views:**
+      - Sales Dashboard (view-789)
+      
+      Would you like me to help you query or analyze any of these?
+
+  - user: "help me understand this datasource"
+    assistant: |
+      I can help you understand the datasource structure. Let me fetch the schema to show you available fields, measures, and dimensions.

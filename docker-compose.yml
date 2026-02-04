@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tableau-demo-postgres
+    environment:
+      POSTGRES_DB: tableau_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: tableau-demo-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gateway
+    container_name: tableau-demo-gateway
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - GATEWAY_PORT=8001
+      - GATEWAY_BASE_URL=http://gateway:8001
+      # AI Provider Credentials (Direct Passthrough)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Salesforce Models API (JWT OAuth)
+      - SALESFORCE_CLIENT_ID=${SALESFORCE_CLIENT_ID:-}
+      - SALESFORCE_PRIVATE_KEY_PATH=/app/credentials/salesforce-private-key.pem
+      - SALESFORCE_USERNAME=${SALESFORCE_USERNAME:-}
+      - SALESFORCE_MODELS_API_URL=${SALESFORCE_MODELS_API_URL:-https://api.salesforce.com/einstein/platform/v1}
+      # Vertex AI (Service Account)
+      - VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID:-}
+      - VERTEX_LOCATION=${VERTEX_LOCATION:-us-central1}
+      - VERTEX_SERVICE_ACCOUNT_PATH=/app/credentials/vertex-sa.json
+      # Model Mapping
+      - MODEL_MAPPING=${MODEL_MAPPING:-}
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/gateway/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tableau-demo-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/tableau_demo
+      - REDIS_URL=redis://redis:6379/0
+      - GATEWAY_BASE_URL=http://gateway:8001
+      - TABLEAU_SERVER_URL=${TABLEAU_SERVER_URL:-}
+      - TABLEAU_SITE_ID=${TABLEAU_SITE_ID:-}
+      - TABLEAU_CLIENT_ID=${TABLEAU_CLIENT_ID:-}
+      - TABLEAU_CLIENT_SECRET=${TABLEAU_CLIENT_SECRET:-}
+      - MCP_SERVER_NAME=tableau-analyst-agent
+      - MCP_LOG_LEVEL=info
+    volumes:
+      - ./credentials:/app/credentials:ro
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+  # Note: MCP SSE endpoints are integrated into the backend service
+  # This service is optional and only needed for standalone stdio mode
+  # For SSE transport, use backend service endpoints: http://backend:8000/mcp/sse
+  # mcp-server:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile.mcp
+  #   container_name: tableau-demo-mcp-server
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/tableau_demo
+  #     - GATEWAY_BASE_URL=http://gateway:8001
+  #     - MCP_SERVER_NAME=tableau-analyst-agent
+  #     - MCP_TRANSPORT=stdio
+  #     - MCP_LOG_LEVEL=info
+  #   volumes:
+  #     - ./credentials:/app/credentials:ro
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     gateway:
+  #       condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tableau-demo-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,41 @@
+# MCP Server Dockerfile
+# Note: MCP server SSE transport is integrated into FastAPI backend
+# This Dockerfile is for standalone MCP server (stdio mode) or can be used
+# with FastAPI backend that includes MCP SSE endpoints
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app/ ./app/
+COPY mcp_server/ ./mcp_server/
+
+# Create credentials directory
+RUN mkdir -p /app/credentials
+
+# Expose MCP server port (for SSE transport via FastAPI)
+# Note: SSE endpoints are exposed via FastAPI backend, not standalone
+EXPOSE 8002
+
+# Health check (for SSE endpoint via FastAPI)
+# In production, MCP SSE is accessed via backend:8000/mcp/sse
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8002/mcp/debug/tools || exit 1
+
+# For stdio transport (IDE integration), run MCP server directly
+# For SSE transport, use FastAPI backend which includes MCP endpoints
+# Default: stdio mode (for IDE integration)
+CMD ["python", "-m", "mcp_server.server"]

@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "../**": true,
+    "../../**": true,
+    "../../../**": true
+  },
+  "files.watcherExclude": {
+    "../**": true,
+    "../../**": true,
+    "../../../**": true
+  }
+}

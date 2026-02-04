@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+.next/
+out/
+dist/
+build/
+
+# Test
+coverage/
+.nyc_output/
+
+# SSL certificates (for local dev)
+localhost-key.pem
+localhost.pem
+
+# Temporary
+tmp/
+temp/
+*.tmp

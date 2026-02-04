@@ -1,0 +1,119 @@
+# Dependencies
+node_modules/
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Credentials
+credentials/*.json
+credentials/*.pem
+credentials/*.key
+!credentials/.gitkeep
+!credentials/*.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Next.js
+.next/
+out/
+.vercel
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+# Note: .cursor/ is tracked to share workspace settings
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Alembic
+alembic/versions/*.pyc
+
+# Temporary files
+tmp/
+*.tmp
+*.bak
+*.swp
+
+# Project-specific
+.github/workflows/secrets.yml
+*.local
+
+# MCP server config (may contain secrets)
+**/mcp-config.json
+!**/mcp-config.json.example
+
+# Agent transcripts and terminals (development artifacts)
+agent-transcripts/
+terminals/
+*.txt
+!README.txt
+!CHANGELOG.txt
+
+# Build artifacts
+*.egg
+*.whl
+*.tar.gz
+
+# Coverage reports
+.coverage.*
+htmlcov/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# TypeScript
+*.tsbuildinfo
+
+# Local development
+.local/
+.cache/
+
+# Backup files
+*.backup
+*~
+
+# IDE workspace files
+*.code-workspace
+.project
+.classpath
+.settings/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows
+ehthumbs.db
+Desktop.ini

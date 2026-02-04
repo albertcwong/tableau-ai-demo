@@ -1,0 +1,77 @@
+examples:
+  - user: "show total sales by region"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Sales", "function": "SUM"},
+            {"fieldCaption": "Region"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "average price per product category"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Price", "function": "AVG"},
+            {"fieldCaption": "Product"},
+            {"fieldCaption": "Category"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "count of orders by month in 2024"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Order ID", "function": "COUNT"},
+            {"fieldCaption": "Month"}
+          ],
+          "filters": [
+            {"fieldCaption": "Year", "values": ["2024"]}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "top 10 customers by revenue"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Revenue", "function": "SUM"},
+            {"fieldCaption": "Customer"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false,
+          "limit": 10
+        }
+      }

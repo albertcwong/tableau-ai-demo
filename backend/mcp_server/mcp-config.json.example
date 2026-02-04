@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "tableau-analyst-agent": {
+      "command": "/absolute/path/to/tableau-ai-demo/backend/venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_server.server"
+      ],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/tableau-ai-demo/backend"
+      }
+    }
+  }
+}
+
+# NOTE: Replace /absolute/path/to/tableau-ai-demo with your actual project path
+# Cursor may support ${workspaceFolder} variable, but if tools don't appear,
+# try using absolute paths instead.

@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Credentials (should be mounted as volumes)
+credentials/*.pem
+credentials/*.json
+credentials/*.key
+!credentials/.gitkeep
+
+# Test files
+test_*.py
+tests/
+
+# Temporary
+tmp/
+temp/
+*.tmp

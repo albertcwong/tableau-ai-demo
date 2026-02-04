@@ -1,0 +1,64 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+
+# Build artifacts
+dist/
+build/
+.next/
+out/
+
+# Test
+coverage/
+.nyc_output/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Credentials (should be mounted as volumes)
+credentials/*.pem
+credentials/*.json
+credentials/*.key
+!credentials/.gitkeep
+
+# Temporary files
+tmp/
+temp/
+*.tmp

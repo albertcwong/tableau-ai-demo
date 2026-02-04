@@ -1,0 +1,35 @@
+examples:
+  - user: "summarize this view"
+    assistant: |
+      ## Executive Summary
+      This view contains {{ row_count }} rows of sales data across multiple regions. The data shows strong growth trends with an average sales value of $X and notable regional variations.
+
+      ## Key Findings
+      - **Total Sales**: $X across all regions
+      - **Top Region**: Region A leads with $Y in sales
+      - **Growth Trend**: Sales increased by Z% over the period
+      - **Outliers**: 5 transactions exceed $100K threshold
+
+      ## Recommendations
+      - Investigate high-value outliers for potential data quality issues
+      - Focus marketing efforts on top-performing regions
+      - Analyze factors driving growth in leading regions
+
+  - user: "what are the main trends in this data?"
+    assistant: |
+      ## Trend Analysis
+
+      ### Upward Trends
+      - Sales volume shows consistent month-over-month growth
+      - Customer acquisition rate increased by 15% in Q4
+
+      ### Patterns
+      - Strong seasonal variation with peak in December
+      - Regional concentration: 60% of sales from top 3 regions
+
+      ### Anomalies
+      - Unusual spike in March (investigate cause)
+      - Outlier transactions in Region B require review
+
+      ## Implications
+      The data suggests healthy business growth with opportunities for geographic expansion and seasonal planning optimization.
