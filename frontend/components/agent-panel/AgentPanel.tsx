@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { chatApi, chatContextApi } from '@/lib/api';
 import { AgentSelector, AgentType } from './AgentSelector';
 import { ContextManager } from './ContextManager';
@@ -9,7 +9,7 @@ import { ThreadList } from './ThreadList';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { X, MessageSquare } from 'lucide-react';
+import { X, MessageSquare, GripVertical } from 'lucide-react';
 import type { ChatContextObject, ConversationResponse } from '@/types';
 
 interface AgentPanelProps {
@@ -18,9 +18,14 @@ interface AgentPanelProps {
   onAddToContext?: (objectId: string, objectType: 'datasource' | 'view') => void;
   onAddToContextRef?: (handler: (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) => void;
   onContextChange?: (context: ChatContextObject[]) => void;
+  onWidthChange?: (width: number) => void;
 }
 
-export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange }: AgentPanelProps) {
+const MIN_WIDTH = 384; // w-96 equivalent
+const MAX_WIDTH = 1200; // Maximum width
+const DEFAULT_WIDTH = 384;
+
+export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange }: AgentPanelProps) {
   const [agentType, setAgentType] = useState<AgentType>('general');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
@@ -28,6 +33,9 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null);
   const [context, setContext] = useState<ChatContextObject[]>([]);
   const [loading, setLoading] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -146,10 +154,65 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
     }
   }, [onAddToContextRef, handleAddToContext]);
 
+  // Handle resize
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      
+      const newWidth = window.innerWidth - e.clientX;
+      const clampedWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth));
+      setWidth(clampedWidth);
+      onWidthChange?.(clampedWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing, onWidthChange]);
+
+  // Notify parent of width changes
+  useEffect(() => {
+    onWidthChange?.(width);
+  }, [width, onWidthChange]);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed right-0 top-0 h-full w-96 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-lg z-50 flex flex-col">
+    <div 
+      className="fixed right-0 top-0 h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-lg z-50 flex flex-col"
+      style={{ width: `${width}px` }}
+    >
+      {/* Resize handle */}
+      <div
+        ref={resizeRef}
+        onMouseDown={handleResizeStart}
+        className="absolute left-0 top-0 h-full w-2 cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10 group"
+        style={{ touchAction: 'none' }}
+        title="Drag to resize"
+      >
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+          <GripVertical className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+        </div>
+      </div>
       <div className="p-4 border-b border-gray-200 dark:border-gray-800 shrink-0">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">

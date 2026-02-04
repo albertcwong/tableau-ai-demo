@@ -213,6 +213,10 @@ app.include_router(metrics_router, prefix="/api/v1")
 from app.api.debug import router as debug_router
 app.include_router(debug_router, prefix="/api/v1")
 
+# Feedback API
+from app.api.feedback import router as feedback_router
+app.include_router(feedback_router, prefix="/api/v1")
+
 # Include MCP SSE endpoint and debug endpoints for web integration
 try:
     from sse_starlette.sse import EventSourceResponse

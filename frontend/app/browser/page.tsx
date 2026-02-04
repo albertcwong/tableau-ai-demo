@@ -10,6 +10,7 @@ import type { ChatContextObject } from '@/types';
 export default function BrowserPage() {
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
   const [contextObjects, setContextObjects] = useState<ChatContextObject[]>([]);
+  const [agentPanelWidth, setAgentPanelWidth] = useState(384); // Default w-96
   const addToContextRef = useRef<((objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) | null>(null);
 
   const handleAddToContext = (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => {
@@ -29,7 +30,10 @@ export default function BrowserPage() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="flex h-screen">
         {/* Main Content Area */}
-        <div className={`flex-1 transition-all duration-300 ${isAgentPanelOpen ? 'mr-96' : ''}`}>
+        <div 
+          className="flex-1 transition-all duration-300"
+          style={{ marginRight: isAgentPanelOpen ? `${agentPanelWidth}px` : '0' }}
+        >
           <div className="h-full overflow-y-auto p-6">
             <div className="flex items-center justify-between mb-6">
               <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
@@ -59,6 +63,7 @@ export default function BrowserPage() {
             addToContextRef.current = handler;
           }}
           onContextChange={handleContextChange}
+          onWidthChange={setAgentPanelWidth}
         />
       </div>
     </div>

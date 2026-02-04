@@ -45,11 +45,21 @@ class AgentGraphFactory:
         raise NotImplementedError("General graph will be implemented in Sprint 4")
     
     @staticmethod
+    def create_multi_agent_graph() -> StateGraph:
+        """Create multi-agent orchestration graph.
+        
+        Returns:
+            Compiled StateGraph for multi-agent orchestration
+        """
+        from app.services.agents.multi_agent.orchestrator import create_multi_agent_graph
+        return create_multi_agent_graph()
+    
+    @staticmethod
     def create_graph(agent_type: str) -> StateGraph:
         """Create agent graph by type.
         
         Args:
-            agent_type: Agent type ('vizql', 'summary', or 'general')
+            agent_type: Agent type ('vizql', 'summary', 'general', or 'multi_agent')
             
         Returns:
             Compiled StateGraph for the specified agent type
@@ -63,5 +73,7 @@ class AgentGraphFactory:
             return AgentGraphFactory.create_summary_graph()
         elif agent_type == 'general':
             return AgentGraphFactory.create_general_graph()
+        elif agent_type == 'multi_agent':
+            return AgentGraphFactory.create_multi_agent_graph()
         else:
             raise ValueError(f"Unknown agent type: {agent_type}")

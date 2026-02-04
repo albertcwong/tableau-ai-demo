@@ -387,12 +387,17 @@ def format_tool_result(tool_result: Dict[str, Any]) -> str:
         return "\n".join(lines)
     
     elif tool_name == "embed_view":
+        token = data.get('token')
+        # Handle case where token might be a coroutine (from mocks)
+        if token and not isinstance(token, str):
+            token = str(token)
+        token_str = f"{token[:20]}..." if token and isinstance(token, str) and len(token) > 20 else (token if token else "N/A")
         return (
             f"View embedding URL:\n"
             f"URL: {data.get('url', 'N/A')}\n"
             f"View ID: {data.get('view_id', 'N/A')}\n"
             f"Workbook ID: {data.get('workbook_id', 'N/A')}\n"
-            f"Token: {data.get('token', 'N/A')[:20]}..." if data.get('token') else "Token: N/A"
+            f"Token: {token_str}"
         )
     
     else:

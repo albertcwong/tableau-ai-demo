@@ -51,7 +51,7 @@ class MessageRequest(BaseModel):
     conversation_id: int = Field(..., description="Conversation ID")
     content: str = Field(..., min_length=1, description="Message content")
     model: str = Field(default="gpt-4", description="AI model to use")
-    agent_type: Optional[str] = Field(None, description="Agent type: 'summary', 'vizql', or 'general'")
+    agent_type: Optional[str] = Field(None, description="Agent type: 'summary', 'vizql', 'multi_agent', or 'general'")
     stream: bool = Field(default=False, description="Whether to stream the response")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
@@ -384,15 +384,189 @@ async def send_message(
     # Initialize Tableau client for context retrieval
     tableau_client = TableauClient()
     
+    # Initialize feedback manager for query refinement
+    from app.services.agents.feedback import FeedbackManager
+    feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+    
     try:
         # Route to agent graphs if agent_type is specified and context is available
         agent_type = request.agent_type or 'general'
         
+        # Check if multi-agent is needed (either explicitly requested or detected)
+        use_multi_agent = False
+        if agent_type == 'multi_agent':
+            use_multi_agent = True
+        elif agent_type == 'general' or not agent_type:
+            # Use meta-agent to determine if multi-agent is needed
+            from app.services.agents.meta_agent import MetaAgentSelector
+            meta_selector = MetaAgentSelector(api_key=api_key, model=request.model)
+            selection = await meta_selector.select_agent(
+                user_query=request.content,
+                context={
+                    "datasources": datasource_ids,
+                    "views": view_ids,
+                    "conversation_history": history_messages[-5:] if history_messages else []
+                }
+            )
+            if selection.get("requires_multi_agent") or selection.get("selected_agent") == "multi_agent":
+                use_multi_agent = True
+                agent_type = "multi_agent"
+                logger.info(f"Meta-agent detected multi-agent workflow needed: {selection.get('reasoning')}")
+        
+        # Route to Multi-Agent Orchestrator
+        if use_multi_agent:
+            from app.services.agents.multi_agent import MultiAgentOrchestrator
+            
+            logger.info(f"Routing to Multi-Agent orchestrator")
+            
+            # Apply feedback-based refinement to query
+            refined_query_result = await feedback_manager.apply_feedback_to_query(
+                query=request.content,
+                conversation_id=request.conversation_id,
+                agent_type="multi_agent"
+            )
+            refined_query = refined_query_result.get("refined_query", request.content)
+            
+            if refined_query != request.content:
+                logger.info(f"Query refined based on feedback: {refined_query_result.get('changes')}")
+            
+            execution_start = time.time()
+            execution_id = str(uuid.uuid4())
+            metrics = get_metrics()
+            conversation_memory = get_conversation_memory(request.conversation_id)
+            debugger = get_debugger()
+            
+            orchestrator = MultiAgentOrchestrator(api_key=api_key, model=request.model)
+            
+            if request.stream:
+                # For streaming, we'll execute and stream the final answer
+                # Multi-agent workflows are complex, so we stream the final combined result
+                async def generate_multi_agent_stream():
+                    try:
+                        result = await orchestrator.execute_workflow(
+                            user_query=refined_query,
+                            context={
+                                "datasources": datasource_ids,
+                                "views": view_ids
+                            }
+                        )
+                        
+                        # Stream the final answer
+                        final_answer = result.get("final_answer", "Workflow completed")
+                        execution_trace = result.get("execution_trace", [])
+                        
+                        # Stream execution trace updates
+                        for step in execution_trace:
+                            if step.get("parallel"):
+                                yield f"data: [PARALLEL] {step.get('agent_type')}: {step.get('action')}\n\n"
+                            else:
+                                yield f"data: [{step.get('agent_type')}] {step.get('action')}\n\n"
+                        
+                        # Stream final answer in chunks
+                        words = final_answer.split()
+                        for word in words:
+                            yield f"data: {word} \n\n"
+                        
+                        yield "data: [DONE]\n\n"
+                        
+                        # Save final message
+                        assistant_message = Message(
+                            conversation_id=request.conversation_id,
+                            role=MessageRole.ASSISTANT,
+                            content=final_answer,
+                            model_used=request.model,
+                            extra_metadata={
+                                "execution_id": execution_id,
+                                "agent_type": "multi_agent",
+                                "agents_used": result.get("agents_used", []),
+                                "execution_trace": execution_trace
+                            }
+                        )
+                        db.add(assistant_message)
+                        conversation.updated_at = conversation.updated_at
+                        db.commit()
+                        
+                    except Exception as e:
+                        logger.error(f"Error in multi-agent workflow: {e}", exc_info=True)
+                        yield f"data: Error: {str(e)}\n\n"
+                        yield "data: [DONE]\n\n"
+                
+                return StreamingResponse(
+                    generate_multi_agent_stream(),
+                    media_type="text/event-stream"
+                )
+            else:
+                # Non-streaming execution
+                result = await orchestrator.execute_workflow(
+                    user_query=refined_query,
+                    context={
+                        "datasources": datasource_ids,
+                        "views": view_ids
+                    }
+                )
+                
+                final_answer = result.get("final_answer", "Workflow completed")
+                execution_time = time.time() - execution_start
+                
+                # Track metrics
+                metrics.record_agent_execution(
+                    agent_type="multi_agent",
+                    execution_time=execution_time,
+                    success=True
+                )
+                
+                # Save assistant message
+                assistant_message = Message(
+                    conversation_id=request.conversation_id,
+                    role=MessageRole.ASSISTANT,
+                    content=final_answer,
+                    model_used=request.model,
+                    extra_metadata={
+                        "execution_id": execution_id,
+                        "agent_type": "multi_agent",
+                        "agents_used": result.get("agents_used", []),
+                        "execution_trace": result.get("execution_trace", []),
+                        "execution_time": execution_time
+                    }
+                )
+                db.add(assistant_message)
+                conversation.updated_at = conversation.updated_at
+                db.commit()
+                db.refresh(assistant_message)
+                
+                return ChatResponse(
+                    message=MessageResponse(
+                        id=assistant_message.id,
+                        conversation_id=assistant_message.conversation_id,
+                        role=assistant_message.role.value,
+                        content=assistant_message.content,
+                        model_used=assistant_message.model_used,
+                        tokens_used=None,
+                        created_at=assistant_message.created_at
+                    ),
+                    conversation_id=request.conversation_id,
+                    model=request.model,
+                    tokens_used=0
+                )
+        
         # Route to VizQL agent graph
-        if agent_type == 'vizql' and datasource_ids:
+        elif agent_type == 'vizql' and datasource_ids:
             from app.services.agents.graph_factory import AgentGraphFactory
             
             logger.info(f"Routing to VizQL agent graph with datasources: {datasource_ids}")
+            
+            # Apply feedback-based refinement to query
+            from app.services.agents.feedback import FeedbackManager
+            feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+            refined_query_result = await feedback_manager.apply_feedback_to_query(
+                query=request.content,
+                conversation_id=request.conversation_id,
+                agent_type="vizql"
+            )
+            refined_query = refined_query_result.get("refined_query", request.content)
+            
+            if refined_query != request.content:
+                logger.info(f"Query refined based on feedback: {refined_query_result.get('changes')}")
             
             # Track execution start time
             execution_start = time.time()
@@ -406,7 +580,7 @@ async def send_message(
             
             # Initialize state for VizQL agent
             initial_state = {
-                "user_query": request.content,
+                "user_query": refined_query,
                 "agent_type": "vizql",
                 "context_datasources": datasource_ids,
                 "context_views": view_ids,
@@ -680,6 +854,19 @@ async def send_message(
             
             logger.info(f"Routing to Summary agent graph with views: {view_ids}")
             
+            # Apply feedback-based refinement to query
+            from app.services.agents.feedback import FeedbackManager
+            feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+            refined_query_result = await feedback_manager.apply_feedback_to_query(
+                query=request.content,
+                conversation_id=request.conversation_id,
+                agent_type="summary"
+            )
+            refined_query = refined_query_result.get("refined_query", request.content)
+            
+            if refined_query != request.content:
+                logger.info(f"Query refined based on feedback: {refined_query_result.get('changes')}")
+            
             # Track execution start time
             execution_start = time.time()
             metrics = get_metrics()
@@ -689,7 +876,7 @@ async def send_message(
             
             # Initialize state for Summary agent
             initial_state = {
-                "user_query": request.content,
+                "user_query": refined_query,
                 "agent_type": "summary",
                 "context_datasources": datasource_ids,
                 "context_views": view_ids,
