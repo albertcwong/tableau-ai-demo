@@ -8,6 +8,7 @@ class VizQLAgentState(BaseAgentState):
     
     # Schema information
     schema: Optional[dict]
+    enriched_schema: Optional[dict]  # Enriched schema from Phase 2 (with semantic metadata)
     
     # Intent parsing results
     required_measures: list[str]

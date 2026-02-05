@@ -23,7 +23,7 @@ def create_vizql_graph() -> StateGraph:
     Graph flow:
     1. Planner -> Schema Fetch -> Query Builder -> Validator
     2. Validator -> (if valid) Executor -> Formatter -> END
-    3. Validator -> (if invalid) Refiner -> Query Builder (loop, max 3 times)
+    3. Validator -> (if invalid) Refiner -> Validator (loop, max 3 times)
     4. Refiner -> (if max attempts) END with error
     """
     workflow = StateGraph(VizQLAgentState)
@@ -90,8 +90,10 @@ def create_vizql_graph() -> StateGraph:
             return "execute"
         
         # Invalid query - check if we can refine
+        # Allow up to 3 refinement attempts (query_version 1, 2, 3)
+        # After 3 refinements, query_version will be 4, so stop
         query_version = state.get("query_version", 0)
-        if query_version >= 3:
+        if query_version >= 4:
             return "error_handler"
         
         return "refine"
@@ -122,8 +124,8 @@ def create_vizql_graph() -> StateGraph:
         }
     )
     
-    # Refiner loops back to query_builder
-    workflow.add_edge("refiner", "query_builder")
+    # Refiner loops back to validator (not query_builder, to avoid regenerating the query)
+    workflow.add_edge("refiner", "validator")
     
     # Executor routing handled by conditional edges above
     

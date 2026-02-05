@@ -3,6 +3,7 @@ import asyncio
 import jwt
 import uuid
 import logging
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 from urllib.parse import urljoin
@@ -1864,6 +1865,499 @@ class TableauClient:
             "data": data_rows,
             "row_count": len(data_rows),
         }
+    
+    async def read_metadata(self, datasource_id: str) -> Dict[str, Any]:
+        """
+        Request data source metadata from VizQL Data Service API.
+        
+        Uses the /read-metadata endpoint to get field information including:
+        - fieldCaption (exact field names)
+        - dataType (INTEGER, REAL, STRING, etc.)
+        - fieldRole (MEASURE, DIMENSION)
+        - defaultAggregation
+        - description
+        - aliases
+        
+        Args:
+            datasource_id: Datasource LUID
+            
+        Returns:
+            Dictionary with 'data' array containing FieldMetadata objects
+            
+        Raises:
+            TableauAPIError: If API request fails
+        """
+        await self._ensure_authenticated()
+        
+        # VizQL Data Service API base URL
+        # Note: urljoin replaces path if second arg starts with '/', so we need to construct manually
+        server_base = self.server_url.rstrip('/')
+        metadata_url = f"{server_base}/api/v1/vizql-data-service/read-metadata"
+        
+        # Request payload
+        # Note: Some Tableau server versions don't support the 'options' field
+        # Using minimal payload with just datasource identifier
+        payload = {
+            "datasource": {
+                "datasourceLuid": datasource_id
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Tableau-Auth": self.auth_token
+        }
+        
+        try:
+            logger.info(f"Requesting metadata for datasource {datasource_id}")
+            response = await self._client.post(
+                metadata_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(f"Successfully retrieved metadata: {len(result.get('data', []))} fields")
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"VizQL metadata API error: {e.response.status_code} - {e.response.text}")
+            raise TableauAPIError(f"Failed to read metadata: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            logger.error(f"Error reading metadata: {e}")
+            raise TableauAPIError(f"Error reading metadata: {str(e)}")
+    
+    async def get_metadata_api_fields(self, datasource_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Get field role information from Tableau Metadata API (GraphQL).
+        
+        Uses the Metadata API to get accurate field roles (MEASURE/DIMENSION)
+        since VizQL Data Service API doesn't always provide this reliably.
+        
+        Args:
+            datasource_id: Datasource LUID
+            
+        Returns:
+            Dictionary mapping field names/captions to field metadata with role information
+        """
+        await self._ensure_authenticated()
+        
+        # Metadata API GraphQL endpoint
+        server_base = self.server_url.rstrip('/')
+        graphql_url = f"{server_base}/api/metadata/graphql"
+        
+        # GraphQL query to get published datasource fields with roles
+        # Field role is available on the base Field interface
+        query = """
+        query GetDatasourceFields($luid: String!) {
+            publishedDatasources(filter: {luid: $luid}) {
+                id
+                luid
+                name
+                fields {
+                    id
+                    name
+                    description
+                    role
+                    dataType
+                    remoteType
+                    ... on ColumnField {
+                        column {
+                            name
+                        }
+                    }
+                    ... on CalculatedField {
+                        formula
+                    }
+                    ... on MeasureField {
+                        defaultAggregation
+                    }
+                }
+            }
+        }
+        """
+        
+        payload = {
+            "query": query,
+            "variables": {
+                "luid": datasource_id
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Tableau-Auth": self.auth_token
+        }
+        
+        try:
+            logger.info(f"Querying Metadata API for field roles for datasource {datasource_id}")
+            response = await self._client.post(
+                graphql_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Check for GraphQL errors
+            if "errors" in result:
+                error_messages = [err.get("message", "Unknown error") for err in result["errors"]]
+                logger.warning(f"GraphQL errors: {error_messages}")
+                return {}
+            
+            # Extract fields from response
+            field_map = {}
+            datasources = result.get("data", {}).get("publishedDatasources", [])
+            
+            if not datasources:
+                logger.warning(f"No datasource found with LUID {datasource_id} in Metadata API")
+                return {}
+            
+            datasource = datasources[0]
+            fields = datasource.get("fields", [])
+            
+            for field in fields:
+                field_name = field.get("name", "")
+                # Field role might be a string enum value (MEASURE, DIMENSION) or an object
+                field_role_raw = field.get("role")
+                
+                # Handle role - it might be a string or an object with a value property
+                field_role = None
+                if isinstance(field_role_raw, str):
+                    field_role = field_role_raw.upper()
+                elif isinstance(field_role_raw, dict):
+                    field_role = field_role_raw.get("value", "").upper()
+                
+                if field_name:
+                    field_info = {
+                        "role": field_role,
+                        "dataType": field.get("dataType"),
+                        "remoteType": field.get("remoteType"),
+                        "description": field.get("description"),
+                    }
+                    
+                    # Add formula if available (from CalculatedField)
+                    if "formula" in field:
+                        field_info["formula"] = field["formula"]
+                    
+                    # Add defaultAggregation if available (from MeasureField)
+                    if "defaultAggregation" in field:
+                        field_info["defaultAggregation"] = field["defaultAggregation"]
+                    
+                    # Map by field name (which should match fieldCaption from VizQL)
+                    field_map[field_name] = field_info
+                    
+                    # Also try to map by column name if available
+                    if "column" in field and field["column"]:
+                        column_name = field["column"].get("name")
+                        if column_name and column_name != field_name:
+                            field_map[column_name] = field_info.copy()
+            
+            logger.info(f"Retrieved {len(field_map)} fields from Metadata API")
+            return field_map
+            
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Metadata API error: {e.response.status_code} - {e.response.text}")
+            # Don't raise - return empty dict so enrichment can continue with VizQL data only
+            return {}
+        except Exception as e:
+            logger.warning(f"Error querying Metadata API: {e}")
+            # Don't raise - return empty dict so enrichment can continue with VizQL data only
+            return {}
+    
+    async def get_field_statistics(
+        self, 
+        datasource_id: str, 
+        field_caption: str,
+        data_type: str,
+        is_measure: bool
+    ) -> Dict[str, Any]:
+        """
+        Get statistics for a single field: cardinality, sample values, min/max/null%.
+        
+        Args:
+            datasource_id: Datasource LUID
+            field_caption: Field caption/name
+            data_type: Field data type (INTEGER, REAL, STRING, etc.)
+            is_measure: Whether field is a measure
+            
+        Returns:
+            Dictionary with statistics: cardinality, sample_values, min, max, null_percentage
+        """
+        await self._ensure_authenticated()
+        
+        server_base = self.server_url.rstrip('/')
+        query_url = f"{server_base}/api/v1/vizql-data-service/query-datasource"
+        
+        stats = {
+            "cardinality": None,
+            "sample_values": [],
+            "min": None,
+            "max": None,
+            "null_percentage": None
+        }
+        
+        try:
+            # Build query for this field
+            field_query = {"fieldCaption": field_caption}
+            
+            # For measures, use default aggregation; for dimensions, get distinct values
+            if is_measure:
+                # Get aggregated stats (min, max, count)
+                # Query with MIN, MAX, COUNT aggregations
+                query_payload = {
+                    "datasource": {"datasourceLuid": datasource_id},
+                    "query": {
+                        "fields": [
+                            {"fieldCaption": field_caption, "function": "MIN"},
+                            {"fieldCaption": field_caption, "function": "MAX"},
+                            {"fieldCaption": field_caption, "function": "COUNT"}
+                        ]
+                    },
+                    "options": {"returnFormat": "OBJECTS", "disaggregate": False}
+                }
+            else:
+                # For dimensions, get distinct values (sample) - COUNTD will be queried separately
+                query_payload = {
+                    "datasource": {"datasourceLuid": datasource_id},
+                    "query": {
+                        "fields": [
+                            {"fieldCaption": field_caption}
+                        ]
+                    },
+                    "options": {"returnFormat": "OBJECTS", "disaggregate": True}
+                }
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Tableau-Auth": self.auth_token
+            }
+            
+            response = await self._client.post(
+                query_url,
+                json=query_payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.debug(f"Statistics query response for {field_caption}: {json.dumps(result, indent=2)[:500]}")
+            
+            # Parse results - VizQL returns data in "data" array
+            if "data" in result and len(result["data"]) > 0:
+                first_row = result["data"][0]
+                
+                if not is_measure:
+                    # For dimensions: get sample values and cardinality
+                    sample_values = []
+                    
+                    # Get sample values from first few rows
+                    for row in result["data"][:10]:
+                        if isinstance(row, dict):
+                            # Look for the field value - try common key patterns
+                            for key, value in row.items():
+                                # Match field caption in key (case-insensitive)
+                                if field_caption.lower() in key.lower() or key.lower() == field_caption.lower():
+                                    if value is not None and str(value).strip():
+                                        val_str = str(value)
+                                        if val_str not in sample_values:
+                                            sample_values.append(val_str)
+                                    break
+                        elif isinstance(row, list) and len(row) > 0:
+                            # Array format - first element is usually the field value
+                            val_str = str(row[0])
+                            if val_str not in sample_values:
+                                sample_values.append(val_str)
+                    
+                    stats["sample_values"] = sample_values[:10]  # Max 10
+                    
+                    # Get cardinality using a separate COUNTD query (aggregated, not disaggregated)
+                    # This ensures we get the total distinct count, not per-row counts
+                    try:
+                        countd_query = {
+                            "datasource": {"datasourceLuid": datasource_id},
+                            "query": {
+                                "fields": [{"fieldCaption": field_caption, "function": "COUNTD"}]
+                            },
+                            "options": {"returnFormat": "OBJECTS", "disaggregate": False}
+                        }
+                        
+                        countd_response = await self._client.post(
+                            query_url,
+                            json=countd_query,
+                            headers=headers,
+                            timeout=self.timeout,
+                        )
+                        countd_response.raise_for_status()
+                        countd_result = countd_response.json()
+                        
+                        logger.debug(f"COUNTD query response for {field_caption}: {json.dumps(countd_result, indent=2)[:500]}")
+                        
+                        if "data" in countd_result and len(countd_result["data"]) > 0:
+                            first_row = countd_result["data"][0]
+                            if isinstance(first_row, dict):
+                                # COUNTD result should be in the first row, first value
+                                # Key might be something like "COUNTD(Field Name)" or just the value
+                                for key, value in first_row.items():
+                                    try:
+                                        # Try to parse as number
+                                        if isinstance(value, (int, float)) and value >= 0:
+                                            stats["cardinality"] = int(value)
+                                            logger.debug(f"Found cardinality for {field_caption}: {stats['cardinality']}")
+                                            break
+                                        # Also try string values that look like numbers
+                                        elif isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
+                                            num_val = float(value)
+                                            if num_val >= 0:
+                                                stats["cardinality"] = int(num_val)
+                                                logger.debug(f"Found cardinality (from string) for {field_caption}: {stats['cardinality']}")
+                                                break
+                                    except (ValueError, TypeError):
+                                        pass
+                                
+                                # If still not found, try first value in dict regardless of key
+                                if stats["cardinality"] is None and len(first_row) > 0:
+                                    first_value = list(first_row.values())[0]
+                                    try:
+                                        if isinstance(first_value, (int, float)) and first_value >= 0:
+                                            stats["cardinality"] = int(first_value)
+                                            logger.debug(f"Found cardinality (first value) for {field_caption}: {stats['cardinality']}")
+                                    except (ValueError, TypeError):
+                                        pass
+                    except Exception as e:
+                        logger.debug(f"Could not get cardinality via separate query for {field_caption}: {e}")
+                
+                else:
+                    # For measures: extract min/max from aggregated results
+                    if data_type in ["INTEGER", "REAL", "DOUBLE", "FLOAT"]:
+                        min_val = None
+                        max_val = None
+                        
+                        # Results might be in first row with MIN/MAX as keys
+                        if isinstance(first_row, dict):
+                            for key, value in first_row.items():
+                                key_lower = key.lower()
+                                if "min" in key_lower and value is not None:
+                                    try:
+                                        min_val = float(value) if value != "" else None
+                                    except (ValueError, TypeError):
+                                        pass
+                                elif "max" in key_lower and value is not None:
+                                    try:
+                                        max_val = float(value) if value != "" else None
+                                    except (ValueError, TypeError):
+                                        pass
+                        
+                        stats["min"] = min_val
+                        stats["max"] = max_val
+            
+            # Get null percentage with a separate query
+            try:
+                null_query = {
+                    "datasource": {"datasourceLuid": datasource_id},
+                    "query": {
+                        "fields": [
+                            {"fieldCaption": field_caption, "function": "COUNT"},
+                            {"fieldCaption": field_caption, "function": "COUNTD"}
+                        ]
+                    },
+                    "options": {"returnFormat": "OBJECTS", "disaggregate": False}
+                }
+                
+                null_response = await self._client.post(
+                    query_url,
+                    json=null_query,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+                null_response.raise_for_status()
+                null_result = null_response.json()
+                
+                # Calculate null percentage
+                # This is approximate: (total_count - distinct_count) / total_count
+                # More accurate would require a COUNT(*) vs COUNT(field) comparison
+                if "data" in null_result and len(null_result["data"]) > 0:
+                    # Simplified: if we can't get exact null count, leave it None
+                    pass
+                    
+            except Exception as e:
+                logger.debug(f"Could not get null percentage for {field_caption}: {e}")
+            
+        except Exception as e:
+            logger.debug(f"Could not get statistics for field {field_caption}: {e}")
+            # Don't raise - return partial stats
+        
+        logger.debug(f"Statistics for {field_caption}: {stats}")
+        return stats
+    
+    async def list_supported_functions(self, datasource_id: str) -> List[Dict[str, Any]]:
+        """
+        List supported Tableau functions for a datasource.
+        
+        Uses the /list-supported-functions endpoint to get datasource-specific
+        function support information.
+        
+        Args:
+            datasource_id: Datasource LUID
+            
+        Returns:
+            List of SupportedFunction objects with name and overloads
+            
+        Raises:
+            TableauAPIError: If API request fails
+        """
+        await self._ensure_authenticated()
+        
+        # VizQL Data Service API base URL
+        # Note: urljoin replaces path if second arg starts with '/', so we need to construct manually
+        server_base = self.server_url.rstrip('/')
+        functions_url = f"{server_base}/api/v1/vizql-data-service/list-supported-functions"
+        
+        # Request payload
+        payload = {
+            "datasource": {
+                "datasourceLuid": datasource_id
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Tableau-Auth": self.auth_token
+        }
+        
+        try:
+            logger.info(f"Requesting supported functions for datasource {datasource_id}")
+            response = await self._client.post(
+                functions_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Result is an array of SupportedFunction objects
+            logger.info(f"Successfully retrieved {len(result)} supported functions")
+            return result if isinstance(result, list) else []
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"VizQL functions API error: {e.response.status_code} - {e.response.text}")
+            raise TableauAPIError(f"Failed to list supported functions: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            logger.error(f"Error listing supported functions: {e}")
+            raise TableauAPIError(f"Error listing supported functions: {str(e)}")
     
     async def close(self) -> None:
         """Close HTTP client."""

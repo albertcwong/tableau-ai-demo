@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DatasourceSchema, ColumnSchema } from '@/types';
 import { WorkbookIcon, DatasourceIcon, ViewIcon } from '@/components/icons';
+import { DatasourceEnrichButton } from './DatasourceEnrichButton';
 
 type SelectedObject =
   | { type: 'datasource'; data: TableauDatasource }
@@ -499,7 +500,13 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                           </div>
                           
                           {isExpanded && (
-                            <div className="px-2 pb-2 border-t border-gray-200 dark:border-gray-700 mt-1 pt-2">
+                            <div className="px-2 pb-2 border-t border-gray-200 dark:border-gray-700 mt-1 pt-2 space-y-2">
+                              <div className="pt-2">
+                                <DatasourceEnrichButton 
+                                  datasourceId={ds.id}
+                                  datasourceName={ds.name}
+                                />
+                              </div>
                               {isLoadingSchema ? (
                                 <div className="space-y-2">
                                   <Skeleton className="h-4 w-full" />

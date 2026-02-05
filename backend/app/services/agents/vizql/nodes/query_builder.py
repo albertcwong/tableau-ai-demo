@@ -5,6 +5,7 @@ from typing import Dict, Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.services.agents.vizql.state import VizQLAgentState
+from app.services.agents.vizql.context_builder import build_full_compressed_context
 from app.prompts.registry import prompt_registry
 from app.services.ai.client import UnifiedAIClient
 from app.core.config import settings
@@ -39,18 +40,70 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         datasource_id = datasource_ids[0]
         
-        # Get query construction prompt with examples
-        system_prompt = prompt_registry.get_prompt(
-            "agents/vizql/query_construction.txt",
-            variables={
-                "schema": json.dumps(schema.get("columns", []), indent=2),
-                "measures": state.get("required_measures", []),
-                "dimensions": state.get("required_dimensions", []),
-                "filters": json.dumps(state.get("required_filters", {}), indent=2),
-                "aggregation": state.get("required_filters", {}).get("aggregation", "sum"),
-                "datasource_id": datasource_id
-            }
-        )
+        # Check if we have enriched schema (from Phase 2)
+        enriched_schema = state.get("enriched_schema")
+        
+        # Build compressed context if enriched schema is available
+        if enriched_schema:
+            logger.info("Using enriched schema with compressed context")
+            compressed_context = build_full_compressed_context(
+                enriched_schema=enriched_schema,
+                user_query=state.get("user_query", ""),
+                required_measures=state.get("required_measures", []),
+                required_dimensions=state.get("required_dimensions", []),
+                required_filters=state.get("required_filters", {})
+            )
+            
+            # Split compressed context into components for prompt template
+            context_lines = compressed_context.split("\n")
+            compressed_schema_lines = []
+            semantic_hints_lines = []
+            field_lookup_lines = []
+            current_section = None
+            
+            for line in context_lines:
+                if line.startswith("## Available Fields"):
+                    current_section = "schema"
+                    compressed_schema_lines.append(line)
+                elif line.startswith("## Query Construction Hints"):
+                    current_section = "hints"
+                    semantic_hints_lines.append(line)
+                elif line.startswith("## Field Matching Hints"):
+                    current_section = "lookup"
+                    field_lookup_lines.append(line)
+                elif current_section == "schema":
+                    compressed_schema_lines.append(line)
+                elif current_section == "hints":
+                    semantic_hints_lines.append(line)
+                elif current_section == "lookup":
+                    field_lookup_lines.append(line)
+            
+            compressed_schema = "\n".join(compressed_schema_lines) if compressed_schema_lines else ""
+            semantic_hints = "\n".join(semantic_hints_lines) if semantic_hints_lines else ""
+            field_lookup_hints = "\n".join(field_lookup_lines) if field_lookup_lines else ""
+            
+            # Get query construction prompt with compressed context
+            system_prompt = prompt_registry.get_prompt(
+                "agents/vizql/query_construction.txt",
+                variables={
+                    "compressed_schema": compressed_schema,
+                    "semantic_hints": semantic_hints,
+                    "field_lookup_hints": field_lookup_hints,
+                    "datasource_id": datasource_id
+                }
+            )
+        else:
+            # Fallback to basic schema format (backward compatibility)
+            logger.info("Using basic schema (enrichment unavailable)")
+            system_prompt = prompt_registry.get_prompt(
+                "agents/vizql/query_construction.txt",
+                variables={
+                    "compressed_schema": f"## Available Fields\n{json.dumps(schema.get('columns', []), indent=2)}",
+                    "semantic_hints": "## Query Construction Hints\nUsing basic schema. Field roles may not be available.",
+                    "field_lookup_hints": "",
+                    "datasource_id": datasource_id
+                }
+            )
         
         # Include few-shot examples
         examples = prompt_registry.get_examples("agents/vizql/examples.yaml")
@@ -117,7 +170,11 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 "query_draft": None
             }
         
-        query_version = state.get("query_version", 0) + 1
+        # Don't increment query_version here - it's incremented in refiner
+        # Only increment on initial build (when query_version is 0 or missing)
+        query_version = state.get("query_version", 0)
+        if query_version == 0:
+            query_version = 1
         
         return {
             **state,

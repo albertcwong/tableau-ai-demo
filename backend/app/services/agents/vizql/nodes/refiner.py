@@ -21,24 +21,60 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
     This is a "Reason" step in ReAct - reflect on errors and fix.
     """
     # Check max refinement attempts
+    # Allow up to 3 refinement attempts (query_version 1, 2, 3)
+    # After 3 refinements, query_version will be 4, so stop
     query_version = state.get("query_version", 0)
-    if query_version >= 3:
+    if query_version >= 4:
         return {
             **state,
-            "error": f"Max refinement attempts ({query_version}) reached. Errors: {state.get('validation_errors', [])}"
+            "error": f"Max refinement attempts (3) reached. Errors: {state.get('validation_errors', [])}"
         }
     
     try:
-        # Get refinement prompt
+        # Get enriched schema if available for better refinement
+        enriched_schema = state.get("enriched_schema")
+        schema_data = state.get("schema", {})
+        
+        # Use enriched schema for refinement if available
+        if enriched_schema:
+            from app.services.agents.vizql.context_builder import build_compressed_schema_context
+            schema_context = build_compressed_schema_context(enriched_schema)
+        else:
+            schema_context = json.dumps(schema_data.get("columns", []), indent=2)
+        
+        # Get refinement prompt with enhanced suggestions
+        validation_errors = state.get("validation_errors", [])
+        validation_suggestions = state.get("validation_suggestions", [])
+        
+        # Ensure errors and suggestions are lists (not None or empty)
+        if not isinstance(validation_errors, list):
+            validation_errors = []
+        if not isinstance(validation_suggestions, list):
+            validation_suggestions = []
+        
+        # Log what we're sending to LLM for debugging
+        logger.info(
+            f"Refining query (attempt {query_version + 1}) with "
+            f"{len(validation_errors)} errors and {len(validation_suggestions)} suggestions"
+        )
+        if validation_errors:
+            logger.info(f"Validation errors: {validation_errors}")
+        if validation_suggestions:
+            logger.info(f"Validation suggestions: {validation_suggestions}")
+        
         system_prompt = prompt_registry.get_prompt(
             "agents/vizql/query_refinement.txt",
             variables={
                 "original_query": json.dumps(state.get("query_draft", {}), indent=2),
-                "errors": state.get("validation_errors", []),
-                "suggestions": state.get("validation_suggestions", []),
-                "schema": json.dumps(state.get("schema", {}).get("columns", []), indent=2)
+                "errors": validation_errors,  # Pass as list for template to loop
+                "suggestions": validation_suggestions,  # Pass as list for template to loop
+                "schema": schema_context,
+                "user_query": state.get("user_query", "")
             }
         )
+        
+        # Log the rendered prompt (first 1000 chars) to verify errors/suggestions are included
+        logger.debug(f"Refinement prompt preview: {system_prompt[:1000]}...")
         
         # Initialize AI client with API key from state
         api_key = state.get("api_key")
@@ -49,10 +85,29 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
             api_key=api_key
         )
         
+        # Build user message with explicit instruction
+        user_message = "Fix the query based on the validation errors and suggestions provided above. Apply ALL fixes."
+        if validation_errors:
+            user_message += f"\n\nThere are {len(validation_errors)} error(s) to fix."
+        if validation_suggestions:
+            user_message += f"\n\nThere are {len(validation_suggestions)} suggestion(s) to follow."
+        
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Fix the query based on validation errors."}
+            {"role": "user", "content": user_message}
         ]
+        
+        # Log the full prompt being sent (for debugging)
+        logger.info(
+            f"Sending refinement request to LLM:\n"
+            f"  Errors: {len(validation_errors)}\n"
+            f"  Suggestions: {len(validation_suggestions)}\n"
+            f"  Prompt length: {len(system_prompt)} chars"
+        )
+        if validation_errors:
+            logger.info(f"  Error details: {validation_errors}")
+        if validation_suggestions:
+            logger.info(f"  Suggestion details: {validation_suggestions[:3]}...")  # First 3 suggestions
         
         response = await ai_client.chat(
             model=model,
@@ -81,10 +136,14 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
             
             corrected_query = json.loads(content)
             
+            # Increment query_version to track refinement attempts
+            new_query_version = query_version + 1
+            
             return {
                 **state,
                 "query_draft": corrected_query,
-                "current_thought": f"Refined query (attempt {query_version + 1}) based on {len(state.get('validation_errors', []))} errors"
+                "query_version": new_query_version,
+                "current_thought": f"Refined query (attempt {new_query_version}) based on {len(state.get('validation_errors', []))} errors"
             }
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse refined query JSON: {e}")

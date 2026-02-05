@@ -75,3 +75,21 @@ examples:
           "limit": 10
         }
       }
+
+  - user: "what are the top sales by region"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Sales", "function": "SUM"},
+            {"fieldCaption": "Region"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }

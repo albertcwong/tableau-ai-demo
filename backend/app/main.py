@@ -253,6 +253,9 @@ app.include_router(debug_router, prefix="/api/v1")
 from app.api.feedback import router as feedback_router
 app.include_router(feedback_router, prefix="/api/v1")
 
+from app.api.vizql import router as vizql_router
+app.include_router(vizql_router, prefix="/api/v1")
+
 # Include MCP SSE endpoint and debug endpoints for web integration
 try:
     from sse_starlette.sse import EventSourceResponse

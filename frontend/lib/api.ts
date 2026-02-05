@@ -55,8 +55,8 @@ apiClient.interceptors.request.use(
       }
     }
     
-    // Add Tableau config ID header for tableau API endpoints
-    if (typeof window !== 'undefined' && config.url?.startsWith('/api/v1/tableau/')) {
+    // Add Tableau config ID header for tableau and vizql API endpoints
+    if (typeof window !== 'undefined' && (config.url?.startsWith('/api/v1/tableau/') || config.url?.startsWith('/api/v1/vizql/'))) {
       const configId = localStorage.getItem('tableau_config_id');
       if (configId) {
         config.headers['X-Tableau-Config-Id'] = configId;
@@ -752,6 +752,73 @@ export interface FeedbackDetailResponse {
   context_objects: ContextObjectResponse[];
   conversation_thread: ConversationMessageResponse[];
 }
+
+// VizQL API functions
+export interface EnrichSchemaResponse {
+  datasource_id: string;
+  field_count: number;
+  measure_count: number;
+  dimension_count: number;
+  cached: boolean;
+  enriched_schema: {
+    datasource_id: string;
+    fields: Array<{
+      fieldCaption: string;
+      fieldName: string;
+      dataType: string;
+      fieldRole: string;
+      fieldType: string;
+      defaultAggregation?: string;
+      suggestedAggregation?: string;
+      columnClass: string;
+      description: string;
+      formula?: string;
+      hidden: boolean;
+      aliases?: Array<{ member: any; value: any }>;
+      // Field statistics
+      cardinality?: number | null;
+      sample_values?: string[];
+      min?: number | null;
+      max?: number | null;
+      null_percentage?: number | null;
+    }>;
+    field_map: Record<string, any>;
+    measures: string[];
+    dimensions: string[];
+  };
+}
+
+export interface SupportedFunctionsResponse {
+  datasource_id: string;
+  functions: Array<{
+    name: string;
+    overloads: Array<{
+      arg_types: string[];
+      return_type: string;
+    }>;
+  }>;
+  function_count: number;
+}
+
+export const vizqlApi = {
+  // Enrich datasource schema with VizQL metadata
+  enrichSchema: async (datasourceId: string, forceRefresh = false, includeStatistics = true): Promise<EnrichSchemaResponse> => {
+    const response = await apiClient.post<EnrichSchemaResponse>(
+      `/api/v1/vizql/datasources/${datasourceId}/enrich-schema`,
+      null,
+      { params: { force_refresh: forceRefresh, include_statistics: includeStatistics } }
+    );
+    return response.data;
+  },
+
+  // Get supported functions for a datasource
+  getSupportedFunctions: async (datasourceId: string): Promise<SupportedFunctionsResponse> => {
+    const response = await apiClient.get<SupportedFunctionsResponse>(
+      `/api/v1/vizql/datasources/${datasourceId}/supported-functions`
+    );
+    return response.data;
+  },
+};
 
 export const adminApi = {
   // User management

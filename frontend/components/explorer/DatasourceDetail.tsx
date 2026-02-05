@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { DatasourceEnrichButton } from './DatasourceEnrichButton';
 
 interface DatasourceDetailProps {
   datasourceId: string;
@@ -267,6 +268,13 @@ export function DatasourceDetail({
       </div>
       
       <div className="space-y-4">
+        <Card className="p-4">
+          <DatasourceEnrichButton 
+            datasourceId={datasourceId}
+            datasourceName={datasourceName}
+          />
+        </Card>
+        
         <Card className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Code2 className="h-4 w-4 text-gray-500 dark:text-gray-400" />
