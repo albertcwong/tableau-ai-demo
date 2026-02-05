@@ -6,7 +6,7 @@ import type { DatasourceSample } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { Code2, Play, Loader2 } from 'lucide-react';
+import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 
 interface DatasourceDetailProps {
   datasourceId: string;
@@ -29,6 +29,8 @@ export function DatasourceDetail({
   const [executing, setExecuting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sortColumn, setSortColumn] = useState<number | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -46,8 +48,16 @@ export function DatasourceDetail({
         console.log('DatasourceDetail mount - datasourceId:', datasourceId, 'storedQuery:', storedQuery ? 'found' : 'not found');
         if (storedQuery) {
           console.log('Loading stored query into editor');
-          setQuery(storedQuery);
-          localStorage.removeItem(storedQueryKey); // Clear after loading
+          // Validate that stored query is valid JSON before setting it
+          try {
+            JSON.parse(storedQuery);
+            setQuery(storedQuery);
+            localStorage.removeItem(storedQueryKey); // Clear after loading
+          } catch (err) {
+            console.error('Stored query is not valid JSON:', err);
+            setError('Stored query contains invalid JSON. Please try loading the query again.');
+            localStorage.removeItem(storedQueryKey); // Clear invalid query
+          }
         } else {
           const sampleData = await tableauExplorerApi.getDatasourceSample(datasourceId, 100);
           setSample(sampleData);
@@ -69,12 +79,19 @@ export function DatasourceDetail({
       console.log('DatasourceDetail received loadVizQLQuery event:', event.detail);
       if (event.detail && event.detail.datasourceId === datasourceId) {
         console.log('Loading query from event into editor');
-        const queryStr = typeof event.detail.query === 'string' 
-          ? event.detail.query 
-          : JSON.stringify(event.detail.query, null, 2);
-        setQuery(queryStr);
-        // Also clear from localStorage if it exists
-        localStorage.removeItem(`vizql_query_${datasourceId}`);
+        try {
+          const queryStr = typeof event.detail.query === 'string' 
+            ? event.detail.query 
+            : JSON.stringify(event.detail.query, null, 2);
+          // Validate JSON before setting
+          JSON.parse(queryStr);
+          setQuery(queryStr);
+          // Also clear from localStorage if it exists
+          localStorage.removeItem(`vizql_query_${datasourceId}`);
+        } catch (err) {
+          console.error('Failed to stringify/validate query from event:', err);
+          setError('Failed to load query: Invalid JSON format');
+        }
       }
     };
     
@@ -86,9 +103,16 @@ export function DatasourceDetail({
       const storedQueryKey = `vizql_query_${datasourceId}`;
       const storedQuery = localStorage.getItem(storedQueryKey);
       if (storedQuery && storedQuery !== queryRef.current && storedQuery.trim() !== '') {
-        console.log('Found query in localStorage on interval check, loading into editor');
-        setQuery(storedQuery);
-        localStorage.removeItem(storedQueryKey);
+        try {
+          // Validate JSON before setting
+          JSON.parse(storedQuery);
+          console.log('Found query in localStorage on interval check, loading into editor');
+          setQuery(storedQuery);
+          localStorage.removeItem(storedQueryKey);
+        } catch (err) {
+          console.error('Stored query is not valid JSON on interval check:', err);
+          localStorage.removeItem(storedQueryKey); // Clear invalid query
+        }
       }
     }, 200); // Check every 200ms for faster response
     
@@ -98,18 +122,104 @@ export function DatasourceDetail({
     };
   }, [datasourceId]);
 
+  // Reset sort when datasource changes
+  useEffect(() => {
+    setSortColumn(null);
+    setSortDirection('asc');
+  }, [datasourceId]);
+
+  const handleSort = (columnIndex: number) => {
+    if (sortColumn === columnIndex) {
+      // Toggle direction if clicking the same column
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to ascending
+      setSortColumn(columnIndex);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortData = (data: unknown[][], columnIndex: number, direction: 'asc' | 'desc'): unknown[][] => {
+    return [...data].sort((a, b) => {
+      const aVal = a[columnIndex];
+      const bVal = b[columnIndex];
+      
+      // Handle null/undefined values
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return direction === 'asc' ? -1 : 1;
+      if (bVal == null) return direction === 'asc' ? 1 : -1;
+      
+      // Try numeric comparison first
+      const aNum = typeof aVal === 'string' ? parseFloat(aVal) : typeof aVal === 'number' ? aVal : NaN;
+      const bNum = typeof bVal === 'string' ? parseFloat(bVal) : typeof bVal === 'number' ? bVal : NaN;
+      
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return direction === 'asc' ? aNum - bNum : bNum - aNum;
+      }
+      
+      // String comparison
+      const aStr = String(aVal).toLowerCase();
+      const bStr = String(bVal).toLowerCase();
+      
+      if (aStr < bStr) return direction === 'asc' ? -1 : 1;
+      if (aStr > bStr) return direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
   const handleExecuteQuery = async () => {
     setExecuting(true);
     setQueryError(null);
     setQueryResults(null);
+    setSortColumn(null);
+    setSortDirection('asc');
 
     try {
-      const parsedQuery = JSON.parse(query);
+      let cleanedQuery = query.trim();
+      
+      // Handle case where query might be double-stringified (wrapped in quotes)
+      if (cleanedQuery.startsWith('"') && cleanedQuery.endsWith('"')) {
+        try {
+          cleanedQuery = JSON.parse(cleanedQuery);
+          // If successful, re-stringify it properly
+          cleanedQuery = JSON.stringify(cleanedQuery, null, 2);
+        } catch {
+          // If that fails, continue with original
+        }
+      }
+      
+      // Parse the JSON
+      let parsedQuery;
+      try {
+        parsedQuery = JSON.parse(cleanedQuery);
+      } catch (parseError) {
+        // Provide detailed error message with context
+        if (parseError instanceof SyntaxError) {
+          const errorMsg = parseError.message || 'Unknown parsing error';
+          // Extract line and column numbers from error message
+          const match = errorMsg.match(/line (\d+) column (\d+)/);
+          if (match) {
+            const lineNum = parseInt(match[1]);
+            const colNum = parseInt(match[2]);
+            const lines = cleanedQuery.split('\n');
+            const problemLine = lines[lineNum - 1] || '';
+            const context = problemLine.substring(Math.max(0, colNum - 30), colNum + 30);
+            setQueryError(`Failed to parse query JSON: ${errorMsg}\n\nProblem at line ${lineNum}, column ${colNum}:\n${context}\n${' '.repeat(Math.min(30, colNum))}^`);
+          } else {
+            setQueryError(`Failed to parse query JSON: ${errorMsg}\n\nPlease check that your JSON is valid and doesn't contain unescaped control characters.`);
+          }
+        } else {
+          setQueryError(`Failed to parse query: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+        }
+        return;
+      }
+      
       const results = await tableauExplorerApi.executeVDSQuery(datasourceId, parsedQuery);
       setQueryResults(results);
     } catch (err) {
       if (err instanceof SyntaxError) {
-        setQueryError('Invalid JSON format. Please check your query syntax.');
+        const errorMsg = err.message || 'Invalid JSON format';
+        setQueryError(`Failed to parse query JSON: ${errorMsg}`);
       } else {
         setQueryError(err instanceof Error ? err.message : 'Failed to execute query');
       }
@@ -205,15 +315,36 @@ export function DatasourceDetail({
               <table className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 bg-white dark:bg-gray-900 z-10">
                   <tr className="border-b">
-                    {queryResults.columns.map((col, idx) => (
-                      <th key={idx} className="text-left p-2 font-medium">
-                        {col}
-                      </th>
-                    ))}
+                    {queryResults.columns.map((col, idx) => {
+                      const isSorted = sortColumn === idx;
+                      return (
+                        <th 
+                          key={idx} 
+                          className="text-left p-2 font-medium cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 select-none"
+                          onClick={() => handleSort(idx)}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>{col}</span>
+                            {isSorted ? (
+                              sortDirection === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 opacity-30" />
+                            )}
+                          </div>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {queryResults.data.map((row, rowIdx) => (
+                  {(sortColumn !== null 
+                    ? sortData(queryResults.data, sortColumn, sortDirection)
+                    : queryResults.data
+                  ).map((row, rowIdx) => (
                     <tr key={rowIdx} className="border-b">
                       {row.map((cell, cellIdx) => (
                         <td key={cellIdx} className="p-2">
@@ -230,15 +361,36 @@ export function DatasourceDetail({
               <table className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 bg-white dark:bg-gray-900 z-10">
                   <tr className="border-b">
-                    {sample?.columns.map((col, idx) => (
-                      <th key={idx} className="text-left p-2 font-medium">
-                        {col}
-                      </th>
-                    ))}
+                    {sample?.columns.map((col, idx) => {
+                      const isSorted = sortColumn === idx;
+                      return (
+                        <th 
+                          key={idx} 
+                          className="text-left p-2 font-medium cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 select-none"
+                          onClick={() => handleSort(idx)}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>{col}</span>
+                            {isSorted ? (
+                              sortDirection === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 opacity-30" />
+                            )}
+                          </div>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {sample?.data.map((row, rowIdx) => (
+                  {(sample?.data && sortColumn !== null
+                    ? sortData(sample.data, sortColumn, sortDirection)
+                    : sample?.data || []
+                  ).map((row, rowIdx) => (
                     <tr key={rowIdx} className="border-b">
                       {row.map((cell, cellIdx) => (
                         <td key={cellIdx} className="p-2">

@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import enum
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, Enum as SQLEnum, JSON, BigInteger, TypeDecorator, Float
+from app.models.user import User
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -61,12 +62,14 @@ class Conversation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=True, comment="User-assigned or auto-generated thread name")
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True, comment="User who created this conversation")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
     context_objects = relationship("ChatContext", back_populates="conversation", cascade="all, delete-orphan")
+    user = relationship("User", foreign_keys=[user_id])
     
     def get_message_count(self) -> int:
         """Get the count of messages in this conversation."""
@@ -108,6 +111,7 @@ class Message(Base):
     tokens_used = Column(BigInteger, nullable=True)  # For cost tracking
     extra_metadata = Column(JSON, nullable=True)  # For structured metadata (function calls, tool usage, etc.)
     feedback = Column(String(20), nullable=True)  # 'thumbs_up' or 'thumbs_down'
+    feedback_text = Column(Text, nullable=True)  # Optional feedback text
     total_time_ms = Column(Float, nullable=True)  # Total time in milliseconds (prompt + answer)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 

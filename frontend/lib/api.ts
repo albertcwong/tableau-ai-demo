@@ -162,6 +162,7 @@ export interface MessageResponse {
   model_used?: string;
   tokens_used?: number;
   feedback?: string | null;
+  feedback_text?: string | null;
   total_time_ms?: number | null;
   created_at: string;
 }
@@ -384,9 +385,10 @@ export const chatApi = {
   },
 
   // Update message feedback
-  updateMessageFeedback: async (messageId: number, feedback: 'thumbs_up' | 'thumbs_down' | null): Promise<MessageResponse> => {
+  updateMessageFeedback: async (messageId: number, feedback: 'thumbs_up' | 'thumbs_down' | null, feedbackText?: string | null): Promise<MessageResponse> => {
     const response = await apiClient.put<MessageResponse>(`/api/v1/chat/messages/${messageId}/feedback`, {
       feedback: feedback || null,
+      feedback_text: feedbackText || null,
     });
     return response.data;
   },
@@ -740,6 +742,8 @@ export interface FeedbackDetailResponse {
   role: string;
   content: string;
   feedback: string;
+  feedback_text?: string | null;
+  agent_type?: string | null;
   total_time_ms?: number | null;
   model_used?: string | null;
   created_at: string;

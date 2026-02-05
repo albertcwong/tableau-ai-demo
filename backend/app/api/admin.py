@@ -700,6 +700,8 @@ class FeedbackDetailResponse(BaseModel):
     role: str
     content: str
     feedback: str
+    feedback_text: Optional[str] = None
+    agent_type: Optional[str] = None
     total_time_ms: Optional[float]
     model_used: Optional[str]
     created_at: str
@@ -747,9 +749,12 @@ async def list_feedback(
             all_messages_map[msg.conversation_id] = []
         all_messages_map[msg.conversation_id].append(msg)
     
-    # Note: Conversations don't have a direct user_id field, so we can't determine the user
-    # This would require adding a user_id field to Conversation model or tracking it via sessions
-    # For now, user will be None
+    # Fetch user information for conversations that have user_id
+    user_ids = {conv.user_id for conv in conversations.values() if conv and conv.user_id}
+    users_map = {}
+    if user_ids:
+        users = db.query(User).filter(User.id.in_(user_ids)).all()
+        users_map = {user.id: user for user in users}
     
     result = []
     for msg in messages:
@@ -786,17 +791,34 @@ async def list_feedback(
             for m in thread_messages
         ]
         
+        # Extract agent_type from extra_metadata if available
+        agent_type = None
+        if msg.extra_metadata and isinstance(msg.extra_metadata, dict):
+            agent_type = msg.extra_metadata.get('agent_type')
+        
+        # Get user info from conversation
+        user_info = None
+        if conv and conv.user_id and conv.user_id in users_map:
+            user = users_map[conv.user_id]
+            user_info = UserInfoResponse(
+                id=user.id,
+                username=user.username,
+                role=user.role.value
+            )
+        
         result.append(FeedbackDetailResponse(
             message_id=msg.id,
             conversation_id=msg.conversation_id,
             role=role_value,
             content=content_preview,
             feedback=msg.feedback,
+            feedback_text=msg.feedback_text,
+            agent_type=agent_type,
             total_time_ms=msg.total_time_ms,
             model_used=msg.model_used,
             created_at=msg.created_at.isoformat(),
             conversation_name=conversation_name,
-            user=None,  # Not available without user_id in Conversation model
+            user=user_info,
             context_objects=context_responses,
             conversation_thread=thread_responses
         ))

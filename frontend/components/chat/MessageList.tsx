@@ -190,10 +190,11 @@ function MessageItem({
                 messageId={parseInt(message.id)}
                 content={message.content}
                 feedback={message.feedback}
+                feedbackText={message.feedbackText}
                 totalTimeMs={message.totalTimeMs}
                 vizqlQuery={message.vizqlQuery}
-                onFeedbackChange={(newFeedback) => {
-                  onFeedbackChange?.(message.id, newFeedback);
+                onFeedbackChange={(newFeedback, newFeedbackText) => {
+                  onFeedbackChange?.(message.id, newFeedback, newFeedbackText);
                 }}
                 onLoadQuery={(query) => {
                   console.log('MessageList onLoadQuery called with query:', query);

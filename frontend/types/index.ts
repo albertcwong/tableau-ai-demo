@@ -21,6 +21,7 @@ export interface Message {
   createdAt: Date;
   modelUsed?: string;
   feedback?: string | null;
+  feedbackText?: string | null;
   totalTimeMs?: number | null;
   vizqlQuery?: Record<string, any> | null;  // VizQL query used to generate the answer (for vizql agent)
 }

@@ -193,7 +193,11 @@ export function FeedbackManagement() {
               <CardContent>
                 <div className="space-y-3">
                   <div>
-                    <div className="text-sm font-medium mb-1">Feedback Message</div>
+                    <div className="text-sm font-medium mb-1">
+                      {item.agent_type 
+                        ? `${item.agent_type === 'multi_agent' ? 'Multi-Agent' : item.agent_type === 'vizql' ? 'VizQL' : item.agent_type.charAt(0).toUpperCase() + item.agent_type.slice(1)} Message` 
+                        : 'Feedback Message'}
+                    </div>
                     <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 p-3 rounded border break-words">
                       {item.content}
                     </div>
@@ -201,6 +205,20 @@ export function FeedbackManagement() {
                       Model: {item.model_used || 'N/A'} • Role: {item.role}
                     </div>
                   </div>
+                  
+                  {item.feedback_text && (
+                    <div>
+                      <div className="text-sm font-medium mb-1">
+                        <span className="flex items-center gap-1">
+                          <User className="h-3.5 w-3.5" />
+                          {item.user?.username ? `<${item.user.username}> Feedback` : 'User Feedback'}
+                        </span>
+                      </div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300 bg-blue-50 dark:bg-blue-900/20 p-3 rounded border break-words whitespace-pre-wrap">
+                        {item.feedback_text}
+                      </div>
+                    </div>
+                  )}
 
                   {isExpanded && (
                     <div className="space-y-4 pt-4 border-t">

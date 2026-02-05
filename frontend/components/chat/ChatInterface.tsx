@@ -106,6 +106,7 @@ export function ChatInterface({
           createdAt: new Date(msg.created_at),
           modelUsed: msg.model_used,
           feedback: msg.feedback,
+          feedbackText: msg.feedback_text,
           totalTimeMs: msg.total_time_ms,
           vizqlQuery: msg.vizql_query,
         }));
@@ -268,6 +269,7 @@ export function ChatInterface({
                   createdAt: new Date(msg.created_at),
                   modelUsed: msg.model_used,
                   feedback: msg.feedback,
+                  feedbackText: msg.feedback_text,
                   totalTimeMs: msg.total_time_ms,
                   vizqlQuery: vizqlQuery,
                 };
@@ -500,6 +502,7 @@ export function ChatInterface({
             createdAt: new Date(msg.created_at),
             modelUsed: msg.model_used,
             feedback: msg.feedback,
+            feedbackText: msg.feedback_text,
             totalTimeMs: msg.total_time_ms,
             vizqlQuery: msg.vizql_query,
           }));

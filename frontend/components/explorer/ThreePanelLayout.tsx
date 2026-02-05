@@ -273,7 +273,15 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       onLoadQueryRef.current = async (datasourceId: string, query: Record<string, any>) => {
         console.log('ThreePanelLayout loadQueryRef called:', { datasourceId, query, allDatasources: allDatasources.length, isConnected });
         // Store query in localStorage first (before selecting datasource)
-        localStorage.setItem(`vizql_query_${datasourceId}`, JSON.stringify(query, null, 2));
+        // Ensure query is properly stringified - JSON.stringify automatically escapes control characters
+        try {
+          const queryString = JSON.stringify(query, null, 2);
+          localStorage.setItem(`vizql_query_${datasourceId}`, queryString);
+        } catch (err) {
+          console.error('Failed to stringify query:', err);
+          // Fallback: try without formatting
+          localStorage.setItem(`vizql_query_${datasourceId}`, JSON.stringify(query));
+        }
         console.log('Stored query in localStorage with key:', `vizql_query_${datasourceId}`);
         
         // Find datasource in allDatasources

@@ -2,13 +2,15 @@
 import logging
 from typing import List, Optional, Dict
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends, status, Header, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel, Field, field_serializer, model_validator
 from app.core.database import get_db
 from app.models.chat import Conversation, Message, MessageRole, ChatContext
+from app.api.auth import get_current_user
+from app.models.user import User
 from app.services.ai.client import UnifiedAIClient, AIClientError
 from app.services.ai.tools import get_tools, execute_tool, format_tool_result
 from app.services.tableau.client import TableauClient
@@ -41,6 +43,8 @@ class ConversationResponse(BaseModel):
     
     @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, dt: datetime, _info):
+        if dt is None:
+            return None
         return dt.isoformat()
     
     class Config:
@@ -67,6 +71,7 @@ class MessageResponse(BaseModel):
     model_used: Optional[str]
     tokens_used: Optional[int]
     feedback: Optional[str] = None
+    feedback_text: Optional[str] = None
     total_time_ms: Optional[float] = None
     vizql_query: Optional[dict] = None  # VizQL query used to generate the answer (for vizql agent)
     created_at: datetime
@@ -101,10 +106,25 @@ class ChatResponse(BaseModel):
     tokens_used: int
 
 
+def get_current_user_optional(
+    request: Request,
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """Get current user if authenticated, otherwise return None."""
+    try:
+        return get_current_user(request, db)
+    except:
+        return None
+
+
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
-async def create_conversation(db: Session = Depends(get_db)):
+async def create_conversation(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
     """Create a new conversation."""
-    conversation = Conversation()
+    conversation = Conversation(user_id=current_user.id if current_user else None)
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
@@ -118,9 +138,10 @@ async def create_conversation(db: Session = Depends(get_db)):
     )
     db.add(greeting_message)
     db.commit()
+    db.refresh(conversation)
     
-    # Set message_count to 1 (the greeting message)
-    conversation.message_count = 1
+    # Compute message count (should be 1 after adding greeting)
+    conversation.message_count = db.query(Message).filter(Message.conversation_id == conversation.id).count()
     
     logger.info(f"Created conversation {conversation.id} with initial greeting")
     return conversation
@@ -133,14 +154,22 @@ async def list_conversations(
     db: Session = Depends(get_db)
 ):
     """List all conversations with message counts."""
-    conversations = db.query(Conversation).order_by(desc(Conversation.updated_at)).offset(skip).limit(limit).all()
-    
-    # Eager load messages to compute counts efficiently
-    for conv in conversations:
-        # Load messages count
-        conv.message_count = db.query(Message).filter(Message.conversation_id == conv.id).count()
-    
-    return conversations
+    try:
+        conversations = db.query(Conversation).order_by(desc(Conversation.updated_at)).offset(skip).limit(limit).all()
+        
+        # Eager load messages to compute counts efficiently
+        for conv in conversations:
+            try:
+                # Load messages count
+                conv.message_count = db.query(Message).filter(Message.conversation_id == conv.id).count()
+            except Exception as e:
+                logger.error(f"Error computing message count for conversation {conv.id}: {e}")
+                conv.message_count = 0
+        
+        return conversations
+    except Exception as e:
+        logger.error(f"Error listing conversations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list conversations: {str(e)}")
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
@@ -192,8 +221,14 @@ async def get_conversation_messages(conversation_id: int, db: Session = Depends(
     
     messages = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at).all()
     # Return messages with uppercase roles (as stored in database)
-    return [
-        MessageResponse(
+    result = []
+    for msg in messages:
+        # Extract vizql_query from extra_metadata if available
+        vizql_query = None
+        if msg.extra_metadata and isinstance(msg.extra_metadata, dict):
+            vizql_query = msg.extra_metadata.get('vizql_query')
+        
+        result.append(MessageResponse(
             id=msg.id,
             conversation_id=msg.conversation_id,
             role=msg.role.value if isinstance(msg.role, MessageRole) else str(msg.role).upper(),
@@ -201,12 +236,12 @@ async def get_conversation_messages(conversation_id: int, db: Session = Depends(
             model_used=msg.model_used,
             tokens_used=msg.tokens_used,
             feedback=msg.feedback,
+            feedback_text=msg.feedback_text,
             total_time_ms=msg.total_time_ms,
-            vizql_query=None,  # Not stored in DB, only in response for vizql agent
+            vizql_query=vizql_query,
             created_at=msg.created_at
-        )
-        for msg in messages
-    ]
+        ))
+    return result
 
 
 async def build_agent_messages(
@@ -789,12 +824,24 @@ async def send_message(
                                 stream_end_time = time.time()
                                 total_time_ms = (stream_end_time - stream_start_time) * 1000  # Convert to milliseconds
                                 
+                                # Extract VizQL query from last_state for storage
+                                stored_vizql_query = None
+                                if last_state:
+                                    for key in ["query_draft", "query", "validated_query"]:
+                                        if key in last_state and last_state.get(key):
+                                            stored_vizql_query = last_state.get(key)
+                                            break
+                                
                                 assistant_message = Message(
                                     conversation_id=request.conversation_id,
                                     role=MessageRole.ASSISTANT,
                                     content=full_content,
                                     model_used=request.model,
-                                    total_time_ms=total_time_ms
+                                    total_time_ms=total_time_ms,
+                                    extra_metadata={
+                                        "agent_type": "vizql",
+                                        "vizql_query": stored_vizql_query
+                                    }
                                 )
                                 db.add(assistant_message)
                                 conversation.updated_at = conversation.updated_at
@@ -962,7 +1009,11 @@ async def send_message(
                     conversation_id=request.conversation_id,
                     role=MessageRole.ASSISTANT,
                     content=final_answer,
-                    model_used=request.model
+                    model_used=request.model,
+                    extra_metadata={
+                        "agent_type": "vizql",
+                        "vizql_query": vizql_query
+                    }
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
@@ -1170,7 +1221,8 @@ async def send_message(
                                     role=MessageRole.ASSISTANT,
                                     content=full_content,
                                     model_used=request.model,
-                                    total_time_ms=total_time_ms
+                                    total_time_ms=total_time_ms,
+                                    extra_metadata={"agent_type": "summary"}
                                 )
                                 db.add(assistant_message)
                                 conversation.updated_at = conversation.updated_at
@@ -1258,7 +1310,8 @@ async def send_message(
                     role=MessageRole.ASSISTANT,
                     content=final_answer,
                     model_used=request.model,
-                    total_time_ms=total_time_ms
+                    total_time_ms=total_time_ms,
+                    extra_metadata={"agent_type": "summary"}
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
@@ -1334,7 +1387,8 @@ async def send_message(
                                 conversation_id=request.conversation_id,
                                 role=MessageRole.ASSISTANT,
                                 content=full_content,
-                                model_used=request.model
+                                model_used=request.model,
+                                extra_metadata={"agent_type": agent_type or "general"}
                             )
                             db.add(assistant_message)
                             conversation.updated_at = conversation.updated_at  # Trigger update
@@ -1448,6 +1502,10 @@ async def send_message(
                     pass
                 
                 # Save assistant message
+                extra_metadata = {
+                    "function_call": response.function_call.__dict__ if response.function_call else None,
+                    "agent_type": agent_type or "general"
+                }
                 assistant_message = Message(
                     conversation_id=request.conversation_id,
                     role=MessageRole.ASSISTANT,
@@ -1455,9 +1513,7 @@ async def send_message(
                     model_used=response.model,
                     tokens_used=total_tokens,
                     total_time_ms=total_time_ms,
-                    extra_metadata={
-                        "function_call": response.function_call.__dict__ if response.function_call else None
-                    }
+                    extra_metadata=extra_metadata
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at  # Trigger update
@@ -1502,6 +1558,7 @@ async def send_message(
 class MessageFeedbackRequest(BaseModel):
     """Request model for message feedback."""
     feedback: Optional[str] = Field(None, description="Feedback: 'thumbs_up', 'thumbs_down', or null to clear")
+    feedback_text: Optional[str] = Field(None, max_length=1000, description="Optional feedback text")
 
 
 @router.put("/messages/{message_id}/feedback", response_model=MessageResponse)
@@ -1526,6 +1583,7 @@ async def update_message_feedback(
         )
     
     message.feedback = request.feedback
+    message.feedback_text = request.feedback_text
     db.commit()
     db.refresh(message)
     
@@ -1537,6 +1595,7 @@ async def update_message_feedback(
         model_used=message.model_used,
         tokens_used=message.tokens_used,
         feedback=message.feedback,
+        feedback_text=message.feedback_text,
         total_time_ms=message.total_time_ms,
         vizql_query=None,  # Not stored in DB
         created_at=message.created_at

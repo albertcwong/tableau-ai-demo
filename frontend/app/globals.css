@@ -119,8 +119,12 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    font-size: 12px; /* 9pt base font size */
+  }
   body {
     @apply bg-background text-foreground;
+    font-size: 1rem; /* 12px (9pt) */
   }
 }
 
