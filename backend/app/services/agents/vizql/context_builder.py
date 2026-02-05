@@ -1,4 +1,5 @@
 """Build compressed, token-efficient context for LLM."""
+import json
 import logging
 from typing import Dict, Any, List
 
@@ -193,7 +194,11 @@ def build_full_compressed_context(
     user_query: str,
     required_measures: List[str] = None,
     required_dimensions: List[str] = None,
-    required_filters: Dict[str, Any] = None
+    required_filters: Dict[str, Any] = None,
+    topN: Dict[str, Any] = None,
+    sorting: List[Dict[str, Any]] = None,
+    calculations: List[Dict[str, Any]] = None,
+    bins: List[Dict[str, Any]] = None
 ) -> str:
     """
     Build complete compressed context for query construction.
@@ -205,7 +210,11 @@ def build_full_compressed_context(
         user_query: User's natural language query
         required_measures: List of measure names from intent parsing
         required_dimensions: List of dimension names from intent parsing
-        required_filters: Filter requirements from intent parsing
+        required_filters: Filter requirements from intent parsing (structured with filterType and params)
+        topN: Top N pattern information
+        sorting: Sorting requirements
+        calculations: Ad-hoc calculation requirements
+        bins: Bin requirements
         
     Returns:
         Complete compressed context string
@@ -228,14 +237,151 @@ def build_full_compressed_context(
             parts.append("")
     
     # Add intent summary if provided
-    if required_measures or required_dimensions:
+    has_patterns = (
+        required_measures or required_dimensions or 
+        (topN and topN.get("enabled")) or
+        (required_filters and len(required_filters) > 0) or
+        (sorting and len(sorting) > 0) or
+        (calculations and len(calculations) > 0) or
+        (bins and len(bins) > 0)
+    )
+    
+    if has_patterns:
         parts.append("## Parsed Intent")
+        
         if required_measures:
             parts.append(f"Measures requested: {', '.join(required_measures)}")
         if required_dimensions:
             parts.append(f"Dimensions requested: {', '.join(required_dimensions)}")
+        
+        # Top N Pattern (CRITICAL)
+        if topN and topN.get("enabled"):
+            parts.append("")
+            parts.append("**CRITICAL: TOP N PATTERN DETECTED**")
+            parts.append(f"User wants top/bottom {topN.get('howMany', 'N')} {topN.get('dimensionField', 'dimension')} by {topN.get('measureField', 'measure')}")
+            parts.append(f"Direction: {topN.get('direction', 'TOP')}")
+            parts.append("**YOU MUST USE TOP FILTER, NOT SORTING!**")
+            parts.append("Example filter structure:")
+            parts.append(json.dumps({
+                "field": {"fieldCaption": topN.get("dimensionField", "DimensionName")},
+                "filterType": "TOP",
+                "howMany": topN.get("howMany", 10),
+                "direction": topN.get("direction", "TOP"),
+                "fieldToMeasure": {
+                    "fieldCaption": topN.get("measureField", "MeasureName"),
+                    "function": "SUM"
+                }
+            }, indent=2))
+        
+        # Filter Patterns
         if required_filters:
-            parts.append(f"Filters: {required_filters}")
+            parts.append("")
+            parts.append("**FILTER PATTERNS DETECTED**")
+            for field_name, filter_info in required_filters.items():
+                if isinstance(filter_info, dict):
+                    filter_type = filter_info.get("filterType", "UNKNOWN")
+                    params = filter_info.get("params", {})
+                    
+                    parts.append(f"\n**Filter on '{field_name}':**")
+                    parts.append(f"  Filter Type: {filter_type}")
+                    
+                    if filter_type == "DATE":
+                        parts.append(f"  Period Type: {params.get('periodType', 'N/A')}")
+                        parts.append(f"  Date Range Type: {params.get('dateRangeType', 'N/A')}")
+                        if params.get("rangeN"):
+                            parts.append(f"  Range N: {params.get('rangeN')}")
+                        parts.append("  Example structure:")
+                        parts.append(json.dumps({
+                            "field": {"fieldCaption": field_name},
+                            "filterType": "DATE",
+                            "periodType": params.get("periodType", "MONTHS"),
+                            "dateRangeType": params.get("dateRangeType", "LASTN"),
+                            "rangeN": params.get("rangeN", 3)
+                        }, indent=4))
+                    
+                    elif filter_type == "MATCH":
+                        parts.append("  Match parameters:")
+                        if params.get("contains"):
+                            parts.append(f"    contains: '{params.get('contains')}'")
+                        if params.get("startsWith"):
+                            parts.append(f"    startsWith: '{params.get('startsWith')}'")
+                        if params.get("endsWith"):
+                            parts.append(f"    endsWith: '{params.get('endsWith')}'")
+                        parts.append("  Example structure:")
+                        parts.append(json.dumps({
+                            "field": {"fieldCaption": field_name},
+                            "filterType": "MATCH",
+                            "contains": params.get("contains"),
+                            "exclude": params.get("exclude", False)
+                        }, indent=4))
+                    
+                    elif filter_type == "SET":
+                        parts.append(f"  Values: {params.get('values', [])}")
+                        parts.append(f"  Exclude: {params.get('exclude', False)}")
+                        parts.append("  Example structure:")
+                        parts.append(json.dumps({
+                            "field": {"fieldCaption": field_name},
+                            "filterType": "SET",
+                            "values": params.get("values", []),
+                            "exclude": params.get("exclude", False)
+                        }, indent=4))
+                    
+                    elif filter_type == "QUANTITATIVE_NUMERICAL":
+                        parts.append(f"  Quantitative Type: {params.get('quantitativeFilterType', 'N/A')}")
+                        if params.get("min") is not None:
+                            parts.append(f"  Min: {params.get('min')}")
+                        if params.get("max") is not None:
+                            parts.append(f"  Max: {params.get('max')}")
+                        parts.append("  Example structure:")
+                        parts.append(json.dumps({
+                            "column": {"fieldCaption": field_name, "function": "SUM"},
+                            "filterType": "QUANTITATIVE_NUMERICAL",
+                            "quantitativeFilterType": params.get("quantitativeFilterType", "MIN"),
+                            "min": params.get("min")
+                        }, indent=4))
+                    
+                    elif filter_type == "QUANTITATIVE_DATE":
+                        parts.append(f"  Quantitative Type: {params.get('quantitativeFilterType', 'N/A')}")
+                        if params.get("minDate"):
+                            parts.append(f"  Min Date: {params.get('minDate')}")
+                        if params.get("maxDate"):
+                            parts.append(f"  Max Date: {params.get('maxDate')}")
+                        parts.append("  Example structure:")
+                        parts.append(json.dumps({
+                            "field": {"fieldCaption": field_name},
+                            "filterType": "QUANTITATIVE_DATE",
+                            "quantitativeFilterType": params.get("quantitativeFilterType", "RANGE"),
+                            "minDate": params.get("minDate"),
+                            "maxDate": params.get("maxDate")
+                        }, indent=4))
+        
+        # Calculations
+        if calculations and len(calculations) > 0:
+            parts.append("")
+            parts.append("**CALCULATIONS DETECTED**")
+            for calc in calculations:
+                parts.append(f"- {calc.get('fieldCaption', 'calculated_field')}: {calc.get('formula', 'N/A')}")
+            parts.append("Add these as fields with 'calculation' property:")
+            parts.append(json.dumps(calculations, indent=2))
+        
+        # Bins
+        if bins and len(bins) > 0:
+            parts.append("")
+            parts.append("**BINS DETECTED**")
+            for bin_info in bins:
+                parts.append(f"- {bin_info.get('fieldCaption', 'field')} with binSize: {bin_info.get('binSize', 'N/A')}")
+            parts.append("Add binSize property to measure fields:")
+            parts.append(json.dumps(bins, indent=2))
+        
+        # Sorting (only if not Top N)
+        if sorting and len(sorting) > 0 and not (topN and topN.get("enabled")):
+            parts.append("")
+            parts.append("**SORTING REQUIRED**")
+            for sort_info in sorting:
+                parts.append(f"- {sort_info.get('field', 'field')}: {sort_info.get('direction', 'ASC')} (priority: {sort_info.get('priority', 1)})")
+            parts.append("Add sortPriority and sortDirection to fields:")
+            parts.append(json.dumps(sorting, indent=2))
+        
         parts.append("")
     
     return "\n".join(parts)

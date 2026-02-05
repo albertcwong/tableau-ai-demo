@@ -13,7 +13,11 @@ class VizQLAgentState(BaseAgentState):
     # Intent parsing results
     required_measures: list[str]
     required_dimensions: list[str]
-    required_filters: dict[str, Any]
+    required_filters: dict[str, Any]  # Structured filters with filterType and params
+    topN: Optional[dict[str, Any]]  # Top N pattern: {enabled, howMany, direction, dimensionField, measureField}
+    sorting: list[dict[str, Any]]  # Sorting requirements: [{field, direction, priority}]
+    calculations: list[dict[str, Any]]  # Ad-hoc calculations: [{fieldCaption, formula}]
+    bins: list[dict[str, Any]]  # Bin requirements: [{fieldCaption, binSize}]
     
     # Query construction
     query_draft: Optional[dict]

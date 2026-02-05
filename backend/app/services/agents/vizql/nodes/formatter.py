@@ -86,11 +86,24 @@ async def format_results_node(state: VizQLAgentState) -> Dict[str, Any]:
         if columns and data:
             data_sample = format_as_table(columns, data, max_rows=sample_size)
         
+        # Get query draft to check if TOP filter was used
+        query_draft = state.get("query_draft", {})
+        query_draft_str = json.dumps(query_draft, indent=2) if query_draft else "No query draft available"
+        
+        # Check if query has TOP filter
+        has_top_filter = False
+        if query_draft and "query" in query_draft:
+            filters = query_draft.get("query", {}).get("filters", [])
+            has_top_filter = any(
+                f.get("filterType") == "TOP" for f in filters if isinstance(f, dict)
+            )
+        
         # Load and render prompt template with data
         prompt_content = prompt_registry.get_prompt(
             "agents/vizql/result_formatting.txt",
             variables={
                 "user_query": user_query,
+                "query_draft": query_draft_str,
                 "columns": ", ".join(columns) if columns else "N/A",
                 "row_count": row_count,
                 "total_rows": row_count,

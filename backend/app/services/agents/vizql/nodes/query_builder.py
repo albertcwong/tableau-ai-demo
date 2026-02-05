@@ -51,7 +51,11 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 user_query=state.get("user_query", ""),
                 required_measures=state.get("required_measures", []),
                 required_dimensions=state.get("required_dimensions", []),
-                required_filters=state.get("required_filters", {})
+                required_filters=state.get("required_filters", {}),
+                topN=state.get("topN", {"enabled": False}),
+                sorting=state.get("sorting", []),
+                calculations=state.get("calculations", []),
+                bins=state.get("bins", [])
             )
             
             # Split compressed context into components for prompt template
