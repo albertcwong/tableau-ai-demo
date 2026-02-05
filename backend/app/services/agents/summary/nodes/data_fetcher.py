@@ -42,71 +42,102 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 **state,
                 "error": "No view in context. Please add a view first.",
                 "view_data": None,
-                "view_metadata": None
+                "view_metadata": None,
+                "views_data": {},
+                "views_metadata": {}
             }
         
-        # Use first view
-        view_id = view_ids[0]
+        logger.info(f"Fetching data for {len(view_ids)} view(s): {view_ids}")
         
-        logger.info(f"Fetching data for view: {view_id}")
+        # Fetch data and metadata for all views in parallel
+        tasks = []
+        for view_id in view_ids:
+            tasks.append(_fetch_view_data_cached(view_id, max_rows=1000))
+            tasks.append(_fetch_view_metadata_cached(view_id))
         
-        # Fetch view data and metadata in parallel for better performance
-        try:
-            view_data_task = _fetch_view_data_cached(view_id, max_rows=1000)
-            view_metadata_task = _fetch_view_metadata_cached(view_id)
+        # Execute all tasks in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Organize results by view
+        views_data = {}
+        views_metadata = {}
+        total_rows = 0
+        successful_fetches = 0
+        
+        for i, view_id in enumerate(view_ids):
+            data_idx = i * 2
+            metadata_idx = i * 2 + 1
             
-            # Execute in parallel
-            view_data, view_metadata = await asyncio.gather(
-                view_data_task,
-                view_metadata_task,
-                return_exceptions=True
-            )
+            view_data = results[data_idx]
+            view_metadata = results[metadata_idx]
             
             # Handle exceptions
             if isinstance(view_data, Exception):
-                logger.error(f"Failed to fetch view data: {view_data}")
-                return {
-                    **state,
-                    "error": f"Failed to fetch view data: {str(view_data)}",
-                    "view_data": None,
-                    "view_metadata": None
-                }
+                logger.error(f"Failed to fetch view data for {view_id}: {view_data}")
+                views_data[view_id] = None
+            else:
+                views_data[view_id] = view_data
+                total_rows += view_data.get('row_count', 0)
+                successful_fetches += 1
             
             if isinstance(view_metadata, Exception):
-                logger.warning(f"Failed to fetch view metadata: {view_metadata}")
-                view_metadata = {"id": view_id, "name": view_id}
-        except Exception as e:
-            logger.error(f"Error in parallel fetch: {e}", exc_info=True)
-            # Fallback to sequential fetch
-            view_data = await _fetch_view_data_cached(view_id, max_rows=1000)
-            try:
-                view_metadata = await _fetch_view_metadata_cached(view_id)
-            except Exception as meta_error:
-                logger.warning(f"Failed to fetch view metadata: {meta_error}")
-                view_metadata = {"id": view_id, "name": view_id}
+                logger.warning(f"Failed to fetch view metadata for {view_id}: {view_metadata}")
+                views_metadata[view_id] = {"id": view_id, "name": view_id}
+            else:
+                views_metadata[view_id] = view_metadata
+        
+        # For backward compatibility, set first view's data as primary
+        first_view_id = view_ids[0]
+        primary_view_data = views_data.get(first_view_id)
+        primary_view_metadata = views_metadata.get(first_view_id, {})
+        
+        # Build tool calls for all views
+        tool_calls = state.get("tool_calls", [])
+        for view_id in view_ids:
+            view_data = views_data.get(view_id)
+            if view_data:
+                tool_calls.append({
+                    "tool": "get_view_data",
+                    "args": {"view_id": view_id, "max_rows": 1000},
+                    "result": f"success - {view_data.get('row_count', 0)} rows"
+                })
+            else:
+                tool_calls.append({
+                    "tool": "get_view_data",
+                    "args": {"view_id": view_id, "max_rows": 1000},
+                    "result": "error",
+                    "error": "Failed to fetch data"
+                })
+        
+        view_count_text = f"{len(view_ids)} view{'s' if len(view_ids) > 1 else ''}"
+        thought = f"Fetched data from {successful_fetches}/{len(view_ids)} view(s), total {total_rows} rows"
         
         return {
             **state,
-            "view_data": view_data,
-            "view_metadata": view_metadata,
-            "current_thought": f"Fetched {view_data.get('row_count', 0)} rows from view",
-            "tool_calls": state.get("tool_calls", []) + [{
-                "tool": "get_view_data",
-                "args": {"view_id": view_id, "max_rows": 1000},
-                "result": f"success - {view_data.get('row_count', 0)} rows"
-            }]
+            "view_data": primary_view_data,  # Backward compatibility
+            "view_metadata": primary_view_metadata,  # Backward compatibility
+            "views_data": views_data,  # All views data
+            "views_metadata": views_metadata,  # All views metadata
+            "current_thought": thought,
+            "tool_calls": tool_calls
         }
     except Exception as e:
         logger.error(f"Error fetching view data: {e}", exc_info=True)
+        view_ids = state.get("context_views", [])
+        tool_calls = state.get("tool_calls", [])
+        for view_id in view_ids:
+            tool_calls.append({
+                "tool": "get_view_data",
+                "args": {"view_id": view_id, "max_rows": 1000},
+                "result": "error",
+                "error": str(e)
+            })
         return {
             **state,
             "error": f"Failed to fetch view data: {str(e)}",
             "view_data": None,
             "view_metadata": None,
-            "tool_calls": state.get("tool_calls", []) + [{
-                "tool": "get_view_data",
-                "args": {"view_id": view_ids[0] if view_ids else None},
-                "result": "error",
-                "error": str(e)
-            }]
+            "views_data": {},
+            "views_metadata": {},
+            "tool_calls": tool_calls
         }

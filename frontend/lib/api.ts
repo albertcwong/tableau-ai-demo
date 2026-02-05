@@ -34,12 +34,35 @@ export const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Include credentials in CORS requests
 });
 
 // Request interceptor for error handling
 apiClient.interceptors.request.use(
   (config) => {
-    // Add any request modifications here (e.g., auth tokens)
+    // Add auth token if available
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+      // Debug logging (remove in production)
+      if (process.env.NODE_ENV === 'development') {
+        console.debug(`[API] Adding auth token to request: ${config.method?.toUpperCase()} ${config.url}`);
+      }
+    } else {
+      // Debug logging (remove in production)
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[API] No auth token found for request: ${config.method?.toUpperCase()} ${config.url}`);
+      }
+    }
+    
+    // Add Tableau config ID header for tableau API endpoints
+    if (typeof window !== 'undefined' && config.url?.startsWith('/api/v1/tableau/')) {
+      const configId = localStorage.getItem('tableau_config_id');
+      if (configId) {
+        config.headers['X-Tableau-Config-Id'] = configId;
+      }
+    }
+    
     return config;
   },
   (error: AxiosError) => {
@@ -75,11 +98,27 @@ apiClient.interceptors.response.use(
       // Server responded with error status
       const status = error.response.status;
       const message = (error.response.data as any)?.detail || error.message;
+      const url = originalRequest?.url || '';
       
       switch (status) {
         case 401:
-          // Handle unauthorized - could redirect to login
-          console.error('Unauthorized access');
+          // Only redirect to login for app authentication endpoints, not Tableau endpoints
+          // Tableau connection failures should be handled gracefully without logging out
+          const isAuthEndpoint = url.includes('/auth/') && !url.includes('/tableau-auth/');
+          const isTableauEndpoint = url.includes('/tableau/') || url.includes('/tableau-auth/');
+          
+          if (isAuthEndpoint && typeof window !== 'undefined') {
+            // App authentication failed - redirect to login
+            localStorage.removeItem('auth_token');
+            window.location.href = '/login';
+          } else if (isTableauEndpoint) {
+            // Tableau endpoint error - don't redirect, just log
+            console.warn('Tableau connection error:', message);
+          } else if (typeof window !== 'undefined') {
+            // Other 401 errors - check if it's a general auth issue
+            // Only redirect if it's clearly an auth problem, not a Tableau connectivity issue
+            console.warn('Unauthorized access:', message);
+          }
           break;
         case 403:
           console.error('Forbidden access');
@@ -115,12 +154,15 @@ export interface ConversationResponse {
 }
 
 export interface MessageResponse {
+  vizql_query?: Record<string, any> | null;  // VizQL query used to generate the answer (for vizql agent)
   id: number;
   conversation_id: number;
   role: string;
   content: string;
   model_used?: string;
   tokens_used?: number;
+  feedback?: string | null;
+  total_time_ms?: number | null;
   created_at: string;
 }
 
@@ -195,7 +237,9 @@ export const chatApi = {
     request: MessageRequest,
     onChunk: (chunk: string) => void,
     onComplete: () => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    onStructuredChunk?: (chunk: import('@/types').AgentMessageChunk) => void,
+    abortSignal?: AbortSignal
   ): Promise<void> => {
     try {
       const response = await fetch(`${API_URL}/api/v1/chat/message`, {
@@ -204,6 +248,7 @@ export const chatApi = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ ...request, stream: true }),
+        signal: abortSignal,
       });
 
       if (!response.ok) {
@@ -221,6 +266,11 @@ export const chatApi = {
       let buffer = '';
 
       while (true) {
+        // Check if aborted
+        if (abortSignal?.aborted) {
+          reader.cancel();
+          return;
+        }
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -236,6 +286,51 @@ export const chatApi = {
             if (!data) {
               continue; // Skip empty data lines
             }
+            
+            // Try to parse as structured AgentMessageChunk
+            try {
+              const parsed = JSON.parse(data);
+              // Check if it's a structured message chunk
+              if (parsed.message_type && parsed.content) {
+                const structuredChunk: import('@/types').AgentMessageChunk = parsed;
+                
+                // Call structured chunk handler if provided
+                if (onStructuredChunk) {
+                  onStructuredChunk(structuredChunk);
+                }
+                
+                // Handle completion marker
+                if (structuredChunk.message_type === 'progress' && 
+                    typeof structuredChunk.content.data === 'string' &&
+                    structuredChunk.content.data === '[DONE]') {
+                  onComplete();
+                  return;
+                }
+                
+                // Handle errors
+                if (structuredChunk.message_type === 'error') {
+                  const errorMsg = typeof structuredChunk.content.data === 'string' 
+                    ? structuredChunk.content.data 
+                    : JSON.stringify(structuredChunk.content.data);
+                  onError(new Error(errorMsg));
+                  return;
+                }
+                
+                // Don't call onChunk for reasoning chunks - they're handled by onStructuredChunk
+                // Only call onChunk for final_answer chunks if onStructuredChunk is not provided (backward compatibility)
+                if (structuredChunk.message_type === 'final_answer' && !onStructuredChunk) {
+                  if (structuredChunk.content.type === 'text' && typeof structuredChunk.content.data === 'string') {
+                    onChunk(structuredChunk.content.data);
+                  }
+                }
+                
+                continue;
+              }
+            } catch {
+              // Not valid JSON, fall through to legacy handling
+            }
+            
+            // Legacy handling for plain text chunks
             if (data === '[DONE]') {
               onComplete();
               return;
@@ -273,6 +368,11 @@ export const chatApi = {
 
       onComplete();
     } catch (error) {
+      // Don't call onError for abort errors - cancellation is intentional
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Stream cancelled by user');
+        return;
+      }
       console.error('Streaming error:', error);
       onError(error instanceof Error ? error : new Error('Unknown error'));
     }
@@ -281,6 +381,14 @@ export const chatApi = {
   // Delete a conversation
   deleteConversation: async (conversationId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/chat/conversations/${conversationId}`);
+  },
+
+  // Update message feedback
+  updateMessageFeedback: async (messageId: number, feedback: 'thumbs_up' | 'thumbs_down' | null): Promise<MessageResponse> => {
+    const response = await apiClient.put<MessageResponse>(`/api/v1/chat/messages/${messageId}/feedback`, {
+      feedback: feedback || null,
+    });
+    return response.data;
   },
 };
 
@@ -366,24 +474,16 @@ export const agentsApi = {
 
 // Phase 5A: Object Explorer API functions
 export const tableauExplorerApi = {
-  // List all projects
-  listProjects: async (parentProjectId?: string, pageSize = 100, pageNumber = 1): Promise<TableauProject[]> => {
+  // List all datasources
+  listDatasources: async (pageSize = 100, pageNumber = 1): Promise<TableauDatasource[]> => {
     const params: Record<string, any> = { pageSize, pageNumber };
-    if (parentProjectId) params.parent_project_id = parentProjectId;
-    const response = await apiClient.get<TableauProject[]>('/api/v1/tableau/projects', { params });
-    return response.data;
-  },
-
-  // Get project contents
-  getProjectContents: async (projectId: string): Promise<ProjectContents> => {
-    const response = await apiClient.get<ProjectContents>(`/api/v1/tableau/projects/${projectId}/contents`);
+    const response = await apiClient.get<TableauDatasource[]>('/api/v1/tableau/datasources', { params });
     return response.data;
   },
 
   // List all workbooks
-  listWorkbooks: async (projectId?: string, pageSize = 100, pageNumber = 1): Promise<TableauWorkbook[]> => {
+  listWorkbooks: async (pageSize = 100, pageNumber = 1): Promise<TableauWorkbook[]> => {
     const params: Record<string, any> = { pageSize, pageNumber };
-    if (projectId) params.project_id = projectId;
     const response = await apiClient.get<TableauWorkbook[]>('/api/v1/tableau/workbooks', { params });
     return response.data;
   },
@@ -409,6 +509,15 @@ export const tableauExplorerApi = {
     });
     return response.data;
   },
+
+  // Execute VizQL Data Service query
+  executeVDSQuery: async (datasourceId: string, query: any): Promise<{ columns: string[]; data: unknown[][]; row_count: number }> => {
+    const response = await apiClient.post<{ columns: string[]; data: unknown[][]; row_count: number }>(
+      `/api/v1/tableau/datasources/${datasourceId}/execute-query`,
+      { datasource_id: datasourceId, query }
+    );
+    return response.data;
+  },
 };
 
 // Phase 5B: Chat Context API functions
@@ -432,6 +541,274 @@ export const chatContextApi = {
   // Get chat context for conversation
   getContext: async (conversationId: number): Promise<ChatContext> => {
     const response = await apiClient.get<ChatContext>(`/api/v1/chat/context/${conversationId}`);
+    return response.data;
+  },
+};
+
+// Auth API functions
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user: {
+    id: number;
+    username: string;
+    role: string;
+    is_active: boolean;
+  };
+}
+
+export interface UserResponse {
+  id: number;
+  username: string;
+  role: string;
+  is_active: boolean;
+}
+
+export interface TableauConfigOption {
+  id: number;
+  name: string;
+  server_url: string;
+  site_id?: string | null;
+}
+
+export interface TableauAuthRequest {
+  config_id: number;
+}
+
+export interface TableauAuthResponse {
+  authenticated: boolean;
+  server_url: string;
+  site_id?: string | null;
+  user_id?: string | null;
+  token: string;
+  expires_at?: string | null;
+}
+
+export const authApi = {
+  login: async (credentials: LoginRequest): Promise<LoginResponse> => {
+    const response = await apiClient.post<LoginResponse>('/api/v1/auth/login', credentials);
+    // Store token
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('auth_token', response.data.access_token);
+    }
+    return response.data;
+  },
+
+  logout: async (): Promise<void> => {
+    await apiClient.post('/api/v1/auth/logout');
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('auth_token');
+    }
+  },
+
+  getCurrentUser: async (): Promise<UserResponse> => {
+    const response = await apiClient.get<UserResponse>('/api/v1/auth/me');
+    return response.data;
+  },
+
+  listTableauConfigs: async (): Promise<TableauConfigOption[]> => {
+    const response = await apiClient.get<TableauConfigOption[]>('/api/v1/tableau-auth/configs');
+    return response.data;
+  },
+
+  authenticateTableau: async (request: TableauAuthRequest): Promise<TableauAuthResponse> => {
+    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/authenticate', request);
+    return response.data;
+  },
+};
+
+// Admin API functions
+export interface UserCreate {
+  username: string;
+  password: string;
+  role: string;
+}
+
+export interface TableauConfigCreate {
+  name: string;
+  server_url: string;
+  site_id?: string;
+  api_version?: string;
+  client_id: string;
+  client_secret: string;
+  secret_id?: string;
+}
+
+export interface TableauConfigUpdate {
+  name?: string;
+  server_url?: string;
+  site_id?: string;
+  api_version?: string;
+  client_id?: string;
+  client_secret?: string;
+  secret_id?: string;
+  is_active?: boolean;
+}
+
+export interface TableauConfigResponse {
+  id: number;
+  name: string;
+  server_url: string;
+  site_id?: string | null;
+  api_version?: string | null;
+  client_id: string;
+  client_secret: string;
+  secret_id?: string | null;
+  is_active: boolean;
+  created_by?: number | null;
+  created_at: string;
+}
+
+export interface ProviderConfigCreate {
+  name: string;
+  provider_type: string;
+  api_key?: string;
+  salesforce_client_id?: string;
+  salesforce_private_key_path?: string;
+  salesforce_username?: string;
+  salesforce_models_api_url?: string;
+  vertex_project_id?: string;
+  vertex_location?: string;
+  vertex_service_account_path?: string;
+  apple_endor_endpoint?: string;
+}
+
+export interface ProviderConfigUpdate {
+  name?: string;
+  provider_type?: string;
+  api_key?: string;
+  salesforce_client_id?: string;
+  salesforce_private_key_path?: string;
+  salesforce_username?: string;
+  salesforce_models_api_url?: string;
+  vertex_project_id?: string;
+  vertex_location?: string;
+  vertex_service_account_path?: string;
+  apple_endor_endpoint?: string;
+  is_active?: boolean;
+}
+
+export interface ProviderConfigResponse {
+  id: number;
+  name: string;
+  provider_type: string;
+  is_active: boolean;
+  created_by?: number | null;
+  created_at: string;
+  api_key?: string | null;
+  salesforce_client_id?: string | null;
+  salesforce_private_key_path?: string | null;
+  salesforce_username?: string | null;
+  salesforce_models_api_url?: string | null;
+  vertex_project_id?: string | null;
+  vertex_location?: string | null;
+  vertex_service_account_path?: string | null;
+  apple_endor_endpoint?: string | null;
+}
+
+export interface ContextObjectResponse {
+  object_id: string;
+  object_type: string;
+  object_name?: string | null;
+  added_at: string;
+}
+
+export interface ConversationMessageResponse {
+  id: number;
+  role: string;
+  content: string;
+  model_used?: string | null;
+  tokens_used?: number | null;
+  total_time_ms?: number | null;
+  created_at: string;
+}
+
+export interface UserInfoResponse {
+  id: number;
+  username: string;
+  role: string;
+}
+
+export interface FeedbackDetailResponse {
+  message_id: number;
+  conversation_id: number;
+  role: string;
+  content: string;
+  feedback: string;
+  total_time_ms?: number | null;
+  model_used?: string | null;
+  created_at: string;
+  conversation_name?: string | null;
+  user?: UserInfoResponse | null;
+  context_objects: ContextObjectResponse[];
+  conversation_thread: ConversationMessageResponse[];
+}
+
+export const adminApi = {
+  // User management
+  listUsers: async (): Promise<UserResponse[]> => {
+    const response = await apiClient.get<UserResponse[]>('/api/v1/admin/users');
+    return response.data;
+  },
+
+  createUser: async (userData: UserCreate): Promise<UserResponse> => {
+    const response = await apiClient.post<UserResponse>('/api/v1/admin/users', userData);
+    return response.data;
+  },
+
+  deleteUser: async (userId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/admin/users/${userId}`);
+  },
+
+  // Tableau config management
+  listTableauConfigs: async (): Promise<TableauConfigResponse[]> => {
+    const response = await apiClient.get<TableauConfigResponse[]>('/api/v1/admin/tableau-configs');
+    return response.data;
+  },
+
+  createTableauConfig: async (configData: TableauConfigCreate): Promise<TableauConfigResponse> => {
+    const response = await apiClient.post<TableauConfigResponse>('/api/v1/admin/tableau-configs', configData);
+    return response.data;
+  },
+
+  updateTableauConfig: async (configId: number, configData: TableauConfigUpdate): Promise<TableauConfigResponse> => {
+    const response = await apiClient.put<TableauConfigResponse>(`/api/v1/admin/tableau-configs/${configId}`, configData);
+    return response.data;
+  },
+
+  deleteTableauConfig: async (configId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/admin/tableau-configs/${configId}`);
+  },
+
+  // Provider config management
+  listProviderConfigs: async (): Promise<ProviderConfigResponse[]> => {
+    const response = await apiClient.get<ProviderConfigResponse[]>('/api/v1/admin/provider-configs');
+    return response.data;
+  },
+
+  createProviderConfig: async (configData: ProviderConfigCreate): Promise<ProviderConfigResponse> => {
+    const response = await apiClient.post<ProviderConfigResponse>('/api/v1/admin/provider-configs', configData);
+    return response.data;
+  },
+
+  updateProviderConfig: async (configId: number, configData: ProviderConfigUpdate): Promise<ProviderConfigResponse> => {
+    const response = await apiClient.put<ProviderConfigResponse>(`/api/v1/admin/provider-configs/${configId}`, configData);
+    return response.data;
+  },
+
+  deleteProviderConfig: async (configId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/admin/provider-configs/${configId}`);
+  },
+
+  // Feedback management
+  listFeedback: async (feedbackType?: 'thumbs_up' | 'thumbs_down'): Promise<FeedbackDetailResponse[]> => {
+    const params = feedbackType ? { feedback_type: feedbackType } : {};
+    const response = await apiClient.get<FeedbackDetailResponse[]>('/api/v1/admin/feedback', { params });
     return response.data;
   },
 };

@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.services.memory import get_conversation_memory
 from app.services.metrics import get_metrics
 from app.services.debug import get_debugger
+from app.api.models import AgentMessageChunk, AgentMessageContent
 import time
 import uuid
 
@@ -65,6 +66,9 @@ class MessageResponse(BaseModel):
     content: str
     model_used: Optional[str]
     tokens_used: Optional[int]
+    feedback: Optional[str] = None
+    total_time_ms: Optional[float] = None
+    vizql_query: Optional[dict] = None  # VizQL query used to generate the answer (for vizql agent)
     created_at: datetime
     
     @model_validator(mode='before')
@@ -105,10 +109,20 @@ async def create_conversation(db: Session = Depends(get_db)):
     db.commit()
     db.refresh(conversation)
     
-    # Set message_count to 0 for new conversation
-    conversation.message_count = 0
+    # Create initial greeting message from assistant
+    greeting_message = Message(
+        conversation_id=conversation.id,
+        role=MessageRole.ASSISTANT,
+        content="What can I help you with?",
+        created_at=datetime.now()
+    )
+    db.add(greeting_message)
+    db.commit()
     
-    logger.info(f"Created conversation {conversation.id}")
+    # Set message_count to 1 (the greeting message)
+    conversation.message_count = 1
+    
+    logger.info(f"Created conversation {conversation.id} with initial greeting")
     return conversation
 
 
@@ -186,6 +200,9 @@ async def get_conversation_messages(conversation_id: int, db: Session = Depends(
             content=msg.content,
             model_used=msg.model_used,
             tokens_used=msg.tokens_used,
+            feedback=msg.feedback,
+            total_time_ms=msg.total_time_ms,
+            vizql_query=None,  # Not stored in DB, only in response for vizql agent
             created_at=msg.created_at
         )
         for msg in messages
@@ -542,6 +559,9 @@ async def send_message(
                         content=assistant_message.content,
                         model_used=assistant_message.model_used,
                         tokens_used=None,
+                        feedback=assistant_message.feedback,
+                        total_time_ms=assistant_message.total_time_ms,
+                        vizql_query=None,  # Not available for general agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -615,6 +635,9 @@ async def send_message(
                     full_content = ""
                     last_final_answer = ""
                     last_state = None
+                    reasoningStepIndex = 0  # Track reasoning step index
+                    stream_start_time = time.time()  # Track when streaming starts
+                    stream_graph._query_sent = False  # Track if query has been sent
                     try:
                         # Provide config with thread_id for checkpointer
                         config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}"}}
@@ -631,13 +654,21 @@ async def send_message(
                                 if isinstance(node_state, dict):
                                     last_state = node_state
                                 
-                                # Stream intermediate thoughts
+                                # Stream intermediate thoughts as reasoning steps
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
                                     # Only stream if it's different from what we've already sent
                                     if thought not in full_content:
-                                        logger.debug(f"Streaming thought from {node_name}: {thought[:100]}")
-                                        yield f"data: {thought}\n\n"
+                                        logger.debug(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                        reasoning_chunk = AgentMessageChunk(
+                                            message_type="reasoning",
+                                            content=AgentMessageContent(type="text", data=thought),
+                                            step_name=node_name,
+                                            timestamp=time.time(),  # Unix timestamp in seconds
+                                            step_index=reasoningStepIndex
+                                        )
+                                        reasoningStepIndex += 1
+                                        yield reasoning_chunk.to_sse_format()
                                 
                                 # Stream final answer when available
                                 if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):
@@ -648,13 +679,23 @@ async def send_message(
                                         # If we haven't sent this answer yet, send it all
                                         if last_final_answer == "":
                                             logger.info(f"Streaming full final_answer from {node_name}: {len(answer)} chars")
-                                            yield f"data: {answer}\n\n"
+                                            answer_chunk = AgentMessageChunk(
+                                                message_type="final_answer",
+                                                content=AgentMessageContent(type="text", data=answer),
+                                                timestamp=time.time()
+                                            )
+                                            yield answer_chunk.to_sse_format()
                                         else:
                                             # Send only the new part
                                             new_content = answer[len(last_final_answer):]
                                             if new_content:
                                                 logger.info(f"Streaming new content from {node_name}: {len(new_content)} chars")
-                                                yield f"data: {new_content}\n\n"
+                                                answer_chunk = AgentMessageChunk(
+                                                    message_type="final_answer",
+                                                    content=AgentMessageContent(type="text", data=new_content),
+                                                    timestamp=time.time()
+                                                )
+                                                yield answer_chunk.to_sse_format()
                                         last_final_answer = answer
                                         full_content = answer
                         
@@ -691,8 +732,34 @@ async def send_message(
                                 
                                 if final_answer and final_answer != last_final_answer:
                                     logger.info(f"Sending final_answer after stream: {final_answer[:200]}")
-                                    yield f"data: {final_answer}\n\n"
+                                    # Send as structured final_answer chunk
+                                    answer_chunk = AgentMessageChunk(
+                                        message_type="final_answer",
+                                        content=AgentMessageContent(type="text", data=final_answer),
+                                        timestamp=time.time()
+                                    )
+                                    yield answer_chunk.to_sse_format()
                                     full_content = final_answer
+                        
+                        # Extract VizQL query from last_state for saving and streaming
+                        # Always try to get query_draft, even if there were errors
+                        vizql_query = None
+                        if last_state:
+                            # Try multiple keys where query might be stored
+                            for key in ["query_draft", "query", "validated_query"]:
+                                if key in last_state and last_state.get(key):
+                                    vizql_query = last_state.get(key)
+                                    break
+                        
+                        # Send vizql_query as metadata chunk if available and not already sent
+                        if vizql_query and not getattr(stream_graph, '_query_sent', False):
+                            metadata_chunk = AgentMessageChunk(
+                                message_type="metadata",
+                                content=AgentMessageContent(type="json", data={"vizql_query": vizql_query}),
+                                timestamp=time.time()
+                            )
+                            yield metadata_chunk.to_sse_format()
+                            stream_graph._query_sent = True
                         
                         # Ensure we have content to save - if not, try to get it from last_state one more time
                         if not full_content and last_state:
@@ -707,33 +774,82 @@ async def send_message(
                             )
                             if full_content and full_content != "Query execution completed. Please check the conversation messages.":
                                 logger.info(f"Extracted content from last_state: {full_content[:200]}")
-                                yield f"data: {full_content}\n\n"
+                                # Send as structured final_answer chunk
+                                answer_chunk = AgentMessageChunk(
+                                    message_type="final_answer",
+                                    content=AgentMessageContent(type="text", data=full_content),
+                                    timestamp=time.time()
+                                )
+                                yield answer_chunk.to_sse_format()
                         
                         # Save assistant message after streaming completes
                         if full_content:
                             try:
+                                # Calculate total time (from when user message was created to now)
+                                stream_end_time = time.time()
+                                total_time_ms = (stream_end_time - stream_start_time) * 1000  # Convert to milliseconds
+                                
                                 assistant_message = Message(
                                     conversation_id=request.conversation_id,
                                     role=MessageRole.ASSISTANT,
                                     content=full_content,
-                                    model_used=request.model
+                                    model_used=request.model,
+                                    total_time_ms=total_time_ms
                                 )
                                 db.add(assistant_message)
                                 conversation.updated_at = conversation.updated_at
                                 db.commit()
-                                logger.info(f"Saved assistant message with {len(full_content)} chars")
+                                logger.info(f"Saved assistant message with {len(full_content)} chars, total_time_ms: {total_time_ms:.2f}")
                             except Exception as e:
                                 logger.error(f"Failed to save assistant message: {e}", exc_info=True)
                         else:
                             logger.error("No content to save after streaming completed!")
                         
-                        yield "data: [DONE]\n\n"
+                        # Send completion marker
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                     except Exception as e:
                         logger.error(f"Error in VizQL graph streaming: {e}", exc_info=True)
-                        import json
-                        error_data = json.dumps({"error": str(e)})
-                        yield f"data: {error_data}\n\n"
-                        yield "data: [DONE]\n\n"
+                        # Try to extract query_draft even on error if last_state is available
+                        error_vizql_query = None
+                        try:
+                            if 'last_state' in locals() and last_state:
+                                error_vizql_query = last_state.get("query_draft")
+                                # Also check alternative keys
+                                if not error_vizql_query:
+                                    for key in ["query", "validated_query"]:
+                                        if key in last_state:
+                                            error_vizql_query = last_state.get(key)
+                                            break
+                        except:
+                            pass
+                        
+                        # Send query as metadata even on error if available and not already sent
+                        if error_vizql_query and not getattr(stream_graph, '_query_sent', False):
+                            metadata_chunk = AgentMessageChunk(
+                                message_type="metadata",
+                                content=AgentMessageContent(type="json", data={"vizql_query": error_vizql_query}),
+                                timestamp=time.time()
+                            )
+                            yield metadata_chunk.to_sse_format()
+                            stream_graph._query_sent = True
+                        
+                        error_chunk = AgentMessageChunk(
+                            message_type="error",
+                            content=AgentMessageContent(type="text", data=str(e)),
+                            timestamp=time.time()
+                        )
+                        yield error_chunk.to_sse_format()
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                 
                 return StreamingResponse(
                     stream_graph(),
@@ -815,11 +931,31 @@ async def send_message(
                         else:
                             final_answer = "Query execution completed but no response was generated. Please check the logs."
                             logger.warning(f"No final_answer or error in final state: {final_state}")
+                    
+                    # Extract VizQL query from final state - always include it, even on errors
+                    vizql_query = None
+                    if final_state:
+                        # Try multiple keys where query might be stored
+                        for key in ["query_draft", "query", "validated_query"]:
+                            if key in final_state and final_state.get(key):
+                                vizql_query = final_state.get(key)
+                                break
                 except Exception as e:
                     execution_time = time.time() - execution_start
                     logger.error(f"Error executing VizQL graph: {e}", exc_info=True)
                     metrics.record_agent_execution("vizql", execution_time, success=False)
                     final_answer = f"Error executing query: {str(e)}"
+                    # Try to extract query_draft even on exception if we have partial state
+                    vizql_query = None
+                    try:
+                        # Try to get final_state from exception context if available
+                        if 'final_state' in locals() and final_state:
+                            for key in ["query_draft", "query", "validated_query"]:
+                                if key in final_state and final_state.get(key):
+                                    vizql_query = final_state.get(key)
+                                    break
+                    except:
+                        pass
                 
                 # Save assistant message
                 assistant_message = Message(
@@ -841,6 +977,9 @@ async def send_message(
                         content=assistant_message.content,
                         model_used=assistant_message.model_used,
                         tokens_used=None,
+                        feedback=assistant_message.feedback,
+                        total_time_ms=assistant_message.total_time_ms,
+                        vizql_query=vizql_query,
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -897,40 +1036,186 @@ async def send_message(
                 # Stream graph execution
                 async def stream_graph():
                     full_content = ""
+                    last_final_answer = ""
+                    last_state = None
+                    reasoningStepIndex = 0
+                    stream_start_time = time.time()  # Track when streaming starts
                     try:
                         # Provide config with thread_id for checkpointer
                         config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
-                        async for state in graph.astream(initial_state, config=config):
-                            if "current_thought" in state and state.get("current_thought"):
-                                thought = state["current_thought"]
-                                yield f"data: {thought}\n\n"
+                        async for state_update in graph.astream(initial_state, config=config):
+                            # LangGraph astream returns updates keyed by node name
+                            # Each update contains the state dictionary for that node
+                            logger.debug(f"Summary graph state update - node keys: {list(state_update.keys())}")
                             
-                            if "final_answer" in state and state.get("final_answer"):
-                                answer = state["final_answer"]
-                                if answer != full_content:
-                                    new_content = answer[len(full_content):]
-                                    if new_content:
-                                        yield f"data: {new_content}\n\n"
+                            # Iterate through all node updates in this state update
+                            for node_name, node_state in state_update.items():
+                                logger.debug(f"Processing node '{node_name}' - state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'not dict'}")
+                                
+                                # Keep track of the last state for final extraction
+                                if isinstance(node_state, dict):
+                                    last_state = node_state
+                                
+                                # Stream intermediate thoughts as reasoning steps
+                                if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
+                                    thought = node_state["current_thought"]
+                                    # Only stream if it's different from what we've already sent
+                                    if thought not in full_content:
+                                        logger.debug(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                        reasoning_chunk = AgentMessageChunk(
+                                            message_type="reasoning",
+                                            content=AgentMessageContent(type="text", data=thought),
+                                            step_name=node_name,
+                                            timestamp=time.time(),  # Unix timestamp in seconds
+                                            step_index=reasoningStepIndex
+                                        )
+                                        reasoningStepIndex += 1
+                                        yield reasoning_chunk.to_sse_format()
+                                
+                                # Stream final answer when available
+                                if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):
+                                    answer = node_state["final_answer"]
+                                    logger.info(f"Found final_answer in {node_name}: {answer[:200]}")
+                                    # Send the full answer if it's new or has changed
+                                    if answer != last_final_answer:
+                                        # If we haven't sent this answer yet, send it all
+                                        if last_final_answer == "":
+                                            logger.info(f"Streaming full final_answer from {node_name}: {len(answer)} chars")
+                                            answer_chunk = AgentMessageChunk(
+                                                message_type="final_answer",
+                                                content=AgentMessageContent(type="text", data=answer),
+                                                timestamp=time.time()
+                                            )
+                                            yield answer_chunk.to_sse_format()
+                                        else:
+                                            # Send only the new part
+                                            new_content = answer[len(last_final_answer):]
+                                            if new_content:
+                                                logger.info(f"Streaming new content from {node_name}: {len(new_content)} chars")
+                                                answer_chunk = AgentMessageChunk(
+                                                    message_type="final_answer",
+                                                    content=AgentMessageContent(type="text", data=new_content),
+                                                    timestamp=time.time()
+                                                )
+                                                yield answer_chunk.to_sse_format()
+                                        last_final_answer = answer
                                         full_content = answer
                         
-                        if full_content:
-                            assistant_message = Message(
-                                conversation_id=request.conversation_id,
-                                role=MessageRole.ASSISTANT,
-                                content=full_content,
-                                model_used=request.model
-                            )
-                            db.add(assistant_message)
-                            conversation.updated_at = conversation.updated_at
-                            db.commit()
+                        # After streaming completes, check last state for final_answer if we didn't get it
+                        if not full_content:
+                            logger.warning(f"Streaming completed but no full_content received. Last state: {type(last_state)}")
+                            
+                            # last_state should be a dict from the last node update
+                            if last_state and isinstance(last_state, dict):
+                                logger.info(f"Checking last_state for final_answer - keys: {list(last_state.keys())}")
+                                final_answer = last_state.get("final_answer")
+                                if not final_answer:
+                                    # Try to extract error or other info
+                                    error = last_state.get("error")
+                                    executive_summary = last_state.get("executive_summary")
+                                    detailed_analysis = last_state.get("detailed_analysis")
+                                    
+                                    logger.info(f"Extracting from last_state - error: {error}, executive_summary: {executive_summary}, detailed_analysis: {detailed_analysis}")
+                                    
+                                    if error:
+                                        final_answer = f"Error: {error}"
+                                    elif executive_summary:
+                                        final_answer = executive_summary
+                                    elif detailed_analysis:
+                                        final_answer = detailed_analysis
+                                    else:
+                                        final_answer = "Summary generation completed but no response was generated."
+                                
+                                if final_answer and final_answer != last_final_answer:
+                                    logger.info(f"Sending final_answer after stream: {final_answer[:200]}")
+                                    # Send as structured final_answer chunk
+                                    answer_chunk = AgentMessageChunk(
+                                        message_type="final_answer",
+                                        content=AgentMessageContent(type="text", data=final_answer),
+                                        timestamp=time.time()
+                                    )
+                                    yield answer_chunk.to_sse_format()
+                                    full_content = final_answer
                         
-                        yield "data: [DONE]\n\n"
+                        # Ensure we have content to save - if not, try to get it from last_state one more time
+                        if not full_content and last_state:
+                            logger.warning("No content after streaming, attempting to extract from last_state")
+                            # Check all possible sources
+                            full_content = (
+                                last_state.get("final_answer") or
+                                last_state.get("executive_summary") or
+                                last_state.get("detailed_analysis") or
+                                (f"Error: {last_state.get('error')}" if last_state.get("error") else None) or
+                                "Summary generation completed. Please check the conversation messages."
+                            )
+                            if full_content and full_content != "Summary generation completed. Please check the conversation messages.":
+                                logger.info(f"Extracted content from last_state: {full_content[:200]}")
+                                # Send as structured final_answer chunk
+                                answer_chunk = AgentMessageChunk(
+                                    message_type="final_answer",
+                                    content=AgentMessageContent(type="text", data=full_content),
+                                    timestamp=time.time()
+                                )
+                                yield answer_chunk.to_sse_format()
+                        
+                        # Save assistant message after streaming completes
+                        if full_content:
+                            try:
+                                # Calculate total time (from when user message was created to now)
+                                stream_end_time = time.time()
+                                total_time_ms = (stream_end_time - stream_start_time) * 1000  # Convert to milliseconds
+                                
+                                assistant_message = Message(
+                                    conversation_id=request.conversation_id,
+                                    role=MessageRole.ASSISTANT,
+                                    content=full_content,
+                                    model_used=request.model,
+                                    total_time_ms=total_time_ms
+                                )
+                                db.add(assistant_message)
+                                conversation.updated_at = conversation.updated_at
+                                db.commit()
+                                logger.info(f"Saved assistant message with {len(full_content)} chars, total_time_ms: {total_time_ms:.2f}")
+                            except Exception as e:
+                                logger.error(f"Failed to save assistant message: {e}", exc_info=True)
+                        else:
+                            logger.error("No content to save after streaming completed!")
+                        
+                        # Send completion marker
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                     except Exception as e:
                         logger.error(f"Error in Summary graph streaming: {e}", exc_info=True)
-                        import json
-                        error_data = json.dumps({"error": str(e)})
-                        yield f"data: {error_data}\n\n"
-                        yield "data: [DONE]\n\n"
+                        # Try to extract query from last_state even on error if available
+                        error_vizql_query = None
+                        try:
+                            if 'last_state' in locals() and last_state:
+                                for key in ["query_draft", "query", "validated_query"]:
+                                    if key in last_state and last_state.get(key):
+                                        error_vizql_query = last_state.get(key)
+                                        break
+                        except:
+                            pass
+                        
+                        # Send error chunk
+                        error_chunk = AgentMessageChunk(
+                            message_type="error",
+                            content=AgentMessageContent(type="text", data=str(e)),
+                            timestamp=time.time()
+                        )
+                        yield error_chunk.to_sse_format()
+                        
+                        # Send completion marker
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                 
                 return StreamingResponse(
                     stream_graph(),
@@ -965,11 +1250,15 @@ async def send_message(
                 
                 final_answer = final_state.get("final_answer") or final_state.get("error", "Summary generation completed.")
                 
+                # Calculate total time for non-streaming summary agent
+                total_time_ms = (time.time() - execution_start) * 1000
+                
                 assistant_message = Message(
                     conversation_id=request.conversation_id,
                     role=MessageRole.ASSISTANT,
                     content=final_answer,
-                    model_used=request.model
+                    model_used=request.model,
+                    total_time_ms=total_time_ms
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
@@ -984,6 +1273,9 @@ async def send_message(
                         content=assistant_message.content,
                         model_used=assistant_message.model_used,
                         tokens_used=None,
+                        feedback=assistant_message.feedback,
+                        total_time_ms=assistant_message.total_time_ms,
+                        vizql_query=None,  # Not available for general agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -1026,7 +1318,13 @@ async def send_message(
                                     chunk_count += 1
                                     full_content += chunk.content
                                     logger.debug(f"Streaming chunk {chunk_count}: {chunk.content[:50]}...")
-                                    yield f"data: {chunk.content}\n\n"
+                                    # Send as structured final_answer chunk
+                                    answer_chunk = AgentMessageChunk(
+                                        message_type="final_answer",
+                                        content=AgentMessageContent(type="text", data=chunk.content),
+                                        timestamp=time.time()
+                                    )
+                                    yield answer_chunk.to_sse_format()
                             
                             logger.info(f"Streaming completed: {chunk_count} chunks, {len(full_content)} total chars")
                         
@@ -1042,13 +1340,27 @@ async def send_message(
                             conversation.updated_at = conversation.updated_at  # Trigger update
                             db.commit()
                         
-                        yield "data: [DONE]\n\n"
+                        # Send completion marker
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                     except Exception as e:
                         logger.error(f"Error in streaming: {e}", exc_info=True)
-                        import json
-                        error_data = json.dumps({"error": str(e)})
-                        yield f"data: {error_data}\n\n"
-                        yield "data: [DONE]\n\n"
+                        error_chunk = AgentMessageChunk(
+                            message_type="error",
+                            content=AgentMessageContent(type="text", data=str(e)),
+                            timestamp=time.time()
+                        )
+                        yield error_chunk.to_sse_format()
+                        done_chunk = AgentMessageChunk(
+                            message_type="progress",
+                            content=AgentMessageContent(type="text", data="[DONE]"),
+                            timestamp=time.time()
+                        )
+                        yield done_chunk.to_sse_format()
                 
                 return StreamingResponse(
                     generate_stream(),
@@ -1126,6 +1438,15 @@ async def send_message(
                         # No function call, use original response
                         final_content = response.content
                 
+                # Calculate total time for non-streaming general agent
+                # Note: execution_start is defined earlier in the function for general agent
+                total_time_ms = None
+                try:
+                    if 'execution_start' in locals():
+                        total_time_ms = (time.time() - execution_start) * 1000
+                except:
+                    pass
+                
                 # Save assistant message
                 assistant_message = Message(
                     conversation_id=request.conversation_id,
@@ -1133,6 +1454,7 @@ async def send_message(
                     content=final_content,
                     model_used=response.model,
                     tokens_used=total_tokens,
+                    total_time_ms=total_time_ms,
                     extra_metadata={
                         "function_call": response.function_call.__dict__ if response.function_call else None
                     }
@@ -1150,6 +1472,9 @@ async def send_message(
                         content=assistant_message.content,
                         model_used=assistant_message.model_used,
                         tokens_used=assistant_message.tokens_used,
+                        feedback=assistant_message.feedback,
+                        total_time_ms=assistant_message.total_time_ms,
+                        vizql_query=None,  # Not available for general agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -1172,6 +1497,50 @@ async def send_message(
         # Ensure tableau_client is closed even if AI client fails
         if tableau_client:
             await tableau_client.close()
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Request model for message feedback."""
+    feedback: Optional[str] = Field(None, description="Feedback: 'thumbs_up', 'thumbs_down', or null to clear")
+
+
+@router.put("/messages/{message_id}/feedback", response_model=MessageResponse)
+async def update_message_feedback(
+    message_id: int,
+    request: MessageFeedbackRequest,
+    db: Session = Depends(get_db)
+):
+    """Update feedback for a message."""
+    message = db.query(Message).filter(Message.id == message_id).first()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found"
+        )
+    
+    # Validate feedback value if provided
+    if request.feedback is not None and request.feedback not in ['thumbs_up', 'thumbs_down']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Feedback must be 'thumbs_up', 'thumbs_down', or null"
+        )
+    
+    message.feedback = request.feedback
+    db.commit()
+    db.refresh(message)
+    
+    return MessageResponse(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        role=message.role.value,
+        content=message.content,
+        model_used=message.model_used,
+        tokens_used=message.tokens_used,
+        feedback=message.feedback,
+        total_time_ms=message.total_time_ms,
+        vizql_query=None,  # Not stored in DB
+        created_at=message.created_at
+    )
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

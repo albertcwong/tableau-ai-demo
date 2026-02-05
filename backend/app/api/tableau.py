@@ -1,7 +1,8 @@
 """Tableau API endpoints."""
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+from sqlalchemy.orm import Session
 
 from app.api.models import (
     DatasourceResponse,
@@ -15,6 +16,8 @@ from app.api.models import (
     ProjectContentsResponse,
     DatasourceSchemaResponse,
     DatasourceSampleResponse,
+    ExecuteVDSQueryRequest,
+    ExecuteVDSQueryResponse,
     ColumnSchema,
 )
 from app.services.tableau.client import (
@@ -23,29 +26,70 @@ from app.services.tableau.client import (
     TableauAuthenticationError,
     TableauAPIError,
 )
+from app.core.database import get_db
+from app.api.auth import get_current_user
+from app.models.user import User, TableauServerConfig
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tableau", tags=["tableau"])
 
 
-def get_tableau_client() -> TableauClient:
+def get_tableau_client(
+    x_tableau_config_id: Optional[str] = Header(None, alias="X-Tableau-Config-Id"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TableauClient:
     """
-    Dependency for getting Tableau client instance.
+    Dependency for getting Tableau client instance from user's selected configuration.
     
-    Creates a new client instance for each request.
-    The client handles authentication automatically.
+    Creates a new client instance for each request using the user's selected Tableau config.
+    Falls back to environment variables if no config_id is provided.
     
     Raises:
         HTTPException: If Tableau configuration is missing or invalid
     """
     try:
-        return TableauClient()
+        # If config_id is provided, use that config
+        if x_tableau_config_id:
+            try:
+                config_id = int(x_tableau_config_id)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid Tableau config ID: {x_tableau_config_id}"
+                )
+            
+            config = db.query(TableauServerConfig).filter(
+                TableauServerConfig.id == config_id,
+                TableauServerConfig.is_active == True
+            ).first()
+            
+            if not config:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Tableau server configuration {x_tableau_config_id} not found or inactive"
+                )
+            
+            return TableauClient(
+                server_url=config.server_url,
+                site_id=config.site_id if config.site_id else None,
+                api_version=config.api_version or "3.15",
+                client_id=config.client_id,
+                client_secret=config.client_secret,
+                username=current_user.username,
+                secret_id=config.secret_id or config.client_id
+            )
+        else:
+            # Fallback to environment variables (legacy behavior)
+            return TableauClient()
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"Tableau client initialization failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Tableau service configuration error: {str(e)}. Please check your environment variables.",
+            detail=f"Tableau service configuration error: {str(e)}. Please check your environment variables or select a Tableau server configuration.",
         )
 
 
@@ -742,6 +786,7 @@ async def get_datasource_sample(
             columns=sample["columns"],
             data=sample["data"],
             row_count=sample["row_count"],
+            query=sample.get("query"),
         )
         
     except TableauAuthenticationError as e:
@@ -777,3 +822,83 @@ async def get_datasource_sample(
         )
     finally:
         await client.close()
+
+
+@router.post(
+    "/datasources/{datasource_id}/execute-query",
+    response_model=ExecuteVDSQueryResponse,
+    summary="Execute VizQL Data Service query",
+    description="Execute a VizQL Data Service query against a datasource.",
+    responses={
+        200: {"description": "Query results"},
+        400: {"model": ErrorResponse, "description": "Invalid query"},
+        401: {"model": ErrorResponse, "description": "Authentication failed"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def execute_vds_query(
+    datasource_id: str,
+    request: ExecuteVDSQueryRequest,
+    client: TableauClient = Depends(get_tableau_client),
+) -> ExecuteVDSQueryResponse:
+    """
+    Execute a VizQL Data Service query against a datasource.
+    
+    The query should follow the VizQL Data Service API format:
+    {
+        "datasource": {"datasourceLuid": "..."},
+        "query": {
+            "fields": [...],
+            "filters": [...]
+        },
+        "options": {...}
+    }
+    """
+    try:
+        # Ensure datasource_id matches
+        if request.datasource_id != datasource_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Datasource ID mismatch",
+            )
+        
+        # Ensure query has correct datasource LUID
+        query_obj = request.query.copy()
+        if "datasource" not in query_obj:
+            query_obj["datasource"] = {"datasourceLuid": datasource_id}
+        else:
+            query_obj["datasource"]["datasourceLuid"] = datasource_id
+        
+        # Execute query
+        result = await client.execute_vds_query(query_obj, limit=1000)
+        
+        return ExecuteVDSQueryResponse(
+            columns=result["columns"],
+            data=result["data"],
+            row_count=result["row_count"],
+        )
+        
+    except ValueError as e:
+        logger.error(f"Invalid query: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid query: {str(e)}",
+        )
+    except TableauAuthenticationError as e:
+        logger.error(f"Authentication error executing query: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Tableau authentication failed: {str(e)}",
+        )
+    except TableauAPIError as e:
+        logger.error(f"API error executing query: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tableau API error: {str(e)}",
+        )
+    except TableauClientError as e:
+        logger.error(f"Client error executing query: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tableau client error: {str(e)}",
+        )

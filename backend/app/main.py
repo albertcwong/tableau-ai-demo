@@ -67,7 +67,17 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
 )
 
-# Configure CORS
+
+@app.on_event("startup")
+async def startup_event():
+    """Run bootstrap logic on startup."""
+    from app.core.bootstrap import bootstrap_admin_user
+    try:
+        bootstrap_admin_user()
+    except Exception as e:
+        logger.error(f"Error during startup bootstrap: {e}")
+
+# Configure CORS - must be added before other middleware
 cors_origins = settings.cors_origins_list
 logger.info(f"CORS origins configured: {cors_origins}")
 app.add_middleware(
@@ -79,6 +89,20 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+# Global exception handler to ensure CORS headers on errors
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler that ensures CORS headers are set."""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error", "error": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 
 # Request logging middleware
@@ -188,6 +212,18 @@ async def root():
 
 # Include API router
 app.include_router(api_router)
+
+# Include Auth API router
+from app.api.auth import router as auth_router
+app.include_router(auth_router, prefix="/api/v1")
+
+# Include Admin API router
+from app.api.admin import router as admin_router
+app.include_router(admin_router, prefix="/api/v1")
+
+# Include Tableau Auth API router
+from app.api.tableau_auth import router as tableau_auth_router
+app.include_router(tableau_auth_router, prefix="/api/v1")
 
 # Include Tableau API router
 from app.api.tableau import router as tableau_router

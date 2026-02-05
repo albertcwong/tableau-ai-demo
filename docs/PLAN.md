@@ -18,30 +18,60 @@ Build an AI-powered interface for interacting with Tableau via conversational ag
 ### Browser UI for Tableau Object Explorer
 **Purpose:** Provide a visual interface to explore and interact with Tableau objects in a file-explorer-like experience.
 
-#### Object Explorer
-- **Connection Interface**: Allow users to connect to a Tableau site
-- **Hierarchical Navigation**: Browse Tableau objects with a file explorer experience:
-  - **Projects**: Act as directories containing other objects
-  - **Published Datasources**: Act as files within projects
-  - **Workbooks**: Act as files within projects
-  - **Views**: Act as files within workbooks
-- **Breadcrumb Navigation**: Display current location in the object hierarchy
-- **Object Interaction**: Click on objects to view details:
-  - **Published Datasources**: Display schema and sample data
-  - **Projects**: Display contents and update breadcrumbs
-  - **Views**: Embed and render the view in a component
+#### Bootstrapping
+- **Initial Setup**: On first launch, automatically create an initial admin user with credentials `admin/admin`
+- **Database Initialization**: Seed necessary tables for user management and Tableau server configurations
 
-#### Agent Assistant Panel
-- **Side Panel Toggle**: Message interface that can be shown/hidden
-- **Context Integration**: Bring Tableau objects into chat context:
-  - **Published Datasources**: For VizQL agent queries
-  - **Views**: For summary agent analysis
-- **Agent Selection**: Dropdown to choose between available agents
-- **Model Configuration**: Settings interface for providers and models (infrequently adjusted)
-- **Chat Management**:
-  - Start new chat threads
-  - Select historical chat threads
-  - Preserve conversation context across sessions
+#### Admin Functionality
+- **User Management**: 
+  - Add users to the system
+  - Manage user permissions and roles
+- **Tableau Configuration**:
+  - Add Tableau server connection details
+  - Configure site information
+  - Set up Connected App credentials for authentication
+
+#### End User Workflow
+- **Authentication**: 
+  - User logs into the UI with their credentials
+  - Username from UI login is passed to Connected App authentication process
+- **Server/Site Selection**:
+  - Select configured Tableau server from dropdown
+  - Select configured site from dropdown (filtered by selected server)
+  - Click login button to initiate Direct Trust Connected App authentication
+  - Receive and cache authentication token
+
+#### Three-Panel Layout
+- **Left Panel - Object Explorer**:
+  - List of published datasources and workbooks queried from Tableau
+  - Displayed in a file explorer-style side panel
+  - **Hierarchical Navigation**: Browse Tableau objects:
+    - **Projects**: Act as directories containing other objects
+    - **Published Datasources**: Act as files within projects
+    - **Workbooks**: Act as files within projects
+    - **Views**: Act as files within workbooks
+  - **Breadcrumb Navigation**: Display current location in the object hierarchy
+
+- **Main Panel - Content Display**:
+  - **Published Datasources**: 
+    - Render datasource schema
+    - Display sample data
+    - Provide VizQL Data Service editor to query data
+  - **Views**: 
+    - Embed and render Tableau view
+  - **Projects**: Display contents and update breadcrumbs
+
+- **Right Panel - Agent Assistant**:
+  - **Side Panel Toggle**: Message interface that can be shown/hidden
+  - **Context Integration**: Bring Tableau objects into chat context:
+    - **Published Datasources**: For VizQL agent queries
+    - **Views**: For summary agent analysis
+  - **Agent Selection**: Dropdown to choose between available agents
+  - **Model Configuration**: Settings interface for providers and models (infrequently adjusted)
+  - **Chat Management**:
+    - Start new chat threads
+    - Select historical chat threads
+    - Preserve conversation context across sessions
 
 ### MCP Integration (Foundation for Agent Suite) ⭐
 **Critical Requirement:** All core capabilities must be exposed via Model Context Protocol (MCP) to enable:

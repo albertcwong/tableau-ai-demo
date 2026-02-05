@@ -9,7 +9,12 @@ import { ThreadList } from './ThreadList';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { X, MessageSquare, GripVertical } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { X, MessageSquare, GripVertical, Settings } from 'lucide-react';
 import type { ChatContextObject, ConversationResponse } from '@/types';
 
 interface AgentPanelProps {
@@ -25,7 +30,7 @@ const MIN_WIDTH = 384; // w-96 equivalent
 const MAX_WIDTH = 1200; // Maximum width
 const DEFAULT_WIDTH = 384;
 
-export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange }: AgentPanelProps) {
+export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery }: AgentPanelProps) {
   const [agentType, setAgentType] = useState<AgentType>('general');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
@@ -205,7 +210,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
       <div
         ref={resizeRef}
         onMouseDown={handleResizeStart}
-        className="absolute left-0 top-0 h-full w-2 cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-10 group"
+        className="absolute left-0 top-0 h-full w-2 cursor-col-resize hover:bg-blue-200/50 dark:hover:bg-blue-700/50 active:bg-blue-300 dark:active:bg-blue-600 transition-colors z-10 group"
         style={{ touchAction: 'none' }}
         title="Drag to resize"
       >
@@ -214,20 +219,35 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
         </div>
       </div>
       <div className="p-4 border-b border-gray-200 dark:border-gray-800 shrink-0">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <MessageSquare className="h-5 w-5" />
             Agent Assistant
           </h2>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm">
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 p-4">
+                <ModelSettings
+                  provider={provider}
+                  model={model}
+                  onProviderChange={setProvider}
+                  onModelChange={setModel}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-        
-        <AgentSelector value={agentType} onValueChange={setAgentType} />
       </div>
 
-      <div className="overflow-y-auto p-4 space-y-4 border-b border-gray-200 dark:border-gray-800 max-h-[40vh] shrink-0">
+      <div className="overflow-y-auto p-4 border-b border-gray-200 dark:border-gray-800 max-h-[40vh] shrink-0">
         <div>
           <h3 className="text-sm font-medium mb-2">Chat Threads</h3>
           <ThreadList
@@ -238,18 +258,6 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             onThreadsChange={handleThreadsChange}
           />
         </div>
-
-        <div>
-          <h3 className="text-sm font-medium mb-2">Context</h3>
-          <ContextManager objects={context} onRemove={handleRemoveContext} />
-        </div>
-
-        <ModelSettings
-          provider={provider}
-          model={model}
-          onProviderChange={setProvider}
-          onModelChange={setModel}
-        />
       </div>
 
       {activeThreadId && (
@@ -259,6 +267,10 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             defaultModel={model}
             hideModelSelector={true}
             agentType={agentType}
+            onAgentTypeChange={setAgentType}
+            context={context}
+            onRemoveContext={handleRemoveContext}
+            onLoadQuery={onLoadQuery}
           />
         </div>
       )}

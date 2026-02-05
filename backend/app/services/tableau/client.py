@@ -42,6 +42,7 @@ class TableauClient:
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         username: Optional[str] = None,
+        secret_id: Optional[str] = None,
         is_uat: bool = False,
         api_version: Optional[str] = None,
         timeout: int = 30,
@@ -56,6 +57,7 @@ class TableauClient:
             client_id: Connected App client ID or UAT client ID (defaults to settings)
             client_secret: Connected App secret value or UAT secret (defaults to settings)
             username: Username for JWT (defaults to settings or client_id)
+            secret_id: Secret ID for JWT 'kid' header (defaults to settings or client_id)
             is_uat: Whether to use Unified Access Token (UAT) instead of Connected App (defaults to False)
             api_version: Tableau REST API version (e.g., "3.21", "3.27") (defaults to settings)
             timeout: Request timeout in seconds
@@ -65,8 +67,8 @@ class TableauClient:
         self.site_id = site_id or settings.TABLEAU_SITE_ID
         self.client_id = client_id or settings.TABLEAU_CLIENT_ID
         self.client_secret = client_secret or settings.TABLEAU_CLIENT_SECRET
-        # Secret ID for JWT 'kid' header - defaults to client_id if not provided
-        self.secret_id = settings.TABLEAU_SECRET_ID or self.client_id
+        # Secret ID for JWT 'kid' header - use provided value, then settings, then default to client_id
+        self.secret_id = secret_id or settings.TABLEAU_SECRET_ID or self.client_id
         # Username defaults to client_id if not provided, but can be overridden via settings or parameter
         self.username = username or settings.TABLEAU_USERNAME or self.client_id
         self.is_uat = is_uat
@@ -1369,6 +1371,8 @@ class TableauClient:
         
         Uses: GET /api/api-version/sites/site-id/views/view-id/data
         
+        Note: This endpoint returns CSV format, not JSON, so we need to handle it specially.
+        
         Args:
             view_id: View ID
             max_rows: Maximum number of rows to return
@@ -1386,29 +1390,53 @@ class TableauClient:
         params = {"maxAge": 0}  # Get fresh data
         
         try:
-            response = await self._request("GET", endpoint, params=params)
+            # The /views/{view_id}/data endpoint returns CSV, not JSON
+            # So we need to make a direct request instead of using _request()
+            endpoint_clean = endpoint.lstrip('/')
+            base_url = self.api_base.rstrip('/')
+            url = f"{base_url}/{endpoint_clean}"
+            headers = self._get_auth_headers()
+            
+            logger.debug(f"Making GET request to view data endpoint: {url}")
+            response = await self._client.get(
+                url,
+                headers=headers,
+                params=params,
+            )
+            
+            response.raise_for_status()
+            
+            content_type = response.headers.get('content-type', 'unknown')
+            logger.debug(f"Response Content-Type: {content_type}")
             
             # Parse CSV response
             # Tableau returns CSV format: "Column1,Column2\nValue1,Value2\n..."
-            csv_data = response if isinstance(response, str) else response.get("data", "")
+            csv_text = response.text
             
-            if isinstance(csv_data, dict):
-                # Sometimes response is already parsed
-                columns = csv_data.get("columns", [])
-                data_rows = csv_data.get("rows", [])
-            else:
-                # Parse CSV string
-                lines = csv_data.strip().split('\n')
-                if len(lines) < 2:
-                    return {"columns": [], "data": [], "row_count": 0}
-                
-                columns = [col.strip() for col in lines[0].split(',')]
-                data_rows = []
-                
-                for line in lines[1:max_rows+1]:
-                    if line.strip():
-                        values = [val.strip() for val in line.split(',')]
-                        data_rows.append(values)
+            if not csv_text or not csv_text.strip():
+                return {"columns": [], "data": [], "row_count": 0}
+            
+            # Parse CSV string
+            import csv
+            from io import StringIO
+            
+            # Use csv module to properly handle quoted values and commas within fields
+            csv_reader = csv.reader(StringIO(csv_text))
+            lines = list(csv_reader)
+            
+            if len(lines) < 1:
+                return {"columns": [], "data": [], "row_count": 0}
+            
+            # First line is headers
+            columns = [col.strip() for col in lines[0]]
+            
+            # Remaining lines are data (limit to max_rows)
+            data_rows = []
+            for line in lines[1:max_rows+1]:
+                if line:  # Skip empty lines
+                    data_rows.append([val.strip() if val else "" for val in line])
+            
+            logger.debug(f"Parsed CSV: {len(columns)} columns, {len(data_rows)} rows")
             
             return {
                 "columns": columns,
@@ -1436,7 +1464,7 @@ class TableauClient:
         
         # Use VizQL Data Service API to get metadata
         # VDS API uses /api/v1/ regardless of REST API version
-        # Construct full URL directly since it's not under the REST API version path
+        # VDS API does NOT include site_id in the path (unlike REST API endpoints)
         vds_url = urljoin(self.server_url, '/api/v1/vizql-data-service/read-metadata')
         
         # Request body for read-metadata according to VDS API docs
@@ -1478,10 +1506,39 @@ class TableauClient:
             if isinstance(fields, list):
                 for field in fields:
                     if isinstance(field, dict):
-                        # Determine if measure or dimension based on defaultAggregation
+                        # Determine if measure or dimension based on columnClass (primary indicator)
+                        column_class = field.get("columnClass", "")
                         default_agg = field.get("defaultAggregation", "")
-                        is_measure = default_agg in ["SUM", "AVG", "MEDIAN", "COUNT", "COUNTD", "MIN", "MAX", "STDEV", "VAR", "AGG"]
-                        is_dimension = not is_measure and field.get("columnClass") in ["COLUMN", "BIN", "GROUP"]
+                        
+                        # Use columnClass as primary indicator
+                        # MEASURE = measure, COLUMN/BIN/GROUP = dimension
+                        if column_class == "MEASURE":
+                            is_measure = True
+                            is_dimension = False
+                        elif column_class in ["COLUMN", "BIN", "GROUP"]:
+                            is_measure = False
+                            is_dimension = True
+                        else:
+                            # Fallback: use defaultAggregation if columnClass not available or unknown
+                            # Fields with aggregations are typically measures, but dimensions can have aggregations too
+                            # So we check if it's a numeric type with aggregation
+                            data_type = field.get("dataType", "")
+                            is_numeric = data_type in ["INTEGER", "REAL"]
+                            has_aggregation = default_agg in ["SUM", "AVG", "MEDIAN", "COUNT", "COUNTD", "MIN", "MAX", "STDEV", "VAR", "AGG"]
+                            
+                            # If numeric with aggregation and no explicit columnClass, likely a measure
+                            # Otherwise, treat as dimension if it has columnClass values, or unknown
+                            if is_numeric and has_aggregation and not column_class:
+                                is_measure = True
+                                is_dimension = False
+                            elif column_class in ["CALCULATION", "TABLE_CALCULATION"]:
+                                # Calculated fields need to be checked by their formula/aggregation
+                                is_measure = has_aggregation and is_numeric
+                                is_dimension = not is_measure
+                            else:
+                                # Default to dimension for unknown types
+                                is_measure = False
+                                is_dimension = True
                         
                         schema.append({
                             "name": field.get("fieldCaption") or field.get("fieldName", ""),
@@ -1490,7 +1547,7 @@ class TableauClient:
                             "is_measure": is_measure,
                             "is_dimension": is_dimension,
                             "default_aggregation": default_agg,
-                            "column_class": field.get("columnClass", ""),
+                            "column_class": column_class,
                             "formula": field.get("formula"),  # For calculations
                         })
         else:
@@ -1568,7 +1625,7 @@ class TableauClient:
         
         # Use VizQL Data Service API to query datasource
         # VDS API uses /api/v1/ regardless of REST API version
-        # Construct full URL directly since it's not under the REST API version path
+        # VDS API does NOT include site_id in the path (unlike REST API endpoints)
         vds_url = urljoin(self.server_url, '/api/v1/vizql-data-service/query-datasource')
         
         # Request body for query-datasource according to VDS API docs
@@ -1670,6 +1727,7 @@ class TableauClient:
             "columns": column_names,
             "data": data_rows,
             "row_count": len(data_rows),
+            "query": request_body,
         }
     
     async def execute_vds_query(
@@ -1702,12 +1760,14 @@ class TableauClient:
             raise ValueError("Query missing 'datasource' field")
         if "query" not in query_obj:
             raise ValueError("Query missing 'query' field")
+        if "fields" not in query_obj["query"] or not query_obj["query"]["fields"]:
+            raise ValueError("Query must have at least one field in 'query.fields' array")
         
-        # Add limit to options if provided
-        if limit:
-            if "options" not in query_obj:
-                query_obj["options"] = {}
-            query_obj["options"]["limit"] = limit
+        # Note: VDS API does not support 'limit' in options - it must be handled client-side
+        # Remove limit from options if it exists (it's not a valid VDS API option)
+        if "options" in query_obj and "limit" in query_obj["options"]:
+            del query_obj["options"]["limit"]
+            logger.debug(f"Removed invalid 'limit' from options (VDS API doesn't support it)")
         
         # Ensure options have defaults
         if "options" not in query_obj:
@@ -1717,6 +1777,7 @@ class TableauClient:
             }
         
         # Use VizQL Data Service API
+        # VDS API does NOT include site_id in the path (unlike REST API endpoints)
         vds_url = urljoin(self.server_url, '/api/v1/vizql-data-service/query-datasource')
         
         logger.info("-" * 80)
@@ -1725,16 +1786,34 @@ class TableauClient:
         logger.info(f"  Fields: {len(query_obj.get('query', {}).get('fields', []))}")
         logger.info(f"  Filters: {len(query_obj.get('query', {}).get('filters', []))}")
         logger.info(f"  VDS URL: {vds_url}")
+        logger.info(f"  Query object keys: {list(query_obj.keys())}")
+        logger.info(f"  Full query object: {query_obj}")
         logger.info("-" * 80)
         
-        # Make request
+        # Make request - ensure X-Tableau-Auth header is present (required by VDS API)
         headers = self._get_auth_headers()
+        if "X-Tableau-Auth" not in headers:
+            raise TableauAuthenticationError("X-Tableau-Auth header missing from request headers")
+        logger.info(f"  Auth header present: {'X-Tableau-Auth' in headers}")
+        logger.info(f"  Auth token length: {len(headers.get('X-Tableau-Auth', ''))}")
+        logger.debug(f"  Full request headers: {dict(headers)}")
+        
         response = await self._client.post(
             vds_url,
             headers=headers,
             json=query_obj,
             timeout=self.timeout,
         )
+        
+        # Log response details for debugging
+        if response.status_code != 200:
+            logger.error(f"VDS API returned status {response.status_code}")
+            try:
+                error_body = response.text
+                logger.error(f"Response body: {error_body}")
+            except Exception:
+                pass
+        
         response.raise_for_status()
         response_data = response.json()
         
@@ -1745,6 +1824,8 @@ class TableauClient:
         # Parse query response
         data_rows = []
         column_names = []
+        
+        # Apply limit client-side if provided (VDS API doesn't support limit in options)
         
         if "data" in response_data:
             raw_data = response_data["data"]

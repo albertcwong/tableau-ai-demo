@@ -1,10 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { gatewayApi } from '@/lib/api';
 
 interface ModelSettingsProps {
@@ -20,7 +24,6 @@ export function ModelSettings({
   onProviderChange,
   onModelChange,
 }: ModelSettingsProps) {
-  const [expanded, setExpanded] = useState(false);
   const [providers, setProviders] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -50,70 +53,69 @@ export function ModelSettings({
     }
   };
 
-  const handleExpand = () => {
-    if (!expanded) {
-      loadProviders();
-      loadModels();
-    }
-    setExpanded(!expanded);
-  };
+  // Load providers and models on mount
+  useEffect(() => {
+    loadProviders();
+    loadModels();
+  }, []);
 
   const handleProviderChange = async (newProvider: string) => {
     onProviderChange(newProvider);
     await loadModels(newProvider);
-    if (models.length > 0) {
-      onModelChange(models[0]);
+    const newModels = await gatewayApi.getModels(newProvider);
+    if (newModels.length > 0) {
+      onModelChange(newModels[0]);
     }
   };
 
   return (
-    <div className="border-t pt-4">
-      <Button
-        variant="ghost"
-        onClick={handleExpand}
-        className="w-full justify-between"
-      >
-        <span className="text-sm font-medium">Model Settings</span>
-        {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-      </Button>
-      
-      {expanded && (
-        <div className="mt-4 space-y-4">
-          <div>
-            <Label htmlFor="provider">Provider</Label>
-            <Select
-              id="provider"
-              value={provider}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              disabled={loading}
-              className="w-full"
-            >
+    <div>
+      <h3 className="text-sm font-semibold mb-4">Model Settings</h3>
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="provider">Provider</Label>
+          <Select
+            value={provider}
+            onValueChange={handleProviderChange}
+            disabled={loading}
+          >
+            <SelectTrigger id="provider" className="w-full">
+              <SelectValue placeholder="Select provider">
+                {provider}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
               {providers.map((p) => (
-                <option key={p} value={p}>
+                <SelectItem key={p} value={p}>
                   {p}
-                </option>
+                </SelectItem>
               ))}
-            </Select>
-          </div>
-          
-          <div>
-            <Label htmlFor="model">Model</Label>
-            <Select
-              id="model"
-              value={model}
-              onChange={(e) => onModelChange(e.target.value)}
-              disabled={loading}
-              className="w-full"
-            >
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </Select>
-          </div>
+            </SelectContent>
+          </Select>
         </div>
-      )}
+        
+        <div>
+          <Label htmlFor="model">Model</Label>
+          <Select
+            value={model}
+            onValueChange={onModelChange}
+            disabled={loading}
+          >
+            <SelectTrigger id="model" className="w-full">
+              <SelectValue placeholder="Select model">
+                {model}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {models.map((m) => (
+                <SelectItem key={m} value={m}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
     </div>
   );
 }

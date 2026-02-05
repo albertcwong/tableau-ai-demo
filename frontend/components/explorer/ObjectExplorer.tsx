@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { tableauExplorerApi } from '@/lib/api';
+import { tableauExplorerApi, authApi } from '@/lib/api';
 import { BreadcrumbNav, type BreadcrumbItem } from './BreadcrumbNav';
 import { ObjectList } from './ObjectList';
 import { DatasourceDetail } from './DatasourceDetail';
@@ -16,6 +16,7 @@ import type {
 } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TableauConnectionError } from './TableauConnectionError';
 
 type SelectedObject =
   | { type: 'project'; data: TableauProject; contents?: ProjectContents }
@@ -35,10 +36,67 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
   const [selectedObject, setSelectedObject] = useState<SelectedObject>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  // Check initial connection state - only restore if configs are available
+  useEffect(() => {
+    const checkAndRestoreConnection = async () => {
+      try {
+        // First check if there are any Tableau configs available
+        const configsList = await authApi.listTableauConfigs();
+        
+        // Only restore connection if:
+        // 1. There are configs available
+        // 2. There's a stored connection state
+        // 3. The stored config ID exists in the available configs
+        const storedConnected = localStorage.getItem('tableau_connected');
+        const storedConfigId = localStorage.getItem('tableau_config_id');
+        
+        if (storedConnected === 'true' && storedConfigId && configsList.length > 0) {
+          // Verify the stored config ID still exists
+          const configExists = configsList.some((c) => c.id === Number(storedConfigId));
+          if (configExists) {
+            setIsConnected(true);
+          } else {
+            // Config no longer exists, clear localStorage
+            localStorage.removeItem('tableau_connected');
+            localStorage.removeItem('tableau_config_id');
+            localStorage.removeItem('tableau_token_expires_at');
+            setIsConnected(false);
+          }
+        } else if (configsList.length === 0) {
+          // No configs available, clear any stored connection state
+          localStorage.removeItem('tableau_connected');
+          localStorage.removeItem('tableau_config_id');
+          localStorage.removeItem('tableau_token_expires_at');
+          setIsConnected(false);
+        } else {
+          setIsConnected(false);
+        }
+      } catch (err) {
+        // If we can't check configs (e.g., user doesn't have access), don't restore connection
+        console.error('Failed to check Tableau configs:', err);
+        // Clear localStorage to prevent stale connection state
+        localStorage.removeItem('tableau_connected');
+        localStorage.removeItem('tableau_config_id');
+        localStorage.removeItem('tableau_token_expires_at');
+        setIsConnected(false);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    checkAndRestoreConnection();
+  }, []);
 
   useEffect(() => {
-    loadRootProjects();
-  }, []);
+    // Only load projects if connected
+    if (isConnected) {
+      loadRootProjects();
+    } else {
+      setError(null);
+    }
+  }, [isConnected]);
 
   const loadRootProjects = async () => {
     setLoading(true);
@@ -131,12 +189,20 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
     );
   }
 
-  if (error && !selectedObject) {
+  // Only show error if connection was attempted (isConnected is true)
+  // This prevents showing errors for users who haven't connected to Tableau
+  if (error && isConnected && !selectedObject) {
     return (
-      <Card className="p-4">
-        <div className="text-red-600 dark:text-red-400">Error: {error}</div>
-      </Card>
+      <TableauConnectionError 
+        error={error} 
+        onRetry={loadRootProjects}
+      />
     );
+  }
+
+  // If not connected, show nothing (or a message to connect)
+  if (!isConnected && !loading) {
+    return null;
   }
 
   return (

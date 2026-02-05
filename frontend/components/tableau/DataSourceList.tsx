@@ -35,9 +35,14 @@ export function DataSourceList({
 
         setDatasources(data);
         setLoading(false);
-      } catch (err) {
+      } catch (err: any) {
         if (!mounted) return;
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load datasources';
+        let errorMessage = 'Failed to load datasources';
+        if (err.response?.status === 401 || err.response?.status === 503) {
+          errorMessage = 'Tableau server is not accessible. Please ensure you are connected to the VPN and have authenticated with Tableau.';
+        } else if (err instanceof Error) {
+          errorMessage = err.message;
+        }
         setError(errorMessage);
         setLoading(false);
       }

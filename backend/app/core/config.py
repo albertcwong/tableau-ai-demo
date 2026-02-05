@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "Tableau AI Demo"
     DEBUG: bool = False
+    SECRET_KEY: str = "your-secret-key-change-in-production"  # Change in production!
     
     # CORS - stored as string in env, converted to list
     CORS_ORIGINS: str = "http://localhost:3000,https://localhost:3000"

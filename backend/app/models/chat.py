@@ -1,7 +1,7 @@
 """Chat history models."""
 from datetime import datetime, timezone
 import enum
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, Enum as SQLEnum, JSON, BigInteger, TypeDecorator
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, Enum as SQLEnum, JSON, BigInteger, TypeDecorator, Float
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -11,6 +11,12 @@ class MessageRole(str, enum.Enum):
     USER = "USER"
     ASSISTANT = "ASSISTANT"
     SYSTEM = "SYSTEM"
+
+
+class MessageFeedback(str, enum.Enum):
+    """Message feedback enumeration."""
+    THUMBS_UP = "thumbs_up"
+    THUMBS_DOWN = "thumbs_down"
 
 
 class MessageRoleType(TypeDecorator):
@@ -101,6 +107,8 @@ class Message(Base):
     model_used = Column(String(100), nullable=True)  # e.g., 'gpt-4', 'gemini-pro'
     tokens_used = Column(BigInteger, nullable=True)  # For cost tracking
     extra_metadata = Column(JSON, nullable=True)  # For structured metadata (function calls, tool usage, etc.)
+    feedback = Column(String(20), nullable=True)  # 'thumbs_up' or 'thumbs_down'
+    total_time_ms = Column(Float, nullable=True)  # Total time in milliseconds (prompt + answer)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Relationships

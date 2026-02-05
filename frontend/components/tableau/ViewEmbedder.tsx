@@ -49,6 +49,7 @@ export function ViewEmbedder({
   const [error, setError] = useState<string | null>(null);
   const [embedInfo, setEmbedInfo] = useState<TableauEmbedUrl | null>(null);
   const vizRef = useRef<HTMLElement | null>(null);
+  const [containerHeight, setContainerHeight] = useState<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -78,6 +79,28 @@ export function ViewEmbedder({
     };
   }, [viewId, filters, onError]);
 
+  // ResizeObserver to track container height
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const height = entry.contentRect.height;
+        setContainerHeight(height);
+        // Update viz height if it exists
+        if (vizRef.current && height > 0) {
+          vizRef.current.setAttribute('height', `${height}px`);
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
   useEffect(() => {
     if (!embedInfo || !containerRef.current) return;
 
@@ -95,6 +118,9 @@ export function ViewEmbedder({
           containerRef.current.innerHTML = '';
         }
 
+        // Get container height for initial sizing
+        const height = containerRef.current.clientHeight || containerHeight || 600;
+
         // Create new tableau-viz web component using Tableau Embedding API v3
         const viz = document.createElement('tableau-viz') as HTMLElement;
         
@@ -111,7 +137,7 @@ export function ViewEmbedder({
         viz.setAttribute('toolbar', hideToolbar ? 'hidden' : 'top');
         viz.setAttribute('device', device);
         viz.setAttribute('width', '100%');
-        viz.setAttribute('height', '600px');
+        viz.setAttribute('height', `${height}px`);
 
         // Append to container
         containerRef.current!.appendChild(viz);
@@ -160,7 +186,7 @@ export function ViewEmbedder({
   }, [embedInfo, hideTabs, hideToolbar, device, onError]);
 
   return (
-    <div className={`relative w-full ${className}`}>
+    <div className={`relative w-full h-full ${className}`}>
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-900 z-10">
           <div className="text-center">
@@ -171,18 +197,20 @@ export function ViewEmbedder({
       )}
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-          <p className="text-sm font-medium text-red-800 dark:text-red-200">
-            Error loading view
-          </p>
-          <p className="mt-1 text-sm text-red-600 dark:text-red-300">{error}</p>
+        <div className="absolute inset-0 flex items-center justify-center p-4 z-10">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20 max-w-md">
+            <p className="text-sm font-medium text-red-800 dark:text-red-200">
+              Error loading view
+            </p>
+            <p className="mt-1 text-sm text-red-600 dark:text-red-300">{error}</p>
+          </div>
         </div>
       )}
 
       <div
         ref={containerRef}
-        className={`w-full ${loading || error ? 'hidden' : ''}`}
-        style={{ minHeight: '400px' }}
+        className={`w-full h-full ${loading || error ? 'hidden' : ''}`}
+        style={{ height: '100%', minHeight: 0 }}
       />
     </div>
   );

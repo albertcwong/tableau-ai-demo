@@ -89,24 +89,26 @@ export function ThreadList({
 
   return (
     <div className="space-y-2">
-      <Button
-        variant="outline"
-        className="w-full"
-        onClick={onCreateThread}
-      >
-        <Plus className="h-4 w-4 mr-2" />
-        New Chat
-      </Button>
-      
-      <div>
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          className="flex-1"
+          onClick={onCreateThread}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          New Chat
+        </Button>
         <Button
           variant="ghost"
           onClick={() => setExpanded(!expanded)}
-          className="w-full justify-between"
+          className="flex-1 justify-between"
         >
-          <span className="text-sm font-medium">Chat History ({threads.length})</span>
+          <span className="text-sm font-medium">History ({threads.length})</span>
           {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </Button>
+      </div>
+      
+      <div>
         
         {expanded && (
           <div className="mt-2 space-y-1 max-h-96 overflow-y-auto">
@@ -117,9 +119,9 @@ export function ThreadList({
               return (
                 <Card
                   key={thread.id}
-                  className={`p-3 cursor-pointer transition-colors group ${
+                  className={`p-3 cursor-pointer transition-colors group rounded-none border-0 shadow-none ${
                     activeThreadId === thread.id
-                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+                      ? 'bg-blue-50 dark:bg-blue-900/20'
                       : 'hover:bg-gray-50 dark:hover:bg-gray-800'
                   }`}
                   onClick={() => !isEditing && onSelectThread(thread.id)}

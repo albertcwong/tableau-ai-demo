@@ -1,112 +1,175 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { DataSourceList, ViewList, ViewEmbedder } from '@/components/tableau';
 import { Button } from '@/components/ui/button';
-import type { TableauDatasource, TableauView } from '@/types';
+import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
+import { useAuth } from '@/components/auth/AuthContext';
+import { AgentContext } from '@/components/agents/AgentContext';
+import { ThreePanelLayout } from '@/components/explorer';
+import { AgentPanel } from '@/components/agent-panel';
+import { MessageSquare, GripVertical, Home as HomeIcon, Settings } from 'lucide-react';
+import type { TableauDatasource, ChatContextObject } from '@/types';
+import { cn } from '@/lib/utils';
 
-export default function Home() {
+function HomeContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { logout, user, loading, isAdmin } = useAuth();
   const [selectedDatasource, setSelectedDatasource] = useState<TableauDatasource | null>(null);
-  const [selectedView, setSelectedView] = useState<TableauView | null>(null);
+  const [selectedViews, setSelectedViews] = useState<string[]>([]);
+  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  const [contextObjects, setContextObjects] = useState<ChatContextObject[]>([]);
+  const [agentPanelWidth, setAgentPanelWidth] = useState(384);
+  const addToContextRef = useRef<((objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) | null>(null);
+  const loadQueryRef = useRef<((datasourceId: string, query: Record<string, any>) => void) | null>(null);
+
+  const handleLogout = async () => {
+    await logout();
+    router.push('/login');
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 dark:border-gray-100 mx-auto"></div>
+          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const handleAddToContext = (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => {
+    if (addToContextRef.current) {
+      addToContextRef.current(objectId, objectType, objectName);
+    } else {
+      console.warn('AgentPanel not ready to add context.');
+    }
+  };
+
+  const handleContextChange = (context: ChatContextObject[]) => {
+    setContextObjects(context);
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="container mx-auto px-3 sm:px-4 py-4 sm:py-8">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 sm:mb-8 gap-4">
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
-            Tableau AI Demo - Component Testing
-          </h1>
-          <div className="flex gap-2">
-            <Link href="/agents">
-              <Button variant="default" className="bg-blue-600 hover:bg-blue-700">
-                Multi-Agent Dashboard
-              </Button>
-            </Link>
-            <Link href="/chat-test">
-              <Button variant="outline">Chat Test</Button>
-            </Link>
-            <Link href="/mcp-test">
-              <Button variant="outline">MCP Test</Button>
-            </Link>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          {/* Datasources Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 sm:p-6">
-              <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white mb-3 sm:mb-4">
-                Datasources
-              </h2>
-              <DataSourceList
-                onSelect={(ds) => {
-                  setSelectedDatasource(ds);
-                  setSelectedView(null); // Clear selected view when datasource changes
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Views Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 sm:p-6">
-              <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white mb-3 sm:mb-4">
-                Views
-                {selectedDatasource && (
-                  <span className="text-xs sm:text-sm font-normal text-gray-500 dark:text-gray-400 ml-1 sm:ml-2 block sm:inline">
-                    (filtered by {selectedDatasource.name})
+    <AgentContext.Provider
+      value={{
+        selectedDatasource,
+        setSelectedDatasource,
+        selectedViews,
+        setSelectedViews,
+      }}
+    >
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
+        {/* Header */}
+        <header className="shrink-0 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+          <div className="container mx-auto px-4 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {/* Logo placeholder - blank for now */}
+                <div className="w-8 h-8"></div>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                  Tableau AI
+                </h1>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Navigation Tabs */}
+                <div className="flex items-center gap-1 mr-4">
+                  <Link href="/">
+                    <Button
+                      variant={pathname === '/' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="flex items-center gap-2"
+                    >
+                      <HomeIcon className="h-4 w-4" />
+                      Home
+                    </Button>
+                  </Link>
+                  {isAdmin && (
+                    <Link href="/admin">
+                      <Button
+                        variant={pathname === '/admin' ? 'default' : 'ghost'}
+                        size="sm"
+                        className="flex items-center gap-2"
+                      >
+                        <Settings className="h-4 w-4" />
+                        Admin Console
+                      </Button>
+                    </Link>
+                  )}
+                </div>
+                {user && (
+                  <span className="text-sm text-gray-600 dark:text-gray-400 mr-2">
+                    {user.username} ({user.role})
                   </span>
                 )}
-              </h2>
-              <ViewList
-                datasourceId={selectedDatasource?.id}
-                onSelect={(view) => setSelectedView(view)}
-              />
+                <Button variant="outline" size="sm" onClick={handleLogout}>
+                  {user ? 'Logout' : 'Login'}
+                </Button>
+              </div>
             </div>
           </div>
+        </header>
 
-          {/* View Embedder Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 sm:p-6">
-              <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white mb-3 sm:mb-4">
-                Embedded View
-              </h2>
-              {selectedView ? (
-                <div className="space-y-4">
-                  <div className="text-sm text-gray-600 dark:text-gray-400">
-                    <p className="font-medium">{selectedView.name}</p>
-                    {selectedView.workbook_name && (
-                      <p className="text-xs mt-1">Workbook: {selectedView.workbook_name}</p>
-                    )}
-                  </div>
-                  <ViewEmbedder
-                    viewId={selectedView.id}
-                    className="border border-gray-200 dark:border-gray-700 rounded"
-                  />
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
-                  <p className="text-sm">Select a view to embed</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Full-width embed section */}
-        {selectedView && (
-          <div className="mt-4 sm:mt-6 bg-white dark:bg-gray-800 rounded-lg shadow p-4 sm:p-6">
-            <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white mb-3 sm:mb-4">
-              Full View: {selectedView.name}
-            </h2>
-            <ViewEmbedder
-              viewId={selectedView.id}
-              className="border border-gray-200 dark:border-gray-700 rounded"
+        {/* Main Content Area */}
+        <div className="flex-1 overflow-hidden flex min-h-0">
+          {/* Main Content */}
+          <div 
+            className="flex-1 transition-all duration-300 overflow-hidden min-h-0"
+            style={{ marginRight: isAgentPanelOpen ? `${agentPanelWidth}px` : '0' }}
+          >
+            <ThreePanelLayout 
+              onAddToContext={handleAddToContext}
+              contextObjects={contextObjects}
+              onLoadQueryRef={loadQueryRef}
             />
           </div>
-        )}
+
+          {/* Assistant Panel */}
+          <AgentPanel
+            isOpen={isAgentPanelOpen}
+            onClose={() => setIsAgentPanelOpen(false)}
+            onAddToContextRef={(handler) => {
+              addToContextRef.current = handler;
+            }}
+            onContextChange={handleContextChange}
+            onWidthChange={setAgentPanelWidth}
+            onLoadQuery={(datasourceId, query) => {
+              console.log('page.tsx onLoadQuery called:', { datasourceId, query, loadQueryRef: loadQueryRef.current });
+              // Use the ref to call ThreePanelLayout's load query handler
+              if (loadQueryRef.current) {
+                console.log('Calling loadQueryRef.current');
+                loadQueryRef.current(datasourceId, query);
+              } else {
+                console.warn('loadQueryRef.current is null');
+              }
+            }}
+          />
+
+          {/* Toggle Button */}
+          {!isAgentPanelOpen && (
+            <Button
+              onClick={() => setIsAgentPanelOpen(true)}
+              variant="default"
+              size="sm"
+              className="fixed right-4 bottom-4 z-40 shadow-lg"
+            >
+              <MessageSquare className="h-4 w-4 mr-2" />
+              Open Assistant
+            </Button>
+          )}
+        </div>
       </div>
-    </div>
+    </AgentContext.Provider>
+  );
+}
+
+export default function Home() {
+  return (
+    <ProtectedRoute>
+      <HomeContent />
+    </ProtectedRoute>
   );
 }

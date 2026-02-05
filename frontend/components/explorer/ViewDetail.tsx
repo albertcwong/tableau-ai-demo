@@ -1,7 +1,6 @@
 'use client';
 
 import { ViewEmbedder } from '@/components/tableau/ViewEmbedder';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
 interface ViewDetailProps {
@@ -22,9 +21,9 @@ export function ViewDetail({
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">{viewName}</h2>
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800 shrink-0">
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{viewName}</h2>
         {onAddToContext && (
           <Button
             variant="ghost"
@@ -37,11 +36,9 @@ export function ViewDetail({
           </Button>
         )}
       </div>
-      <Card className="p-4">
-        <div className="w-full" style={{ height: '600px' }}>
-          <ViewEmbedder viewId={viewId} />
-        </div>
-      </Card>
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <ViewEmbedder viewId={viewId} className="h-full w-full" />
+      </div>
     </div>
   );
 }

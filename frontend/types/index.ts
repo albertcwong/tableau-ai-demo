@@ -20,6 +20,9 @@ export interface Message {
   content: string;
   createdAt: Date;
   modelUsed?: string;
+  feedback?: string | null;
+  totalTimeMs?: number | null;
+  vizqlQuery?: Record<string, any> | null;  // VizQL query used to generate the answer (for vizql agent)
 }
 
 /**
@@ -239,6 +242,21 @@ export interface DatasourceSample {
   columns: string[];
   data: unknown[][];
   row_count: number;
+  query?: {
+    datasource: {
+      datasourceLuid: string;
+    };
+    query: {
+      fields: Array<{
+        fieldCaption?: string;
+        function?: string;
+      }>;
+    };
+    options: {
+      returnFormat: string;
+      disaggregate: boolean;
+    };
+  };
 }
 
 // Phase 5B: Chat Context Types
@@ -264,4 +282,24 @@ export interface AddContextRequest {
 export interface RemoveContextRequest {
   conversation_id: number;
   object_id: string;
+}
+
+// Agent Message Models
+export type AgentMessageContentType = 'text' | 'image' | 'binary' | 'table' | 'json';
+
+export interface AgentMessageContent {
+  type: AgentMessageContentType;
+  data: string | Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export type AgentMessageType = 'reasoning' | 'final_answer' | 'error' | 'progress' | 'metadata';
+
+export interface AgentMessageChunk {
+  message_type: AgentMessageType;
+  content: AgentMessageContent;
+  step_index?: number;
+  step_name?: string;
+  timestamp?: number;
+  metadata?: Record<string, any>;
 }

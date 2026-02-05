@@ -40,7 +40,17 @@ async def chat_create_conversation() -> Dict[str, Any]:
         db.commit()
         db.refresh(conversation)
         
-        logger.info(f"Created conversation {conversation.id}")
+        # Create initial greeting message from assistant
+        greeting_message = Message(
+            conversation_id=conversation.id,
+            role=MessageRole.ASSISTANT,
+            content="What can I help you with?",
+            created_at=datetime.now()
+        )
+        db.add(greeting_message)
+        db.commit()
+        
+        logger.info(f"Created conversation {conversation.id} with initial greeting")
         return {
             "conversation_id": conversation.id,
             "created_at": conversation.created_at.isoformat(),

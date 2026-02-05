@@ -3,10 +3,11 @@
 import { useState, FormEvent } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Send } from 'lucide-react';
+import { Send, X } from 'lucide-react';
 
 export interface MessageInputProps {
   onSend: (message: string) => void;
+  onCancel?: () => void;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
@@ -14,6 +15,7 @@ export interface MessageInputProps {
 
 export function MessageInput({
   onSend,
+  onCancel,
   disabled = false,
   placeholder = 'Type a message...',
   className,
@@ -57,19 +59,29 @@ export function MessageInput({
           disabled={disabled}
           className="flex-1"
         />
-        <Button
-          type="submit"
-          disabled={disabled || !message.trim()}
-          size="icon"
-          title="Send (Enter or Cmd/Ctrl+Enter)"
-        >
-          <Send className="h-4 w-4" />
-          <span className="sr-only">Send message</span>
-        </Button>
+        {onCancel ? (
+          <Button
+            type="button"
+            onClick={onCancel}
+            variant="outline"
+            size="icon"
+            title="Cancel message"
+          >
+            <X className="h-4 w-4" />
+            <span className="sr-only">Cancel message</span>
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            disabled={disabled || !message.trim()}
+            size="icon"
+            title="Press Enter to send, Cmd/Ctrl+Enter for new line, Esc to clear"
+          >
+            <Send className="h-4 w-4" />
+            <span className="sr-only">Send message</span>
+          </Button>
+        )}
       </div>
-      <p className="text-xs text-muted-foreground mt-1 px-1 hidden sm:block">
-        Press Enter to send, Cmd/Ctrl+Enter for new line, Esc to clear
-      </p>
     </form>
   );
 }

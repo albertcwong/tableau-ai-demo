@@ -1,7 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Select } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { gatewayApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -128,8 +134,10 @@ export function ModelSelector({
     return (
       <div className={className}>
         <Label className="text-sm font-medium mb-2 block">Loading...</Label>
-        <Select disabled className="w-full">
-          <option>Loading models...</option>
+        <Select disabled>
+          <SelectTrigger className="w-full">
+            <SelectValue>Loading models...</SelectValue>
+          </SelectTrigger>
         </Select>
       </div>
     );
@@ -143,16 +151,21 @@ export function ModelSelector({
             Provider
           </Label>
           <Select
-            id="provider-select"
             value={selectedProvider || ''}
-            onChange={(e) => handleProviderChange(e.target.value)}
-            className="w-full"
+            onValueChange={handleProviderChange}
           >
-            {providers.map((provider) => (
-              <option key={provider} value={provider}>
-                {PROVIDER_LABELS[provider] || provider}
-              </option>
-            ))}
+            <SelectTrigger id="provider-select" className="w-full">
+              <SelectValue placeholder="Select provider">
+                {selectedProvider ? (PROVIDER_LABELS[selectedProvider] || selectedProvider) : 'Select provider'}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((provider) => (
+                <SelectItem key={provider} value={provider}>
+                  {PROVIDER_LABELS[provider] || provider}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </div>
       )}
@@ -161,21 +174,26 @@ export function ModelSelector({
           Model
         </Label>
         <Select
-          id="model-select"
           value={selected}
-          onChange={(e) => onSelect(e.target.value)}
-          className="w-full"
+          onValueChange={onSelect}
           disabled={models.length === 0}
         >
-          {models.length === 0 ? (
-            <option>No models available</option>
-          ) : (
-            models.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))
-          )}
+          <SelectTrigger id="model-select" className="w-full">
+            <SelectValue placeholder="Select model">
+              {selected || 'Select model'}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {models.length === 0 ? (
+              <SelectItem value="" disabled>No models available</SelectItem>
+            ) : (
+              models.map((model) => (
+                <SelectItem key={model} value={model}>
+                  {model}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
         </Select>
       </div>
     </div>

@@ -286,12 +286,23 @@ async def fetch_openai_models(authorization: Optional[str] = None) -> list[str]:
         response.raise_for_status()
         data = response.json()
         
-        # Filter for chat completion models (gpt-* models)
-        models = [
-            model["id"] 
-            for model in data.get("data", [])
-            if model["id"].startswith(("gpt-", "o1-"))  # Include GPT models and o1 models
-        ]
+        # Filter for chat completion models
+        # Include all GPT models, o1 models, and other chat-completion capable models
+        # Exclude deprecated models and non-chat models (like embeddings, fine-tuning base models)
+        excluded_prefixes = ("ada-", "babbage-", "curie-", "davinci-", "text-", "embedding-", "ft:")
+        excluded_suffixes = ("-deprecated", "-001", "-002")
+        
+        models = []
+        for model in data.get("data", []):
+            model_id = model["id"]
+            # Skip deprecated or non-chat models
+            if any(model_id.startswith(prefix) for prefix in excluded_prefixes):
+                continue
+            if any(model_id.endswith(suffix) for suffix in excluded_suffixes):
+                continue
+            # Include GPT models, o1 models, and other chat models
+            if model_id.startswith(("gpt-", "o1-", "o3-")):
+                models.append(model_id)
         
         # Sort and return
         return sorted(models)
