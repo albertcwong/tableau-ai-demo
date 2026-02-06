@@ -44,8 +44,15 @@ export function ModelSettings({
   const loadModels = async (selectedProvider?: string) => {
     setLoading(true);
     try {
-      const modelList = await gatewayApi.getModels(selectedProvider || provider);
+      // Fetch models filtered by provider
+      const providerToUse = selectedProvider || provider;
+      const modelList = await gatewayApi.getModels(providerToUse);
       setModels(modelList);
+      
+      // If current model is not in the filtered list, select first model
+      if (modelList.length > 0 && !modelList.includes(model)) {
+        onModelChange(modelList[0]);
+      }
     } catch (err) {
       console.error('Failed to load models:', err);
     } finally {
@@ -53,19 +60,22 @@ export function ModelSettings({
     }
   };
 
-  // Load providers and models on mount
+  // Load providers on mount
   useEffect(() => {
     loadProviders();
-    loadModels();
   }, []);
+
+  // Load models on mount and when provider changes
+  useEffect(() => {
+    if (provider) {
+      loadModels(provider);
+    }
+  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleProviderChange = async (newProvider: string) => {
     onProviderChange(newProvider);
+    // Reload models for the new provider
     await loadModels(newProvider);
-    const newModels = await gatewayApi.getModels(newProvider);
-    if (newModels.length > 0) {
-      onModelChange(newModels[0]);
-    }
   };
 
   return (
@@ -107,11 +117,17 @@ export function ModelSettings({
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {models.map((m) => (
-                <SelectItem key={m} value={m}>
-                  {m}
+              {models.length === 0 ? (
+                <SelectItem value="loading" disabled>
+                  Loading models...
                 </SelectItem>
-              ))}
+              ) : (
+                models.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {m}
+                  </SelectItem>
+                ))
+              )}
             </SelectContent>
           </Select>
         </div>

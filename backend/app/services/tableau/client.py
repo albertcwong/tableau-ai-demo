@@ -1770,12 +1770,20 @@ class TableauClient:
             del query_obj["options"]["limit"]
             logger.debug(f"Removed invalid 'limit' from options (VDS API doesn't support it)")
         
-        # Ensure options have defaults
+        # Ensure options have defaults - always use OBJECTS format for reliable column ordering
         if "options" not in query_obj:
             query_obj["options"] = {
                 "returnFormat": "OBJECTS",
                 "disaggregate": False
             }
+        else:
+            # Force OBJECTS format to ensure column names are included in response
+            if query_obj["options"].get("returnFormat") != "OBJECTS":
+                logger.warning(
+                    f"Query requested returnFormat '{query_obj['options'].get('returnFormat')}', "
+                    f"but forcing OBJECTS format for reliable column ordering"
+                )
+            query_obj["options"]["returnFormat"] = "OBJECTS"
         
         # Use VizQL Data Service API
         # VDS API does NOT include site_id in the path (unlike REST API endpoints)
@@ -1834,24 +1842,57 @@ class TableauClient:
                 first_row = raw_data[0]
                 
                 if isinstance(first_row, dict):
-                    # OBJECTS format
+                    # OBJECTS format - column names are in each row's keys
                     column_names = list(first_row.keys())
+                    logger.debug(f"OBJECTS format: extracted {len(column_names)} columns: {column_names}")
                     for row in raw_data:
                         if isinstance(row, dict):
                             row_array = [row.get(col_name) for col_name in column_names]
                             data_rows.append(row_array)
                 
                 elif isinstance(first_row, list):
-                    # ARRAYS format
-                    # Get column names from query fields
-                    fields = query_obj.get("query", {}).get("fields", [])
-                    column_names = [
-                        field.get("fieldCaption", f"Column_{i+1}")
-                        for i, field in enumerate(fields)
-                    ]
+                    # ARRAYS format - need to determine column order
+                    logger.warning("Received ARRAYS format response - column order may not match query fields order")
+                    
+                    # First, check if response includes column metadata
+                    if "columns" in response_data:
+                        # Response includes explicit column order
+                        column_names = response_data["columns"]
+                        logger.info(f"Using column order from response metadata: {column_names}")
+                    elif "metadata" in response_data and "columns" in response_data["metadata"]:
+                        column_names = response_data["metadata"]["columns"]
+                        logger.info(f"Using column order from metadata: {column_names}")
+                    else:
+                        # Fallback: try to infer from query fields, but warn about potential mismatch
+                        fields = query_obj.get("query", {}).get("fields", [])
+                        if fields and len(fields) == len(first_row):
+                            # Map query fields to column names, preserving order from query
+                            column_names = [
+                                field.get("fieldCaption", f"Column_{i+1}")
+                                for i, field in enumerate(fields)
+                            ]
+                            logger.warning(
+                                f"ARRAYS format: inferring column order from query fields. "
+                                f"This may not match Tableau's actual column order. "
+                                f"Columns: {column_names}, Row sample: {first_row[:3]}"
+                            )
+                        else:
+                            # Last resort: generic column names
+                            column_names = [f"Column_{i+1}" for i in range(len(first_row))]
+                            logger.error(
+                                f"ARRAYS format: Cannot determine column order. "
+                                f"Using generic names. Query had {len(fields)} fields, "
+                                f"but row has {len(first_row)} values. Row sample: {first_row[:3]}"
+                            )
+                    
                     # Ensure column count matches
                     if len(first_row) != len(column_names):
+                        logger.error(
+                            f"Column count mismatch: {len(column_names)} columns but {len(first_row)} values in row. "
+                            f"Using generic column names."
+                        )
                         column_names = [f"Column_{i+1}" for i in range(len(first_row))]
+                    
                     data_rows = raw_data
         
         # Apply limit if specified
@@ -1859,6 +1900,19 @@ class TableauClient:
             data_rows = data_rows[:limit]
         
         logger.info(f"  Found {len(data_rows)} rows and {len(column_names)} columns")
+        logger.info(f"  Column names: {column_names}")
+        if data_rows and len(data_rows) > 0:
+            logger.debug(f"  First row sample: {data_rows[0][:3] if len(data_rows[0]) >= 3 else data_rows[0]}")
+            logger.debug(f"  First row full: {data_rows[0]}")
+        
+        # Validate column count matches data
+        if data_rows and len(data_rows) > 0:
+            expected_cols = len(data_rows[0])
+            if len(column_names) != expected_cols:
+                logger.error(
+                    f"Column count mismatch: {len(column_names)} column names but "
+                    f"{expected_cols} values per row. This will cause data misalignment!"
+                )
         
         return {
             "columns": column_names,

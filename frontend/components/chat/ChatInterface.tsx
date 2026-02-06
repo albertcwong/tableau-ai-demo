@@ -53,7 +53,7 @@ export function ChatInterface({
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [lastReasoningSteps, setLastReasoningSteps] = useState<string>('');
-  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string }>>([]);
+  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number }>>([]);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [reasoningTotalTimeMs, setReasoningTotalTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -160,8 +160,8 @@ export function ChatInterface({
       // Track reasoning steps and final answer separately
       let reasoningStepsText = '';
       let finalAnswerText = '';
-      // Track steps by node name to align with LangGraph nodes
-      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string }> = [];
+      // Track steps by step_index to handle multiple steps from same node
+      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number }> = [];
       let reasoningStepIndex = 0;
       let storedVizqlQuery: Record<string, any> | null = null; // Store vizql_query from metadata
       let firstReasoningStepTime: number | null = null; // Track when first reasoning step arrives
@@ -174,7 +174,7 @@ export function ChatInterface({
         'analyzer': 'Analyzing data',
         'insight_gen': 'Generating insights',
         'summarizer': 'Generating summary',
-        // VizQL agent nodes
+        // VizQL agent nodes (graph-based)
         'planner': 'Planning query',
         'schema_fetch': 'Fetching schema',
         'query_builder': 'Building query',
@@ -183,6 +183,10 @@ export function ChatInterface({
         'executor': 'Executing query',
         'formatter': 'Formatting results',
         'error_handler': 'Handling errors',
+        // Tool-use VizQL agent nodes
+        'start': 'Starting analysis',
+        'get_data': 'Retrieving data',
+        'summarize': 'Generating response',
       };
 
       // Add user message immediately
@@ -242,6 +246,37 @@ export function ChatInterface({
                   return { ...timing, duration };
                 });
                 
+                // Verify that step durations account for all time
+                // Calculate total time from first step start to final time
+                if (finalizedTimings.length > 0) {
+                  const firstStepStart = finalizedTimings[0].startTime;
+                  const lastStepIndex = finalizedTimings.length - 1;
+                  const lastStep = finalizedTimings[lastStepIndex];
+                  
+                  // Time from last step start to end should be captured in last step duration
+                  const endTime = finalAnswerStartTime !== null ? finalAnswerStartTime : finalTime;
+                  const expectedLastStepDuration = endTime - lastStep.startTime;
+                  
+                  // If last step duration is less than expected, adjust it
+                  if (lastStep.duration < expectedLastStepDuration) {
+                    finalizedTimings[lastStepIndex] = {
+                      ...lastStep,
+                      duration: expectedLastStepDuration,
+                    };
+                  }
+                  
+                  // Also check if first step should account for time before it started
+                  // (graph initialization overhead)
+                  if (firstStepStart > 0 && finalizedTimings[0].duration === 0) {
+                    // First step hasn't been finalized yet - but this shouldn't happen
+                    // since we calculate durations above. But just in case:
+                    const nextStep = finalizedTimings[1];
+                    if (nextStep) {
+                      finalizedTimings[0].duration = nextStep.startTime - firstStepStart;
+                    }
+                  }
+                }
+                
                 // Add a step for final answer generation time if we have final answer start time
                 if (finalAnswerStartTime !== null && finalTime > finalAnswerStartTime) {
                   const answerGenTime = finalTime - finalAnswerStartTime;
@@ -276,9 +311,13 @@ export function ChatInterface({
               });
               setMessages(formattedMessages);
               
-              // Preserve reasoning steps and total time
+              // Preserve reasoning steps, step timings, and total time
               if (reasoningStepsText && reasoningStepsText.trim()) {
                 setLastReasoningSteps(reasoningStepsText);
+                // Preserve step timings so reasoning steps can display properly
+                if (finalStepTimings.length > 0) {
+                  setStepTimings([...finalStepTimings]);
+                }
                 // Use the total_time_ms from the last assistant message (most recent)
                 const lastAssistantMessage = formattedMessages
                   .filter(m => m.role === 'assistant')
@@ -319,37 +358,37 @@ export function ChatInterface({
             const elapsedTime = chunkTimestamp - startTime;
             
             if (structuredChunk.message_type === 'reasoning') {
-              // Track when first reasoning step arrives (to account for initial processing time)
+              // Track when first reasoning step arrives
               if (firstReasoningStepTime === null) {
                 firstReasoningStepTime = elapsedTime;
-                // Add an initial step to account for time before first reasoning step
+                // If there's time before the first step, add it to the first step's duration
+                // This accounts for graph initialization overhead
                 if (elapsedTime > 0) {
-                  finalStepTimings.push({
-                    text: "Initial processing",
-                    duration: elapsedTime,
-                    startTime: 0,
-                  });
+                  // We'll add this to the first step's duration when we create it
                 }
               }
               
-              // Handle reasoning step - use node name to identify steps, not text content
+              // Handle reasoning step - use step_index to uniquely identify steps
+              // Multiple steps can come from the same node (e.g., multiple tool calls)
               const stepText = typeof structuredChunk.content.data === 'string' 
                 ? structuredChunk.content.data 
                 : JSON.stringify(structuredChunk.content.data);
               const nodeName = structuredChunk.step_name || 'unknown';
+              const stepIndex = structuredChunk.step_index ?? finalStepTimings.length; // Use provided index or fallback to length
               
               // Use node name to get human-readable step name
               const stepDisplayName = nodeNameMap[nodeName] || nodeName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
               
               reasoningStepsText += (reasoningStepsText ? ' ' : '') + stepText;
               
-              // Check if this step (node) already exists by node name
+              // Check if this step already exists by step_index (not just node name)
+              // This allows multiple steps from the same node to be tracked separately
               const existingStepIndex = finalStepTimings.findIndex(
-                t => t.nodeName === nodeName
+                t => t.stepIndex === stepIndex
               );
               
               if (existingStepIndex >= 0) {
-                // Step (node) already exists, update its timing if this is a later timestamp
+                // Step already exists (shouldn't happen with proper step_index), update its timing if this is a later timestamp
                 const existingStep = finalStepTimings[existingStepIndex];
                 if (elapsedTime > existingStep.startTime) {
                   // Update duration of this step to be the time until this update
@@ -359,21 +398,31 @@ export function ChatInterface({
                   };
                 }
               } else {
-                // New step (node) - calculate duration of previous step if it exists
+                // New step - calculate duration of previous step if it exists
                 if (finalStepTimings.length > 0) {
                   const previousStep = finalStepTimings[finalStepTimings.length - 1];
-                  // If previous step doesn't have a duration yet, calculate it now
-                  if (previousStep.duration === 0 && previousStep.text !== "Initial processing") {
-                    previousStep.duration = Math.max(50, elapsedTime - previousStep.startTime);
-                  }
+                  // Calculate duration from previous step's start to this step's start
+                  // This captures all time including LangGraph overhead between nodes
+                  const timeSincePreviousStart = elapsedTime - previousStep.startTime;
+                  
+                  // Always update duration to capture actual elapsed time
+                  // This ensures we capture all time including overhead between nodes
+                  previousStep.duration = Math.max(50, timeSincePreviousStart);
+                  finalStepTimings[finalStepTimings.length - 1] = previousStep;
+                } else {
+                  // This is the first step - if there's time before it, account for it
+                  // by setting the start time to when streaming actually started
+                  // This ensures the first step captures initialization overhead
                 }
                 
-                // Add new step with node name and display name
+                // Add new step with step_index, node name and display name
+                const initialDuration = 0; // Will be calculated when next step arrives
                 finalStepTimings.push({
                   text: stepDisplayName,
-                  duration: 0, // Will be updated when next step arrives or streaming completes
+                  duration: initialDuration,
                   startTime: elapsedTime,
                   nodeName: nodeName,
+                  stepIndex: stepIndex,
                 });
               }
               
@@ -390,8 +439,7 @@ export function ChatInterface({
                 // Finalize the last reasoning step's duration when final answer arrives
                 if (finalStepTimings.length > 0) {
                   const lastStep = finalStepTimings[finalStepTimings.length - 1];
-                  // Only update if it's not the "Initial processing" step
-                  if (lastStep.text !== "Initial processing" && lastStep.duration === 0) {
+                  if (lastStep.duration === 0) {
                     // Calculate duration from step start to when final answer begins
                     const stepDuration = Math.max(50, elapsedTime - lastStep.startTime);
                     finalStepTimings[finalStepTimings.length - 1] = {
@@ -570,10 +618,10 @@ export function ChatInterface({
             messages={displayMessages}
             onEdit={handleEditMessage}
             onDelete={handleDeleteMessage}
-            onFeedbackChange={(messageId, feedback) => {
+            onFeedbackChange={(messageId, feedback, feedbackText) => {
               setMessages((prev) =>
                 prev.map((msg) =>
-                  msg.id === messageId ? { ...msg, feedback } : msg
+                  msg.id === messageId ? { ...msg, feedback, feedbackText } : msg
                 )
               );
             }}

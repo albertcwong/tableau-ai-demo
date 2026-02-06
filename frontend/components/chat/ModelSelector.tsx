@@ -65,40 +65,41 @@ export function ModelSelector({
             setModels(allModels);
           }
         } else {
-          // Default to first provider
+          // Fetch ALL models from all providers (no provider filter)
+          const allModels = await gatewayApi.getModels();
+          setModels(allModels);
+          // Auto-select first model if none selected
+          if (allModels.length > 0) {
+            onSelect(allModels[0]);
+          }
+          // Set provider to first one for display, but show all models
           if (providerList.length > 0) {
-            foundProvider = providerList[0];
             setSelectedProvider(providerList[0]);
-            const providerModels = await gatewayApi.getModels(providerList[0]);
-            setModels(providerModels);
-            // Auto-select first model if none selected
-            if (providerModels.length > 0) {
-              onSelect(providerModels[0]);
-            }
-          } else {
-            // Fallback: fetch all models
-            const allModels = await gatewayApi.getModels();
-            setModels(allModels);
           }
         }
       } catch (error) {
         console.error('Failed to fetch providers:', error);
-        // Fallback to default models
-        setModels([
-          'gpt-4',
-          'gpt-4-turbo',
-          'gpt-4o',
-          'gpt-3.5-turbo',
-          'claude-3-opus',
-          'claude-3-sonnet',
-          'claude-3-haiku',
-          'claude-3-5-sonnet',
-          'gemini-pro',
-          'gemini-1.5-pro',
-          'gemini-1.5-flash',
-          'sfdc-xgen',
-          'einstein-gpt',
-        ]);
+        // Fallback: try to get models from health endpoint or use minimal defaults
+        try {
+          // Try health endpoint with models included
+          const health = await gatewayApi.health(true);
+          if (health.models && health.models.length > 0) {
+            setModels(health.models);
+          } else {
+            // Try direct models endpoint as fallback
+            const allModels = await gatewayApi.getModels();
+            if (allModels.length > 0) {
+              setModels(allModels);
+            } else {
+              // Minimal fallback - just the most common models
+              setModels(['gpt-4', 'gpt-3.5-turbo', 'claude-3-5-sonnet']);
+            }
+          }
+        } catch (healthError) {
+          // Last resort: minimal fallback
+          console.error('Failed to fetch from health/models endpoints:', healthError);
+          setModels(['gpt-4', 'gpt-3.5-turbo']);
+        }
       } finally {
         setIsLoading(false);
       }
@@ -107,8 +108,11 @@ export function ModelSelector({
     fetchProviders();
   }, []);
 
-  // Fetch models when provider changes
+  // Fetch models when provider changes (optional - can show all or filter by provider)
   useEffect(() => {
+    // For now, always show all models regardless of provider selection
+    // If you want to filter by provider, uncomment the code below
+    /*
     if (selectedProvider) {
       const fetchModels = async () => {
         try {
@@ -123,7 +127,19 @@ export function ModelSelector({
         }
       };
       fetchModels();
+    } else {
+      // Fetch all models if no provider selected
+      const fetchAllModels = async () => {
+        try {
+          const allModels = await gatewayApi.getModels();
+          setModels(allModels);
+        } catch (error) {
+          console.error('Failed to fetch all models:', error);
+        }
+      };
+      fetchAllModels();
     }
+    */
   }, [selectedProvider]);
 
   const handleProviderChange = (provider: string) => {

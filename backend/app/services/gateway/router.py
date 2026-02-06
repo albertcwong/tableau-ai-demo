@@ -137,36 +137,77 @@ def resolve_context(model_name: str) -> ProviderContext:
     Resolve provider context from model name.
     
     Args:
-        model_name: The model identifier (e.g., "gpt-4", "gemini-pro")
+        model_name: The model identifier (e.g., "gpt-4", "gemini-pro", "chatgpt-4o-latest")
         
     Returns:
         ProviderContext with provider, auth type, and credentials info
         
     Raises:
-        ValueError: If model name is not recognized
+        ValueError: If model name is not recognized and cannot be inferred
     """
     if not model_name:
         raise ValueError("Model name is required")
     
     mapping = get_model_mapping()
     
-    if model_name not in mapping:
-        available_models = ", ".join(sorted(mapping.keys()))
-        raise ValueError(
-            f"Unknown model: '{model_name}'. "
-            f"Available models: {available_models}"
-        )
-    
-    model_config = mapping[model_name]
-    provider = model_config["provider"]
-    auth_type = model_config["auth"]
+    # First, check static mapping
+    if model_name in mapping:
+        model_config = mapping[model_name]
+        provider = model_config["provider"]
+        auth_type = model_config["auth"]
+    else:
+        # Try to infer provider from model name pattern
+        model_lower = model_name.lower()
+        
+        # OpenAI patterns: gpt-*, chatgpt-*, o1, o3, o4-*, text-embedding-*, etc.
+        if (model_lower.startswith("gpt-") or 
+            model_lower.startswith("chatgpt-") or 
+            model_lower.startswith("o1") or 
+            model_lower.startswith("o3") or 
+            model_lower.startswith("o4-") or 
+            model_lower.startswith("text-embedding-") or
+            model_lower.startswith("codex-") or
+            model_lower.startswith("computer-use-") or
+            model_lower.startswith("omni-moderation-") or
+            model_lower.startswith("sora-") or
+            model_lower.startswith("gpt4o-") or
+            model_lower.startswith("nectarine-")):
+            provider = "openai"
+            auth_type = "direct"
+        # Anthropic patterns: claude-*
+        elif model_lower.startswith("claude-"):
+            provider = "anthropic"
+            auth_type = "direct"
+        # Vertex AI (Gemini) patterns: gemini-*
+        elif model_lower.startswith("gemini-"):
+            provider = "vertex"
+            auth_type = "service_account"
+        # Salesforce patterns: sfdc-*, einstein-*
+        elif model_lower.startswith("sfdc-") or model_lower.startswith("einstein-"):
+            provider = "salesforce"
+            auth_type = "jwt_oauth"
+        # Apple Endor patterns: endor
+        elif model_lower == "endor":
+            provider = "apple"
+            auth_type = "direct"
+        else:
+            # Unknown model - raise error with available models
+            available_models = ", ".join(sorted(mapping.keys()))
+            raise ValueError(
+                f"Unknown model: '{model_name}'. "
+                f"Available models: {available_models}"
+            )
     
     # Build context based on provider and auth type
+    requires_trust_header = False
+    if model_name in mapping:
+        requires_trust_header = mapping[model_name].get("requires_trust_header", False)
+    
     context = ProviderContext(
         provider=provider,
         auth_type=auth_type,
         model_name=model_name,
-        requires_trust_header=model_config.get("requires_trust_header", False)
+        requires_trust_header=requires_trust_header
     )
     
     # Add provider-specific configuration

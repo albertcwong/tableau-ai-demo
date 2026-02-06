@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     MCP_TRANSPORT: str = "stdio"  # stdio or sse
     MCP_LOG_LEVEL: str = "info"
     
+    # VizQL Agent
+    VIZQL_AGENT_TYPE: str = "tool_use"  # "tool_use" or "graph_based"
+    
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE) if ENV_FILE.exists() else ".env",
         case_sensitive=True,

@@ -631,38 +631,91 @@ async def send_message(
             debugger = get_debugger()
             node_states = []  # Track node states for debugging
             
-            graph = AgentGraphFactory.create_vizql_graph()
+            # Check which agent type to use
+            use_tool_use = settings.VIZQL_AGENT_TYPE == "tool_use"
+            graph = AgentGraphFactory.create_vizql_graph(use_tool_use=use_tool_use)
             
             # Initialize state for VizQL agent
-            initial_state = {
-                "user_query": refined_query,
-                "agent_type": "vizql",
-                "context_datasources": datasource_ids,
-                "context_views": view_ids,
-                "messages": [],
-                "tool_calls": [],
-                "tool_results": [],
-                "current_thought": None,
-                "final_answer": None,
-                "error": None,
-                "confidence": None,
-                "processing_time": None,
-                # AI client configuration
-                "api_key": api_key,
-                "model": request.model,
-                # VizQL-specific fields
-                "schema": None,
-                "required_measures": [],
-                "required_dimensions": [],
-                "required_filters": {},
-                "query_draft": None,
-                "query_version": 0,
-                "is_valid": False,
-                "validation_errors": [],
-                "validation_suggestions": [],
-                "query_results": None,
-                "execution_error": None,
-            }
+            if use_tool_use:
+                # Tool-use agent state (simplified)
+                # Format message history for tool-use agent
+                # Convert database messages to format expected by tool-use agent
+                tool_use_message_history = []
+                for msg in history_messages:
+                    msg_dict = {
+                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
+                        "content": msg.content
+                    }
+                    # Add metadata and dimension values for assistant messages with query results
+                    # Dimension values provide structured context for follow-up queries
+                    if msg.role == MessageRole.ASSISTANT and msg.extra_metadata:
+                        if isinstance(msg.extra_metadata, dict):
+                            vizql_query = msg.extra_metadata.get('vizql_query')
+                            query_results = msg.extra_metadata.get('query_results')
+                            if query_results:
+                                # Include metadata + dimension values (NOT full data array)
+                                row_count = query_results.get('row_count', len(query_results.get('data', [])))
+                                columns = query_results.get('columns', [])
+                                dimension_values = query_results.get('dimension_values', {})
+                                
+                                msg_dict["data_metadata"] = {
+                                    "row_count": row_count,
+                                    "columns": columns,
+                                    "dimension_values": dimension_values  # Add structured dimension values
+                                }
+                                logger.info(f"Added query_results metadata to message history for message {msg.id}: {row_count} rows, {len(columns)} columns, {len(dimension_values)} dimensions (data array excluded)")
+                            if vizql_query:
+                                msg_dict["original_query"] = str(vizql_query)
+                    tool_use_message_history.append(msg_dict)
+                
+                logger.info(f"Formatted message history: {len(tool_use_message_history)} messages")
+                logger.info(f"Messages with data: {sum(1 for m in tool_use_message_history if 'data' in m)}")
+                
+                logger.info(f"Initializing tool-use agent state with model: {request.model}")
+                initial_state = {
+                    "user_query": refined_query,
+                    "message_history": tool_use_message_history,
+                    "site_id": settings.TABLEAU_SITE_ID,
+                    "datasource_id": datasource_ids[0] if datasource_ids else None,
+                    "raw_data": None,
+                    "tool_calls": [],
+                    "final_answer": None,
+                    "error": None,
+                    "api_key": api_key,
+                    "model": request.model,  # Use the model from the request
+                }
+                logger.info(f"Initial state model field: {initial_state.get('model')}")
+            else:
+                # Graph-based agent state (original)
+                initial_state = {
+                    "user_query": refined_query,
+                    "agent_type": "vizql",
+                    "context_datasources": datasource_ids,
+                    "context_views": view_ids,
+                    "messages": [],
+                    "tool_calls": [],
+                    "tool_results": [],
+                    "current_thought": None,
+                    "final_answer": None,
+                    "error": None,
+                    "confidence": None,
+                    "processing_time": None,
+                    # AI client configuration
+                    "api_key": api_key,
+                    "model": request.model,
+                    # VizQL-specific fields
+                    "schema": None,
+                    "required_measures": [],
+                    "required_dimensions": [],
+                    "required_filters": {},
+                    "query_draft": None,
+                    "query_version": 0,
+                    "is_valid": False,
+                    "validation_errors": [],
+                    "validation_suggestions": [],
+                    "query_results": None,
+                    "execution_error": None,
+                }
             
             if request.stream:
                 # Stream graph execution
@@ -673,10 +726,25 @@ async def send_message(
                     reasoningStepIndex = 0  # Track reasoning step index
                     stream_start_time = time.time()  # Track when streaming starts
                     stream_graph._query_sent = False  # Track if query has been sent
+                    stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
+                        # Log timing before graph execution starts
+                        pre_graph_time = time.time()
+                        logger.info(f"About to start graph execution. Time since stream_start: {(pre_graph_time - stream_start_time) * 1000:.2f}ms")
+                        
                         # Provide config with thread_id for checkpointer
                         config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}"}}
+                        
+                        # Log timing right before astream
+                        pre_astream_time = time.time()
+                        logger.info(f"About to call graph.astream(). Time since stream_start: {(pre_astream_time - stream_start_time) * 1000:.2f}ms")
+                        
                         async for state_update in graph.astream(initial_state, config=config):
+                            # Log timing when first state update arrives
+                            first_update_time = time.time()
+                            if not hasattr(stream_graph, '_first_update_logged'):
+                                logger.info(f"First state update received. Time since stream_start: {(first_update_time - stream_start_time) * 1000:.2f}ms, since pre_astream: {(first_update_time - pre_astream_time) * 1000:.2f}ms")
+                                stream_graph._first_update_logged = True
                             # LangGraph astream returns updates keyed by node name
                             # Each update contains the state dictionary for that node
                             logger.debug(f"VizQL graph state update - node keys: {list(state_update.keys())}")
@@ -690,11 +758,13 @@ async def send_message(
                                     last_state = node_state
                                 
                                 # Stream intermediate thoughts as reasoning steps
+                                # Only stream one step per node (from current_thought), not individual tool calls
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
-                                    # Only stream if it's different from what we've already sent
-                                    if thought not in full_content:
-                                        logger.debug(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                    # Only stream if it's different from what we've already sent for this node
+                                    node_thought_key = f"{node_name}_thought"
+                                    if node_thought_key not in stream_graph._streamed_node_thoughts:
+                                        logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
                                             content=AgentMessageContent(type="text", data=thought),
@@ -704,6 +774,8 @@ async def send_message(
                                         )
                                         reasoningStepIndex += 1
                                         yield reasoning_chunk.to_sse_format()
+                                        stream_graph._streamed_node_thoughts.add(node_thought_key)
+                                        full_content += " " + thought  # Track to avoid duplicates
                                 
                                 # Stream final answer when available
                                 if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):
@@ -780,14 +852,31 @@ async def send_message(
                         # Always try to get query_draft, even if there were errors
                         vizql_query = None
                         if last_state:
+                            logger.info(f"Extracting VizQL query from last_state. Keys: {list(last_state.keys())}")
+                            
                             # Try multiple keys where query might be stored
                             for key in ["query_draft", "query", "validated_query"]:
                                 if key in last_state and last_state.get(key):
                                     vizql_query = last_state.get(key)
+                                    logger.info(f"Found VizQL query in key '{key}'")
                                     break
+                            
+                            # For tool-use agent, also check tool_calls for query
+                            if not vizql_query and "tool_calls" in last_state:
+                                tool_calls = last_state.get("tool_calls", [])
+                                logger.info(f"Checking {len(tool_calls)} tool_calls for VizQL query")
+                                for tool_call in tool_calls:
+                                    if tool_call.get("tool") in ["build_query", "query_datasource"]:
+                                        result = tool_call.get("result", {})
+                                        if isinstance(result, dict):
+                                            vizql_query = result.get("query") or result.get("query_draft")
+                                            if vizql_query:
+                                                logger.info(f"Extracted VizQL query from tool_call: {tool_call.get('tool')}")
+                                                break
                         
                         # Send vizql_query as metadata chunk if available and not already sent
                         if vizql_query and not getattr(stream_graph, '_query_sent', False):
+                            logger.info(f"Sending VizQL query as metadata chunk: {str(vizql_query)[:200]}")
                             metadata_chunk = AgentMessageChunk(
                                 message_type="metadata",
                                 content=AgentMessageContent(type="json", data={"vizql_query": vizql_query}),
@@ -795,6 +884,8 @@ async def send_message(
                             )
                             yield metadata_chunk.to_sse_format()
                             stream_graph._query_sent = True
+                        elif not vizql_query:
+                            logger.warning("No VizQL query found to send as metadata")
                         
                         # Ensure we have content to save - if not, try to get it from last_state one more time
                         if not full_content and last_state:
@@ -824,13 +915,92 @@ async def send_message(
                                 stream_end_time = time.time()
                                 total_time_ms = (stream_end_time - stream_start_time) * 1000  # Convert to milliseconds
                                 
-                                # Extract VizQL query from last_state for storage
+                                # Extract VizQL query and query results from last_state for storage
                                 stored_vizql_query = None
+                                stored_query_results = None
+                                
                                 if last_state:
+                                    # Extract query
                                     for key in ["query_draft", "query", "validated_query"]:
                                         if key in last_state and last_state.get(key):
                                             stored_vizql_query = last_state.get(key)
                                             break
+                                    
+                                    # For tool-use agent, check tool_calls for query
+                                    if not stored_vizql_query and "tool_calls" in last_state:
+                                        tool_calls = last_state.get("tool_calls", [])
+                                        for tool_call in tool_calls:
+                                            if tool_call.get("tool") in ["build_query", "query_datasource"]:
+                                                result = tool_call.get("result", {})
+                                                if isinstance(result, dict):
+                                                    stored_vizql_query = result.get("query") or result.get("query_draft")
+                                                    if stored_vizql_query:
+                                                        break
+                                    
+                                    # Extract query results METADATA and DIMENSION VALUES
+                                    # Priority: Use shown_entities from summarizer (most accurate)
+                                    # Fallback: Extract from raw_data only if small dataset
+                                    
+                                    dimension_values = {}
+                                    
+                                    # PRIORITY 1: Check if summarizer provided shown_entities (most accurate)
+                                    shown_entities = last_state.get("shown_entities")
+                                    if shown_entities and isinstance(shown_entities, dict):
+                                        dimension_values = shown_entities
+                                        logger.info(f"Using shown_entities from summarizer: {len(dimension_values)} dimensions")
+                                    
+                                    # PRIORITY 2: Fallback to extracting from raw_data only if small dataset
+                                    elif not dimension_values:
+                                        raw_data = last_state.get("raw_data")
+                                        if raw_data and isinstance(raw_data, dict):
+                                            if "columns" in raw_data and "data" in raw_data:
+                                                row_count = raw_data.get("row_count", len(raw_data.get("data", [])))
+                                                # Only extract if dataset is small (< 100 rows) to avoid 4,703 city problem
+                                                if row_count < 100:
+                                                    from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
+                                                    dimension_values = extract_dimension_values(raw_data, max_values_per_dimension=50)
+                                                    logger.info(f"Fallback: Extracted from raw_data (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
+                                                else:
+                                                    logger.info(f"Skipping extraction from raw_data: dataset too large ({row_count} rows)")
+                                    
+                                    raw_data = last_state.get("raw_data")
+                                    if raw_data and isinstance(raw_data, dict):
+                                        # Check if raw_data has the query results format
+                                        if "columns" in raw_data and "data" in raw_data:
+                                            stored_query_results = {
+                                                "columns": raw_data.get("columns"),
+                                                "row_count": raw_data.get("row_count", len(raw_data.get("data", []))),
+                                                "dimension_values": dimension_values  # Store dimension values (from summarizer or extracted)
+                                                # NOTE: NOT storing full "data" array - only metadata + dimension values
+                                            }
+                                            logger.info(f"Stored query_results metadata: {stored_query_results.get('row_count', 0)} rows, {len(dimension_values)} dimensions (data array excluded)")
+                                        elif "tool_calls" in last_state:
+                                            # Extract from query_datasource tool call result
+                                            tool_calls = last_state.get("tool_calls", [])
+                                            for tool_call in tool_calls:
+                                                if tool_call.get("tool") == "query_datasource":
+                                                    result = tool_call.get("result", {})
+                                                    if isinstance(result, dict) and "data" in result:
+                                                        # Extract dimension values for context
+                                                        # Only extract if small dataset to avoid 4,703 city problem
+                                                        dimension_values = {}
+                                                        row_count = result.get("row_count", len(result.get("data", [])))
+                                                        
+                                                        if row_count < 100:
+                                                            from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
+                                                            dimension_values = extract_dimension_values(result, max_values_per_dimension=50)
+                                                            logger.info(f"Extracted from query_datasource tool (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
+                                                        else:
+                                                            logger.info(f"Skipping extraction from query_datasource tool: dataset too large ({row_count} rows)")
+                                                        
+                                                        stored_query_results = {
+                                                            "columns": result.get("columns", []),
+                                                            "row_count": row_count,
+                                                            "dimension_values": dimension_values  # Store dimension values (only if small dataset)
+                                                            # NOTE: NOT storing full "data" array - only metadata + dimension values
+                                                        }
+                                                        logger.info(f"Stored query_results metadata from tool call: {row_count} rows, {len(dimension_values)} dimensions (data array excluded)")
+                                                        break
                                 
                                 assistant_message = Message(
                                     conversation_id=request.conversation_id,
@@ -840,7 +1010,8 @@ async def send_message(
                                     total_time_ms=total_time_ms,
                                     extra_metadata={
                                         "agent_type": "vizql",
-                                        "vizql_query": stored_vizql_query
+                                        "vizql_query": stored_vizql_query,
+                                        "query_results": stored_query_results
                                     }
                                 )
                                 db.add(assistant_message)
@@ -872,6 +1043,17 @@ async def send_message(
                                         if key in last_state:
                                             error_vizql_query = last_state.get(key)
                                             break
+                                
+                                # For tool-use agent, also check tool_calls
+                                if not error_vizql_query and "tool_calls" in last_state:
+                                    tool_calls = last_state.get("tool_calls", [])
+                                    for tool_call in tool_calls:
+                                        if tool_call.get("tool") in ["build_query", "query_datasource"]:
+                                            result = tool_call.get("result", {})
+                                            if isinstance(result, dict):
+                                                error_vizql_query = result.get("query") or result.get("query_draft")
+                                                if error_vizql_query:
+                                                    break
                         except:
                             pass
                         
@@ -979,14 +1161,89 @@ async def send_message(
                             final_answer = "Query execution completed but no response was generated. Please check the logs."
                             logger.warning(f"No final_answer or error in final state: {final_state}")
                     
-                    # Extract VizQL query from final state - always include it, even on errors
+                    # Extract VizQL query and query results from final state - always include it, even on errors
                     vizql_query = None
+                    query_results = None
+                    
                     if final_state:
                         # Try multiple keys where query might be stored
                         for key in ["query_draft", "query", "validated_query"]:
                             if key in final_state and final_state.get(key):
                                 vizql_query = final_state.get(key)
                                 break
+                        
+                        # Extract query results METADATA and DIMENSION VALUES
+                        # Priority: Use shown_entities from summarizer, fallback to raw_data if small
+                        
+                        dimension_values = {}
+                        
+                        # PRIORITY 1: Check if summarizer provided shown_entities
+                        shown_entities = final_state.get("shown_entities")
+                        if shown_entities and isinstance(shown_entities, dict):
+                            dimension_values = shown_entities
+                            logger.info(f"Non-streaming: Using shown_entities from summarizer: {len(dimension_values)} dimensions")
+                        
+                        # PRIORITY 2: Fallback to extracting from raw_data only if small dataset
+                        elif not dimension_values:
+                            raw_data = final_state.get("raw_data")
+                            if raw_data and isinstance(raw_data, dict):
+                                if "columns" in raw_data and "data" in raw_data:
+                                    row_count = raw_data.get("row_count", len(raw_data.get("data", [])))
+                                    if row_count < 100:
+                                        from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
+                                        dimension_values = extract_dimension_values(raw_data, max_values_per_dimension=50)
+                                        logger.info(f"Non-streaming: Fallback extraction from raw_data (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
+                                    else:
+                                        logger.info(f"Non-streaming: Skipping extraction from raw_data: dataset too large ({row_count} rows)")
+                        
+                        raw_data = final_state.get("raw_data")
+                        if raw_data and isinstance(raw_data, dict):
+                            if "columns" in raw_data and "data" in raw_data:
+                                query_results = {
+                                    "columns": raw_data.get("columns"),
+                                    "row_count": raw_data.get("row_count", len(raw_data.get("data", []))),
+                                    "dimension_values": dimension_values  # Store dimension values (from summarizer or extracted)
+                                    # NOTE: NOT storing full "data" array - only metadata + dimension values
+                                }
+                                logger.info(f"Non-streaming: Stored query_results metadata: {query_results.get('row_count', 0)} rows, {len(dimension_values)} dimensions (data array excluded)")
+                        
+                        # For tool-use agent, also check tool_calls
+                        if not vizql_query and "tool_calls" in final_state:
+                            tool_calls = final_state.get("tool_calls", [])
+                            for tool_call in tool_calls:
+                                if tool_call.get("tool") in ["build_query", "query_datasource"]:
+                                    result = tool_call.get("result", {})
+                                    if isinstance(result, dict):
+                                        vizql_query = result.get("query") or result.get("query_draft")
+                                        if vizql_query:
+                                            break
+                        
+                        # Extract query results METADATA ONLY from query_datasource tool call if not already found
+                        if not query_results and "tool_calls" in final_state:
+                            tool_calls = final_state.get("tool_calls", [])
+                            for tool_call in tool_calls:
+                                if tool_call.get("tool") == "query_datasource":
+                                    result = tool_call.get("result", {})
+                                    if isinstance(result, dict) and "data" in result:
+                                        # Extract dimension values only if small dataset
+                                        dimension_values = {}
+                                        row_count = result.get("row_count", len(result.get("data", [])))
+                                        
+                                        if row_count < 100:
+                                            from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
+                                            dimension_values = extract_dimension_values(result, max_values_per_dimension=50)
+                                            logger.info(f"Non-streaming: Extracted from query_datasource tool (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
+                                        else:
+                                            logger.info(f"Non-streaming: Skipping extraction from query_datasource tool: dataset too large ({row_count} rows)")
+                                        
+                                        query_results = {
+                                            "columns": result.get("columns", []),
+                                            "row_count": row_count,
+                                            "dimension_values": dimension_values  # Store dimension values (only if small dataset)
+                                            # NOTE: NOT storing full "data" array - only metadata + dimension values
+                                        }
+                                        logger.info(f"Non-streaming: Stored query_results metadata from tool call: {row_count} rows, {len(dimension_values)} dimensions (data array excluded)")
+                                        break
                 except Exception as e:
                     execution_time = time.time() - execution_start
                     logger.error(f"Error executing VizQL graph: {e}", exc_info=True)
@@ -1012,7 +1269,8 @@ async def send_message(
                     model_used=request.model,
                     extra_metadata={
                         "agent_type": "vizql",
-                        "vizql_query": vizql_query
+                        "vizql_query": vizql_query,
+                        "query_results": query_results
                     }
                 )
                 db.add(assistant_message)
@@ -1091,6 +1349,7 @@ async def send_message(
                     last_state = None
                     reasoningStepIndex = 0
                     stream_start_time = time.time()  # Track when streaming starts
+                    stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
                         # Provide config with thread_id for checkpointer
                         config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
@@ -1108,11 +1367,13 @@ async def send_message(
                                     last_state = node_state
                                 
                                 # Stream intermediate thoughts as reasoning steps
+                                # Only stream one step per node (from current_thought), not individual tool calls
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
-                                    # Only stream if it's different from what we've already sent
-                                    if thought not in full_content:
-                                        logger.debug(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                    # Only stream if it's different from what we've already sent for this node
+                                    node_thought_key = f"{node_name}_thought"
+                                    if node_thought_key not in stream_graph._streamed_node_thoughts:
+                                        logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
                                             content=AgentMessageContent(type="text", data=thought),
@@ -1122,6 +1383,8 @@ async def send_message(
                                         )
                                         reasoningStepIndex += 1
                                         yield reasoning_chunk.to_sse_format()
+                                        stream_graph._streamed_node_thoughts.add(node_thought_key)
+                                        full_content += " " + thought  # Track to avoid duplicates
                                 
                                 # Stream final answer when available
                                 if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):

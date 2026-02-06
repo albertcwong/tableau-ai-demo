@@ -80,6 +80,15 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         api_key = state.get("api_key")
         model = state.get("model", "gpt-4")
         
+        # Validate API key is present
+        if not api_key:
+            logger.error("API key missing from state - cannot make gateway request")
+            return {
+                **state,
+                "error": "Failed to refine query: Authorization header required for direct authentication",
+                "query_draft": None
+            }
+        
         ai_client = UnifiedAIClient(
             gateway_url=settings.GATEWAY_BASE_URL,
             api_key=api_key
@@ -111,7 +120,8 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         response = await ai_client.chat(
             model=model,
-            messages=messages
+            messages=messages,
+            api_key=api_key
         )
         
         # Parse corrected query

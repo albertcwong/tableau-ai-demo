@@ -410,6 +410,15 @@ export const gatewayApi = {
     });
     return response.data.models;
   },
+
+  // Get gateway health (includes models if requested)
+  health: async (includeModels: boolean = false): Promise<{ status: string; providers: string[]; models?: string[]; model_count: number }> => {
+    const params = includeModels ? { include_models: 'true' } : {};
+    const response = await apiClient.get<{ status: string; providers: string[]; models?: string[]; model_count: number }>('/api/v1/gateway/health', {
+      params,
+    });
+    return response.data;
+  },
 };
 
 // Agent API functions

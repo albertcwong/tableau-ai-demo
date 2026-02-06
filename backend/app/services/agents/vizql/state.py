@@ -10,6 +10,11 @@ class VizQLAgentState(BaseAgentState):
     schema: Optional[dict]
     enriched_schema: Optional[dict]  # Enriched schema from Phase 2 (with semantic metadata)
     
+    # Routing
+    query_type: Optional[str]  # "schema_query" | "reformat_previous" | "new_query"
+    routing_reason: Optional[str]  # Explanation for routing decision
+    routing_confidence: Optional[float]  # Confidence in routing decision (0.0-1.0)
+    
     # Intent parsing results
     required_measures: list[str]
     required_dimensions: list[str]
@@ -31,3 +36,7 @@ class VizQLAgentState(BaseAgentState):
     # Execution
     query_results: Optional[dict]
     execution_error: Optional[str]
+    previous_results: Optional[dict]  # Store previous query results for reformatting
+    
+    # Schema query handling
+    schema_answer: Optional[str]  # Answer from schema metadata

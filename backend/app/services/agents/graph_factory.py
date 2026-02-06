@@ -10,14 +10,21 @@ class AgentGraphFactory:
     """Factory for creating agent graphs."""
     
     @staticmethod
-    def create_vizql_graph() -> StateGraph:
+    def create_vizql_graph(use_tool_use: bool = False) -> StateGraph:
         """Create VizQL agent graph.
+        
+        Args:
+            use_tool_use: If True, use tool-use agent (2-step). If False, use graph-based agent (8+ nodes).
         
         Returns:
             Compiled StateGraph for VizQL agent
         """
-        from app.services.agents.vizql.graph import create_vizql_graph
-        return create_vizql_graph()
+        if use_tool_use:
+            from app.services.agents.vizql_tool_use.graph import get_vizql_tool_use_agent
+            return get_vizql_tool_use_agent()
+        else:
+            from app.services.agents.vizql.graph import create_vizql_graph
+            return create_vizql_graph()
     
     @staticmethod
     def create_summary_graph() -> StateGraph:

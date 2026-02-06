@@ -182,7 +182,7 @@ class UnifiedAIClient:
         message = choice.get("message", {})
         content = message.get("content", "")
         
-        # Parse function call if present
+        # Parse function call if present (handle both old and new formats)
         function_call = None
         if "function_call" in message:
             fc_data = message["function_call"]
@@ -190,6 +190,16 @@ class UnifiedAIClient:
                 name=fc_data.get("name", ""),
                 arguments=fc_data.get("arguments", "{}")
             )
+        elif "tool_calls" in message and message.get("tool_calls"):
+            # New format: tool_calls array - extract first tool call
+            tool_calls = message.get("tool_calls", [])
+            if tool_calls:
+                tc = tool_calls[0]
+                function_data = tc.get("function", {})
+                function_call = FunctionCall(
+                    name=function_data.get("name", ""),
+                    arguments=function_data.get("arguments", "{}")
+                )
         
         # Parse usage
         usage = response_data.get("usage", {})
@@ -257,6 +267,10 @@ class UnifiedAIClient:
             payload["functions"] = functions
         if function_call is not None:
             payload["function_call"] = function_call
+        if "tools" in kwargs:
+            payload["tools"] = kwargs.pop("tools")
+        if "tool_choice" in kwargs:
+            payload["tool_choice"] = kwargs.pop("tool_choice")
         
         # Add any additional kwargs
         payload.update(kwargs)

@@ -52,8 +52,18 @@ class OpenAITranslator(BaseTranslator):
             "Content-Type": "application/json"
         }
         
-        # Payload passes through unchanged
+        # Payload passes through unchanged, but parse function_call strings back to objects
         payload = request.copy()
+        
+        # Fix function_call in messages: gateway model requires strings, but OpenAI needs objects
+        if "messages" in payload:
+            for msg in payload["messages"]:
+                if "function_call" in msg and isinstance(msg["function_call"], str):
+                    try:
+                        import json
+                        msg["function_call"] = json.loads(msg["function_call"])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse function_call string: {msg['function_call']}")
         
         logger.debug(f"OpenAI translator: passthrough request for {provider}")
         return url, payload, headers

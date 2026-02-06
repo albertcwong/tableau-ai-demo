@@ -3,7 +3,7 @@ import logging
 import logging.handlers
 import time
 from pathlib import Path
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings, PROJECT_ROOT
@@ -179,19 +179,27 @@ async def all_health_checks():
 
 
 @api_router.get("/gateway/health", tags=["health", "gateway"])
-async def gateway_health_check():
+async def gateway_health_check(
+    include_models: bool = Query(False, description="Include list of available models")
+):
     """Gateway health check endpoint."""
     try:
         providers = get_available_providers()
         models = get_available_models()
         
-        return {
+        response = {
             "status": "healthy",
             "service": "gateway",
             "providers": providers,
             "model_count": len(models),
             "enabled": settings.GATEWAY_ENABLED,
         }
+        
+        # Optionally include models list (for frontend fallback)
+        if include_models:
+            response["models"] = models
+        
+        return response
     except Exception as e:
         logger.error(f"Gateway health check failed: {e}")
         return JSONResponse(

@@ -63,6 +63,7 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
             compressed_schema_lines = []
             semantic_hints_lines = []
             field_lookup_lines = []
+            parsed_intent_lines = []
             current_section = None
             
             for line in context_lines:
@@ -75,16 +76,22 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 elif line.startswith("## Field Matching Hints"):
                     current_section = "lookup"
                     field_lookup_lines.append(line)
+                elif line.startswith("## Parsed Intent"):
+                    current_section = "intent"
+                    parsed_intent_lines.append(line)
                 elif current_section == "schema":
                     compressed_schema_lines.append(line)
                 elif current_section == "hints":
                     semantic_hints_lines.append(line)
                 elif current_section == "lookup":
                     field_lookup_lines.append(line)
+                elif current_section == "intent":
+                    parsed_intent_lines.append(line)
             
             compressed_schema = "\n".join(compressed_schema_lines) if compressed_schema_lines else ""
             semantic_hints = "\n".join(semantic_hints_lines) if semantic_hints_lines else ""
             field_lookup_hints = "\n".join(field_lookup_lines) if field_lookup_lines else ""
+            parsed_intent = "\n".join(parsed_intent_lines) if parsed_intent_lines else ""
             
             # Get query construction prompt with compressed context
             system_prompt = prompt_registry.get_prompt(
@@ -93,18 +100,31 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                     "compressed_schema": compressed_schema,
                     "semantic_hints": semantic_hints,
                     "field_lookup_hints": field_lookup_hints,
+                    "parsed_intent": parsed_intent,
                     "datasource_id": datasource_id
                 }
             )
         else:
             # Fallback to basic schema format (backward compatibility)
             logger.info("Using basic schema (enrichment unavailable)")
+            # Build parsed intent section even without enriched schema
+            parsed_intent_parts = []
+            if state.get("topN", {}).get("enabled"):
+                topN = state.get("topN", {})
+                parsed_intent_parts.append("## Parsed Intent")
+                parsed_intent_parts.append("**CRITICAL: TOP N PATTERN DETECTED**")
+                parsed_intent_parts.append(f"User wants top/bottom {topN.get('howMany', 'N')} {topN.get('dimensionField', 'dimension')} by {topN.get('measureField', 'measure')}")
+                parsed_intent_parts.append(f"Direction: {topN.get('direction', 'TOP')}")
+                parsed_intent_parts.append("**YOU MUST USE TOP FILTER, NOT SORTING!**")
+            parsed_intent = "\n".join(parsed_intent_parts) if parsed_intent_parts else ""
+            
             system_prompt = prompt_registry.get_prompt(
                 "agents/vizql/query_construction.txt",
                 variables={
                     "compressed_schema": f"## Available Fields\n{json.dumps(schema.get('columns', []), indent=2)}",
                     "semantic_hints": "## Query Construction Hints\nUsing basic schema. Field roles may not be available.",
                     "field_lookup_hints": "",
+                    "parsed_intent": parsed_intent,
                     "datasource_id": datasource_id
                 }
             )
@@ -121,15 +141,25 @@ async def build_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         api_key = state.get("api_key")
         model = state.get("model", "gpt-4")
         
+        # Validate API key is present
+        if not api_key:
+            logger.error("API key missing from state - cannot make gateway request")
+            return {
+                **state,
+                "error": "Failed to build query: Authorization header required for direct authentication",
+                "query_draft": None
+            }
+        
         ai_client = UnifiedAIClient(
             gateway_url=settings.GATEWAY_BASE_URL,
             api_key=api_key
         )
         
-        # Call AI
+        # Call AI - pass api_key explicitly to ensure Authorization header is sent
         response = await ai_client.chat(
             model=model,
-            messages=messages
+            messages=messages,
+            api_key=api_key
         )
         
         # Parse query JSON

@@ -5,6 +5,9 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.services.agents.vizql.state import VizQLAgentState
+from app.services.agents.vizql.nodes.router import route_query_node
+from app.services.agents.vizql.nodes.schema_handler import handle_schema_query_node
+from app.services.agents.vizql.nodes.reformatter import reformat_results_node
 from app.services.agents.vizql.nodes.planner import plan_query_node
 from app.services.agents.vizql.nodes.schema_fetch import fetch_schema_node
 from app.services.agents.vizql.nodes.query_builder import build_query_node
@@ -18,17 +21,23 @@ logger = logging.getLogger(__name__)
 
 def create_vizql_graph() -> StateGraph:
     """
-    Create VizQL agent graph with ReAct pattern.
+    Create VizQL agent graph with ReAct pattern and intelligent routing.
     
     Graph flow:
-    1. Planner -> Schema Fetch -> Query Builder -> Validator
-    2. Validator -> (if valid) Executor -> Formatter -> END
-    3. Validator -> (if invalid) Refiner -> Validator (loop, max 3 times)
-    4. Refiner -> (if max attempts) END with error
+    1. Router -> Classify query type
+    2a. If schema_query -> Schema Handler -> END
+    2b. If reformat_previous -> Reformatter -> END
+    2c. If new_query -> Planner -> Schema Fetch -> Query Builder -> Validator
+    3. Validator -> (if valid) Executor -> Formatter -> END
+    4. Validator -> (if invalid) Refiner -> Validator (loop, max 3 times)
+    5. Refiner -> (if max attempts) END with error
     """
     workflow = StateGraph(VizQLAgentState)
     
     # Add nodes
+    workflow.add_node("router", route_query_node)  # NEW: Router for query classification
+    workflow.add_node("schema_handler", handle_schema_query_node)  # NEW: Schema query handler
+    workflow.add_node("reformatter", reformat_results_node)  # NEW: Result reformatter
     workflow.add_node("planner", plan_query_node)
     workflow.add_node("schema_fetch", fetch_schema_node)
     workflow.add_node("query_builder", build_query_node)
@@ -37,10 +46,37 @@ def create_vizql_graph() -> StateGraph:
     workflow.add_node("executor", execute_query_node)
     workflow.add_node("formatter", format_results_node)
     
-    # Set entry point
-    workflow.set_entry_point("planner")
+    # Set entry point to router (changed from planner)
+    workflow.set_entry_point("router")
     
-    # Add edges
+    # Conditional routing from router
+    def route_from_router(state: VizQLAgentState) -> str:
+        """Route based on query classification."""
+        query_type = state.get("query_type", "new_query")
+        logger.info(f"Routing query as '{query_type}'")
+        
+        if query_type == "schema_query":
+            return "schema_handler"
+        elif query_type == "reformat_previous":
+            return "reformatter"
+        else:  # new_query
+            return "planner"
+    
+    workflow.add_conditional_edges(
+        "router",
+        route_from_router,
+        {
+            "schema_handler": "schema_handler",
+            "reformatter": "reformatter",
+            "planner": "planner"
+        }
+    )
+    
+    # Schema handler and reformatter go directly to END
+    workflow.add_edge("schema_handler", END)
+    workflow.add_edge("reformatter", END)
+    
+    # Add edges for normal query flow
     workflow.add_edge("planner", "schema_fetch")
     workflow.add_edge("schema_fetch", "query_builder")
     workflow.add_edge("query_builder", "validator")

@@ -80,8 +80,8 @@ async def format_results_node(state: VizQLAgentState) -> Dict[str, Any]:
         data = results.get("data", [])
         row_count = results.get("row_count", 0)
         
-        # Format data sample (first 20 rows for context)
-        sample_size = min(20, len(data))
+        # Format data sample (first 1000 rows for context)
+        sample_size = min(1000, len(data))
         data_sample = ""
         if columns and data:
             data_sample = format_as_table(columns, data, max_rows=sample_size)
@@ -127,7 +127,8 @@ async def format_results_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         ai_response = await ai_client.chat(
             model=model,
-            messages=messages
+            messages=messages,
+            api_key=api_key
         )
         
         final_answer = ai_response.content if ai_response.content else "Query executed successfully, but could not generate answer."
@@ -138,6 +139,7 @@ async def format_results_node(state: VizQLAgentState) -> Dict[str, Any]:
             **state,
             "formatted_response": final_answer,
             "final_answer": final_answer,
+            "previous_results": results,  # Store for potential reformatting
             "current_thought": None  # Clear thought as we're done
         }
         
@@ -159,7 +161,7 @@ async def _format_basic_response(state: VizQLAgentState, results: Dict[str, Any]
     if columns and data:
         response += "**Data Preview:**\n"
         response += "```\n"
-        response += format_as_table(columns, data, max_rows=10)
+        response += format_as_table(columns, data, max_rows=1000)
         response += "\n```\n\n"
         
         if row_count > 10:
@@ -169,5 +171,6 @@ async def _format_basic_response(state: VizQLAgentState, results: Dict[str, Any]
         **state,
         "formatted_response": response,
         "final_answer": response,
+        "previous_results": results,  # Store for potential reformatting
         "current_thought": None
     }

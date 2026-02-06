@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Message } from '@/types';
@@ -25,7 +26,7 @@ export interface MessageListProps {
   className?: string;
   onEdit?: (messageId: string, newContent: string) => void;
   onDelete?: (messageId: string) => void;
-  onFeedbackChange?: (messageId: string, feedback: string | null) => void;
+  onFeedbackChange?: (messageId: string, feedback: string | null, feedbackText?: string | null) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   editable?: boolean;
   streamingMessageId?: string;
@@ -43,7 +44,7 @@ function MessageItem({
   message: Message;
   onEdit?: (messageId: string, newContent: string) => void;
   onDelete?: (messageId: string) => void;
-  onFeedbackChange?: (messageId: string, feedback: string | null) => void;
+  onFeedbackChange?: (messageId: string, feedback: string | null, feedbackText?: string | null) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   editable?: boolean;
   isStreaming?: boolean;
@@ -160,8 +161,75 @@ function MessageItem({
                 '[&_p]:break-words [&_li]:break-words [&_td]:break-words [&_th]:break-words'
               )} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                 <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
                   components={{
-                    code({ className, children, ...props }: any) {
+                    // Headings
+                    h1: ({ children, ...props }: any) => (
+                      <h1 className="text-2xl font-bold mt-4 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h1>
+                    ),
+                    h2: ({ children, ...props }: any) => (
+                      <h2 className="text-xl font-bold mt-4 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h2>
+                    ),
+                    h3: ({ children, ...props }: any) => (
+                      <h3 className="text-lg font-semibold mt-4 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h3>
+                    ),
+                    h4: ({ children, ...props }: any) => (
+                      <h4 className="text-base font-semibold mt-3 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h4>
+                    ),
+                    h5: ({ children, ...props }: any) => (
+                      <h5 className="text-sm font-semibold mt-3 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h5>
+                    ),
+                    h6: ({ children, ...props }: any) => (
+                      <h6 className="text-xs font-semibold mt-3 mb-2 first:mt-0" {...props}>
+                        {children}
+                      </h6>
+                    ),
+                    // Paragraphs
+                    p: ({ children, ...props }: any) => (
+                      <p className="mb-4 last:mb-0 break-words" {...props}>
+                        {children}
+                      </p>
+                    ),
+                    // Lists
+                    ul: ({ children, ...props }: any) => (
+                      <ul className="list-disc pl-6 mb-4 space-y-1" {...props}>
+                        {children}
+                      </ul>
+                    ),
+                    ol: ({ children, ...props }: any) => (
+                      <ol className="list-decimal pl-6 mb-4 space-y-1" {...props}>
+                        {children}
+                      </ol>
+                    ),
+                    li: ({ children, ...props }: any) => (
+                      <li className="mb-1 break-words" {...props}>
+                        {children}
+                      </li>
+                    ),
+                    // Links
+                    a: ({ href, children, ...props }: any) => (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline hover:text-primary/80 break-words"
+                        {...props}
+                      >
+                        {children}
+                      </a>
+                    ),
+                    // Code blocks and inline code
+                    code: ({ className, children, ...props }: any) => {
                       const match = /language-(\w+)/.exec(className || '');
                       const isInline = !match;
                       return !isInline && match ? (
@@ -169,16 +237,112 @@ function MessageItem({
                           style={oneDark as any}
                           language={match[1]}
                           PreTag="div"
-                          className="rounded-md overflow-x-auto max-w-full"
+                          className="rounded-md overflow-x-auto max-w-full my-4"
                         >
                           {String(children).replace(/\n$/, '')}
                         </SyntaxHighlighter>
                       ) : (
-                        <code className={cn(className, 'break-words')} {...props} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                        <code
+                          className={cn(
+                            'bg-muted px-1.5 py-0.5 rounded text-sm font-mono break-words',
+                            className
+                          )}
+                          {...props}
+                          style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                        >
                           {children}
                         </code>
                       );
                     },
+                    // Pre blocks (handled by SyntaxHighlighter, but fallback)
+                    pre: ({ children, ...props }: any) => (
+                      <pre className="bg-muted rounded-md p-4 overflow-x-auto mb-4" {...props}>
+                        {children}
+                      </pre>
+                    ),
+                    // Blockquotes
+                    blockquote: ({ children, ...props }: any) => (
+                      <blockquote
+                        className="border-l-4 border-muted-foreground pl-4 italic my-4 text-muted-foreground"
+                        {...props}
+                      >
+                        {children}
+                      </blockquote>
+                    ),
+                    // Tables
+                    table: ({ children, ...props }: any) => (
+                      <div className="overflow-x-auto my-4">
+                        <table className="w-full border-collapse border border-border" {...props}>
+                          {children}
+                        </table>
+                      </div>
+                    ),
+                    thead: ({ children, ...props }: any) => (
+                      <thead className="bg-muted" {...props}>
+                        {children}
+                      </thead>
+                    ),
+                    tbody: ({ children, ...props }: any) => (
+                      <tbody {...props}>
+                        {children}
+                      </tbody>
+                    ),
+                    tr: ({ children, ...props }: any) => (
+                      <tr className="border-b border-border" {...props}>
+                        {children}
+                      </tr>
+                    ),
+                    th: ({ children, ...props }: any) => (
+                      <th
+                        className="border border-border px-4 py-2 text-left font-semibold break-words"
+                        {...props}
+                      >
+                        {children}
+                      </th>
+                    ),
+                    td: ({ children, ...props }: any) => (
+                      <td
+                        className="border border-border px-4 py-2 break-words"
+                        {...props}
+                      >
+                        {children}
+                      </td>
+                    ),
+                    // Horizontal rule
+                    hr: ({ ...props }: any) => (
+                      <hr className="my-6 border-t border-border" {...props} />
+                    ),
+                    // Images
+                    img: ({ src, alt, ...props }: any) => (
+                      <img
+                        src={src}
+                        alt={alt}
+                        className="max-w-full h-auto rounded-md my-4"
+                        {...props}
+                      />
+                    ),
+                    // Strong/Bold
+                    strong: ({ children, ...props }: any) => (
+                      <strong className="font-bold" {...props}>
+                        {children}
+                      </strong>
+                    ),
+                    // Emphasis/Italic
+                    em: ({ children, ...props }: any) => (
+                      <em className="italic" {...props}>
+                        {children}
+                      </em>
+                    ),
+                    // Task lists (from remark-gfm)
+                    input: ({ checked, ...props }: any) => (
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled
+                        className="mr-2"
+                        {...props}
+                      />
+                    ),
                   }}
                 >
                   {message.content}
