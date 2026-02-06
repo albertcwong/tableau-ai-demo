@@ -1,22 +1,21 @@
 """Validator node for validating VizQL queries."""
-import json
 import logging
 import difflib
 from typing import Dict, Any
 
-from app.services.agents.vizql.state import VizQLAgentState
+from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.agents.vizql.constraint_validator import VizQLConstraintValidator
 from app.services.metrics import track_node_execution
 
 logger = logging.getLogger(__name__)
 
 
-@track_node_execution("vizql", "validator")
-async def validate_query_node(state: VizQLAgentState) -> Dict[str, Any]:
+@track_node_execution("vizql_streamlined", "validator")
+async def validate_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
     """
     Validate VizQL query against schema.
     
-    This is an "Observe" step in ReAct.
+    This is a local validation step (no LLM).
     """
     query = state.get("query_draft")
     schema = state.get("schema")
@@ -51,7 +50,7 @@ async def validate_query_node(state: VizQLAgentState) -> Dict[str, Any]:
     enriched_schema = state.get("enriched_schema")
     
     if enriched_schema:
-        # Use semantic constraint validator (Phase 4)
+        # Use semantic constraint validator
         logger.info("Using semantic constraint validator with enriched schema")
         try:
             constraint_validator = VizQLConstraintValidator(enriched_schema)

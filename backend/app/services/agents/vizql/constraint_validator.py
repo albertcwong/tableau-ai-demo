@@ -28,8 +28,8 @@ class VizQLConstraintValidator:
         Checks:
         - Field names exist in schema
         - MEASURE fields have aggregation functions
-        - DIMENSION fields don't have aggregation functions (unless numeric - REAL/INTEGER)
         - Aggregation functions are compatible with field data types
+        - NOTE: DIMENSION fields CAN have aggregation functions (e.g., COUNT on Customer Name)
         
         Args:
             query: VizQL query dictionary
@@ -83,23 +83,9 @@ class VizQLConstraintValidator:
                     f"{{\"fieldCaption\": \"{field_caption}\", \"function\": \"{suggested_agg}\"}}"
                 )
             
-            # CRITICAL: Dimensions should NOT have aggregation UNLESS they are numeric
-            # In Tableau, fields can be incorrectly categorized. If a DIMENSION is numeric
-            # (REAL, INTEGER), it can still be used for aggregation (e.g., "Sales" as dimension).
-            # This allows queries like "top sales by region" even if "Sales" is marked as DIMENSION.
-            field_role = field_meta.get("fieldRole", "")
-            data_type = field_meta.get("dataType", "")
-            is_numeric = data_type in ["REAL", "INTEGER"]
-            
-            # Only error if dimension is non-numeric AND has aggregation
-            if field_role == "DIMENSION" and has_function and not is_numeric:
-                errors.append(
-                    f"DIMENSION field '{field_caption}' should not have aggregation function"
-                )
-                suggestions.append(
-                    f"Remove 'function' from '{field_caption}': "
-                    f"{{\"fieldCaption\": \"{field_caption}\"}}"
-                )
+            # NOTE: Dimensions CAN have aggregation functions (e.g., COUNT on Customer Name)
+            # The VDS API allows aggregations on dimensions, so we don't restrict this.
+            # Aggregation compatibility is still validated below via validate_aggregation_for_type()
             
             # Validate aggregation type compatibility
             if has_function:

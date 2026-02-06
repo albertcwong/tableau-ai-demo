@@ -1,0 +1,1 @@
+"""Streamlined VizQL agent implementation."""

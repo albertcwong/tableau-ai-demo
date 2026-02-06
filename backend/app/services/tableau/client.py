@@ -2004,8 +2004,9 @@ class TableauClient:
         server_base = self.server_url.rstrip('/')
         graphql_url = f"{server_base}/api/metadata/graphql"
         
-        # GraphQL query to get published datasource fields with roles
-        # Field role is available on the base Field interface
+        # GraphQL query to get published datasource fields
+        # Using minimal fields that are known to exist in Tableau Metadata API
+        # Note: Some fields may not be available in all API versions
         query = """
         query GetDatasourceFields($luid: String!) {
             publishedDatasources(filter: {luid: $luid}) {
@@ -2016,20 +2017,7 @@ class TableauClient:
                     id
                     name
                     description
-                    role
-                    dataType
-                    remoteType
-                    ... on ColumnField {
-                        column {
-                            name
-                        }
-                    }
-                    ... on CalculatedField {
-                        formula
-                    }
-                    ... on MeasureField {
-                        defaultAggregation
-                    }
+                    __typename
                 }
             }
         }
@@ -2077,42 +2065,36 @@ class TableauClient:
             datasource = datasources[0]
             fields = datasource.get("fields", [])
             
+            if not fields:
+                logger.info("No fields returned from Metadata API")
+                return {}
+            
             for field in fields:
                 field_name = field.get("name", "")
-                # Field role might be a string enum value (MEASURE, DIMENSION) or an object
-                field_role_raw = field.get("role")
+                field_type = field.get("__typename", "")  # Use __typename to identify field type
                 
-                # Handle role - it might be a string or an object with a value property
-                field_role = None
-                if isinstance(field_role_raw, str):
-                    field_role = field_role_raw.upper()
-                elif isinstance(field_role_raw, dict):
-                    field_role = field_role_raw.get("value", "").upper()
+                if not field_name:
+                    continue
                 
-                if field_name:
-                    field_info = {
-                        "role": field_role,
-                        "dataType": field.get("dataType"),
-                        "remoteType": field.get("remoteType"),
-                        "description": field.get("description"),
-                    }
-                    
-                    # Add formula if available (from CalculatedField)
-                    if "formula" in field:
-                        field_info["formula"] = field["formula"]
-                    
-                    # Add defaultAggregation if available (from MeasureField)
-                    if "defaultAggregation" in field:
-                        field_info["defaultAggregation"] = field["defaultAggregation"]
-                    
-                    # Map by field name (which should match fieldCaption from VizQL)
-                    field_map[field_name] = field_info
-                    
-                    # Also try to map by column name if available
-                    if "column" in field and field["column"]:
-                        column_name = field["column"].get("name")
-                        if column_name and column_name != field_name:
-                            field_map[column_name] = field_info.copy()
+                field_info = {
+                    "description": field.get("description"),
+                }
+                
+                # Try to infer role from field type name (if available)
+                # Common patterns in Tableau Metadata API: MeasureField, DimensionField, CalculatedField, etc.
+                if field_type:
+                    field_info["fieldType"] = field_type
+                    # Try to infer role from type name
+                    field_type_upper = field_type.upper()
+                    if "MEASURE" in field_type_upper:
+                        field_info["role"] = "MEASURE"
+                    elif "DIMENSION" in field_type_upper:
+                        field_info["role"] = "DIMENSION"
+                    # If we can't determine from type, leave role as None
+                    # It will be determined from VizQL metadata instead
+                
+                # Map by field name (which should match fieldCaption from VizQL)
+                field_map[field_name] = field_info
             
             logger.info(f"Retrieved {len(field_map)} fields from Metadata API")
             return field_map

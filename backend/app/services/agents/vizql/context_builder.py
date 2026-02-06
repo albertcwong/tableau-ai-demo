@@ -359,9 +359,10 @@ def build_full_compressed_context(
         if calculations and len(calculations) > 0:
             parts.append("")
             parts.append("**CALCULATIONS DETECTED**")
+            parts.append("**IMPORTANT**: Only include these calculations if the user explicitly requested them!")
             for calc in calculations:
                 parts.append(f"- {calc.get('fieldCaption', 'calculated_field')}: {calc.get('formula', 'N/A')}")
-            parts.append("Add these as fields with 'calculation' property:")
+            parts.append("Add these as fields with 'calculation' property ONLY if user asked for them:")
             parts.append(json.dumps(calculations, indent=2))
         
         # Bins

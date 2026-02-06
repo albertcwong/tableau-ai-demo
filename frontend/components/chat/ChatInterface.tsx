@@ -53,7 +53,7 @@ export function ChatInterface({
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [lastReasoningSteps, setLastReasoningSteps] = useState<string>('');
-  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number }>>([]);
+  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }>>([]);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [reasoningTotalTimeMs, setReasoningTotalTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -161,7 +161,7 @@ export function ChatInterface({
       let reasoningStepsText = '';
       let finalAnswerText = '';
       // Track steps by step_index to handle multiple steps from same node
-      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number }> = [];
+      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }> = [];
       let reasoningStepIndex = 0;
       let storedVizqlQuery: Record<string, any> | null = null; // Store vizql_query from metadata
       let firstReasoningStepTime: number | null = null; // Track when first reasoning step arrives
@@ -225,14 +225,19 @@ export function ChatInterface({
               // Finalize step timings - calculate durations between steps
               const finalTime = Date.now() - startTime;
               
+              // Store finalized timings in a variable accessible throughout this function
+              let finalizedTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }> = [];
+              
               if (finalStepTimings.length > 0 && finalTime > 0) {
-                // Calculate final durations for any steps that don't have durations yet
-                let finalizedTimings = finalStepTimings.map((timing, index) => {
-                  // If duration is already set (from updates or final_answer), use it
+                // Most durations should already be calculated correctly during streaming
+                // Only fix edge cases where durations are missing or incorrect
+                finalizedTimings = finalStepTimings.map((timing, index) => {
+                  // If duration is already set and reasonable, use it
                   if (timing.duration > 0) {
                     return timing;
                   }
                   
+                  // Duration is 0 or missing - calculate it based on completion times
                   if (index === finalStepTimings.length - 1) {
                     // Last reasoning step: duration from its start to when final answer started
                     // (or end of streaming if final answer never started)
@@ -240,20 +245,24 @@ export function ChatInterface({
                     const duration = Math.max(50, endTime - timing.startTime);
                     return { ...timing, duration };
                   }
-                  // Other steps: duration from start to next step start
+                  
+                  // Middle step: duration from start to when next step started
+                  // Next step's start time = when this step completed
                   const nextStep = finalStepTimings[index + 1];
-                  const duration = Math.max(50, nextStep.startTime - timing.startTime);
-                  return { ...timing, duration };
+                  if (nextStep) {
+                    // Next step started when this step completed
+                    const duration = Math.max(50, nextStep.startTime - timing.startTime);
+                    return { ...timing, duration };
+                  }
+                  
+                  // Fallback: use a minimal duration
+                  return { ...timing, duration: 50 };
                 });
                 
-                // Verify that step durations account for all time
-                // Calculate total time from first step start to final time
+                // Verify and adjust the last step's duration if needed
                 if (finalizedTimings.length > 0) {
-                  const firstStepStart = finalizedTimings[0].startTime;
                   const lastStepIndex = finalizedTimings.length - 1;
                   const lastStep = finalizedTimings[lastStepIndex];
-                  
-                  // Time from last step start to end should be captured in last step duration
                   const endTime = finalAnswerStartTime !== null ? finalAnswerStartTime : finalTime;
                   const expectedLastStepDuration = endTime - lastStep.startTime;
                   
@@ -263,17 +272,6 @@ export function ChatInterface({
                       ...lastStep,
                       duration: expectedLastStepDuration,
                     };
-                  }
-                  
-                  // Also check if first step should account for time before it started
-                  // (graph initialization overhead)
-                  if (firstStepStart > 0 && finalizedTimings[0].duration === 0) {
-                    // First step hasn't been finalized yet - but this shouldn't happen
-                    // since we calculate durations above. But just in case:
-                    const nextStep = finalizedTimings[1];
-                    if (nextStep) {
-                      finalizedTimings[0].duration = nextStep.startTime - firstStepStart;
-                    }
                   }
                 }
                 
@@ -288,15 +286,21 @@ export function ChatInterface({
                     });
                   }
                 }
-                
-                setStepTimings(finalizedTimings);
+              } else {
+                // If no timings to finalize, use the original step timings
+                finalizedTimings = [...finalStepTimings];
               }
+              
+              // Set finalized timings immediately
+              setStepTimings(finalizedTimings);
               
               // Reload messages to get the final assistant message
               const apiMessages = await chatApi.getMessages(conversationId);
-              const formattedMessages: Message[] = apiMessages.map((msg) => {
-                // Preserve vizqlQuery from streaming metadata if available, otherwise use API response
-                const vizqlQuery = storedVizqlQuery || msg.vizql_query;
+              const formattedMessages: Message[] = apiMessages.map((msg, index) => {
+                // Use storedVizqlQuery only for the last message (the one we just streamed)
+                // All historical messages should use their own vizql_query from the API
+                const isLastMessage = index === apiMessages.length - 1;
+                const vizqlQuery = (isLastMessage && storedVizqlQuery) ? storedVizqlQuery : msg.vizql_query;
                 return {
                   id: msg.id.toString(),
                   role: msg.role.toLowerCase() as MessageRole,
@@ -314,9 +318,9 @@ export function ChatInterface({
               // Preserve reasoning steps, step timings, and total time
               if (reasoningStepsText && reasoningStepsText.trim()) {
                 setLastReasoningSteps(reasoningStepsText);
-                // Preserve step timings so reasoning steps can display properly
-                if (finalStepTimings.length > 0) {
-                  setStepTimings([...finalStepTimings]);
+                // Preserve finalized step timings (not the original unfinalized ones)
+                if (finalizedTimings.length > 0) {
+                  setStepTimings([...finalizedTimings]);
                 }
                 // Use the total_time_ms from the last assistant message (most recent)
                 const lastAssistantMessage = formattedMessages
@@ -361,11 +365,6 @@ export function ChatInterface({
               // Track when first reasoning step arrives
               if (firstReasoningStepTime === null) {
                 firstReasoningStepTime = elapsedTime;
-                // If there's time before the first step, add it to the first step's duration
-                // This accounts for graph initialization overhead
-                if (elapsedTime > 0) {
-                  // We'll add this to the first step's duration when we create it
-                }
               }
               
               // Handle reasoning step - use step_index to uniquely identify steps
@@ -379,50 +378,78 @@ export function ChatInterface({
               // Use node name to get human-readable step name
               const stepDisplayName = nodeNameMap[nodeName] || nodeName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
               
+              // Extract metadata (tool calls, tokens) from the chunk
+              const stepMetadata = structuredChunk.metadata || {};
+              const toolCalls = stepMetadata.tool_calls || [];
+              const tokens = stepMetadata.tokens || null;
+              
               reasoningStepsText += (reasoningStepsText ? ' ' : '') + stepText;
               
+              // CRITICAL: The timestamp represents when the step COMPLETED, not when it started
+              // We need to calculate the step's start time and duration correctly
+              
               // Check if this step already exists by step_index (not just node name)
-              // This allows multiple steps from the same node to be tracked separately
               const existingStepIndex = finalStepTimings.findIndex(
                 t => t.stepIndex === stepIndex
               );
               
               if (existingStepIndex >= 0) {
-                // Step already exists (shouldn't happen with proper step_index), update its timing if this is a later timestamp
+                // Step already exists - update its completion time and duration
                 const existingStep = finalStepTimings[existingStepIndex];
-                if (elapsedTime > existingStep.startTime) {
-                  // Update duration of this step to be the time until this update
-                  finalStepTimings[existingStepIndex] = {
-                    ...existingStep,
-                    duration: elapsedTime - existingStep.startTime,
-                  };
-                }
+                // Duration = completion time - start time
+                const stepDuration = elapsedTime - existingStep.startTime;
+                finalStepTimings[existingStepIndex] = {
+                  ...existingStep,
+                  duration: Math.max(50, stepDuration),
+                  toolCalls: toolCalls.length > 0 ? toolCalls : existingStep.toolCalls,
+                  tokens: tokens ? {
+                    prompt: tokens.prompt,
+                    completion: tokens.completion,
+                    total: tokens.total
+                  } : existingStep.tokens,
+                };
               } else {
-                // New step - calculate duration of previous step if it exists
+                // New step - calculate when it started and its duration
+                let stepStartTime: number;
+                let stepDuration: number;
+                
                 if (finalStepTimings.length > 0) {
+                  // This step started when the previous step completed
+                  // The timestamp (elapsedTime) represents when THIS step completed
+                  // So the previous step completed at elapsedTime (when this step started)
                   const previousStep = finalStepTimings[finalStepTimings.length - 1];
-                  // Calculate duration from previous step's start to this step's start
-                  // This captures all time including LangGraph overhead between nodes
-                  const timeSincePreviousStart = elapsedTime - previousStep.startTime;
                   
-                  // Always update duration to capture actual elapsed time
-                  // This ensures we capture all time including overhead between nodes
-                  previousStep.duration = Math.max(50, timeSincePreviousStart);
-                  finalStepTimings[finalStepTimings.length - 1] = previousStep;
+                  // If previous step doesn't have a duration yet, calculate it now
+                  // Duration = time from previous step's start to when current step arrived (= previous completion)
+                  if (previousStep.duration === 0 || previousStep.duration < 50) {
+                    previousStep.duration = Math.max(50, elapsedTime - previousStep.startTime);
+                    finalStepTimings[finalStepTimings.length - 1] = previousStep;
+                  }
+                  
+                  // Current step started when previous step completed
+                  const previousCompletionTime = previousStep.startTime + previousStep.duration;
+                  stepStartTime = previousCompletionTime;
+                  stepDuration = 0; // Will be calculated when next step arrives or on finalization
                 } else {
-                  // This is the first step - if there's time before it, account for it
-                  // by setting the start time to when streaming actually started
-                  // This ensures the first step captures initialization overhead
+                  // First step - started when streaming began
+                  stepStartTime = 0;
+                  stepDuration = elapsedTime - stepStartTime;
                 }
                 
-                // Add new step with step_index, node name and display name
-                const initialDuration = 0; // Will be calculated when next step arrives
+                // Add new step with calculated start time and duration
+                // Don't enforce minimum duration here - it will be calculated when next step arrives
                 finalStepTimings.push({
                   text: stepDisplayName,
-                  duration: initialDuration,
-                  startTime: elapsedTime,
+                  duration: stepDuration,
+                  startTime: stepStartTime,
                   nodeName: nodeName,
                   stepIndex: stepIndex,
+                  toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                  tokens: tokens ? {
+                    prompt: tokens.prompt,
+                    completion: tokens.completion,
+                    total: tokens.total
+                  } : undefined,
                 });
               }
               
@@ -439,12 +466,16 @@ export function ChatInterface({
                 // Finalize the last reasoning step's duration when final answer arrives
                 if (finalStepTimings.length > 0) {
                   const lastStep = finalStepTimings[finalStepTimings.length - 1];
-                  if (lastStep.duration === 0) {
-                    // Calculate duration from step start to when final answer begins
-                    const stepDuration = Math.max(50, elapsedTime - lastStep.startTime);
+                  // Calculate when the last step completed
+                  const lastStepCompletionTime = lastStep.startTime + (lastStep.duration || 0);
+                  
+                  // If the last step's duration is 0 or less than expected, update it
+                  // Duration = final answer start time - step start time
+                  const expectedDuration = elapsedTime - lastStep.startTime;
+                  if (lastStep.duration === 0 || lastStep.duration < expectedDuration) {
                     finalStepTimings[finalStepTimings.length - 1] = {
                       ...lastStep,
-                      duration: stepDuration,
+                      duration: Math.max(50, expectedDuration),
                     };
                   }
                 }
@@ -486,6 +517,19 @@ export function ChatInterface({
                   }
                   return updated;
                 });
+                
+                // Automatically load the query into the editor if onLoadQuery handler is available
+                if (onLoadQuery && metadata.vizql_query) {
+                  console.log('Auto-loading query into editor:', metadata.vizql_query);
+                  // Extract datasource ID from query
+                  const datasourceId = metadata.vizql_query?.datasource?.datasourceLuid;
+                  if (datasourceId) {
+                    console.log('Calling onLoadQuery with datasourceId:', datasourceId);
+                    onLoadQuery(datasourceId, metadata.vizql_query);
+                  } else {
+                    console.warn('No datasourceId found in vizql_query metadata');
+                  }
+                }
               }
             }
           },

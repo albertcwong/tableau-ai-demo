@@ -12,6 +12,8 @@ interface StepWithTiming {
   duration: number; // Duration in milliseconds
   startTime: number; // Start time relative to stream start
   nodeName?: string; // LangGraph node name (e.g., "data_fetcher", "analyzer")
+  toolCalls?: string[]; // Tool calls made in this step
+  tokens?: { prompt?: number; completion?: number; total?: number }; // Token usage
 }
 
 interface ReasoningStepsProps {
@@ -266,35 +268,59 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
         <div className="border-t border-gray-200 dark:border-gray-800">
           <ScrollArea className="max-h-64">
             <div className="p-3 space-y-2">
-              {organizedSteps.map((step, index) => (
-                <div
-                  key={index}
-                  className="flex gap-2 items-start text-xs text-gray-700 dark:text-gray-300"
-                >
-                  <div className="flex-shrink-0 mt-0.5">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-                  </div>
-                  <div className="flex-1 break-words">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <span className="font-medium text-gray-900 dark:text-gray-100">
-                          Step {index + 1}:
-                        </span>{' '}
-                        <span>{step.text.trim()}</span>
+              {organizedSteps.map((step, index) => {
+                const stepTiming = stepTimings && stepTimings[index];
+                const hasDetails = stepTiming?.toolCalls || stepTiming?.tokens;
+                
+                return (
+                  <div
+                    key={index}
+                    className="flex gap-2 items-start text-xs text-gray-700 dark:text-gray-300"
+                  >
+                    <div className="flex-shrink-0 mt-0.5">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <div className="flex-1 break-words">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <span className="font-medium text-gray-900 dark:text-gray-100">
+                            Step {index + 1}:
+                          </span>{' '}
+                          <span>{step.text.trim()}</span>
+                        </div>
+                        {stepTimings && stepTimings.length > 0 && (
+                          <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 font-mono whitespace-nowrap">
+                            {step.duration > 0 
+                              ? formatDuration(step.duration) 
+                              : (isReasoningActive && index === organizedSteps.length - 1 && currentStepElapsed > 0)
+                                ? formatDuration(currentStepElapsed)
+                                : '—'}
+                          </div>
+                        )}
                       </div>
-                      {stepTimings && stepTimings.length > 0 && (
-                        <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 font-mono whitespace-nowrap">
-                          {step.duration > 0 
-                            ? formatDuration(step.duration) 
-                            : (isReasoningActive && index === organizedSteps.length - 1 && currentStepElapsed > 0)
-                              ? formatDuration(currentStepElapsed)
-                              : '—'}
+                      {hasDetails && (
+                        <div className="mt-1 pl-0 space-y-0.5">
+                          {stepTiming?.toolCalls && stepTiming.toolCalls.length > 0 && (
+                            <div className="text-[10px] text-gray-600 dark:text-gray-400">
+                              <span className="font-semibold">Tools:</span>{' '}
+                              {stepTiming.toolCalls.join(', ')}
+                            </div>
+                          )}
+                          {stepTiming?.tokens && (
+                            <div className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">
+                              <span className="font-semibold">Tokens:</span>{' '}
+                              {stepTiming.tokens.prompt && `${stepTiming.tokens.prompt} in`}
+                              {stepTiming.tokens.prompt && stepTiming.tokens.completion && ' / '}
+                              {stepTiming.tokens.completion && `${stepTiming.tokens.completion} out`}
+                              {stepTiming.tokens.total && ` (${stepTiming.tokens.total} total)`}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {stepTimings && stepTimings.length > 0 && totalTime > 0 && (
                 <div className="pt-2 mt-2 border-t border-gray-200 dark:border-gray-700">
                   <div className="flex items-center justify-between text-xs">

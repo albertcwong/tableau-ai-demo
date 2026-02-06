@@ -35,10 +35,13 @@ export function DatasourceDetail({
   const [queryPanelHeight, setQueryPanelHeight] = useState(456); // Initial height: 256px (h-64) + 200px = 456px
   const [isResizingQueryPanel, setIsResizingQueryPanel] = useState(false);
   const queryPanelResizeRef = useRef<HTMLDivElement>(null);
+  const [isUpdatingQuery, setIsUpdatingQuery] = useState(false);
+  const [queryUpdateAnimation, setQueryUpdateAnimation] = useState(false);
   
   // Keep ref in sync with state
   useEffect(() => {
     queryRef.current = query;
+    console.log('Query state changed:', query.substring(0, 50) + '... (length:', query.length + ')');
   }, [query]);
 
   useEffect(() => {
@@ -55,12 +58,27 @@ export function DatasourceDetail({
           // Validate that stored query is valid JSON before setting it
           try {
             JSON.parse(storedQuery);
+            
+            // Show updating indicator immediately
+            setIsUpdatingQuery(true);
+            
+            // Update query immediately but keep visual feedback
+            console.log('Updating query on mount from localStorage:', storedQuery.substring(0, 50) + '...');
             setQuery(storedQuery);
+            setQueryUpdateAnimation(true);
+            
+            // Clear animation after transition completes
+            setTimeout(() => {
+              setQueryUpdateAnimation(false);
+              setIsUpdatingQuery(false);
+            }, 2000); // Animation duration
+            
             localStorage.removeItem(storedQueryKey); // Clear after loading
           } catch (err) {
             console.error('Stored query is not valid JSON:', err);
             setError('Stored query contains invalid JSON. Please try loading the query again.');
             localStorage.removeItem(storedQueryKey); // Clear invalid query
+            setIsUpdatingQuery(false);
           }
         } else {
           const sampleData = await tableauExplorerApi.getDatasourceSample(datasourceId, 100);
@@ -89,12 +107,30 @@ export function DatasourceDetail({
             : JSON.stringify(event.detail.query, null, 2);
           // Validate JSON before setting
           JSON.parse(queryStr);
+          
+          console.log('Setting query:', queryStr.substring(0, 100) + '...');
+          
+          // Show updating indicator immediately
+          setIsUpdatingQuery(true);
+          
+          // Update query state immediately - React will re-render with new value
           setQuery(queryStr);
+          setQueryUpdateAnimation(true);
+          
+          console.log('Query state update called, React should re-render with new value');
+          
+          // Clear animation after transition completes
+          setTimeout(() => {
+            setQueryUpdateAnimation(false);
+            setIsUpdatingQuery(false);
+          }, 2000); // Animation duration
+          
           // Also clear from localStorage if it exists
           localStorage.removeItem(`vizql_query_${datasourceId}`);
         } catch (err) {
           console.error('Failed to stringify/validate query from event:', err);
           setError('Failed to load query: Invalid JSON format');
+          setIsUpdatingQuery(false);
         }
       }
     };
@@ -111,11 +147,25 @@ export function DatasourceDetail({
           // Validate JSON before setting
           JSON.parse(storedQuery);
           console.log('Found query in localStorage on interval check, loading into editor');
+          
+          // Show updating indicator immediately
+          setIsUpdatingQuery(true);
+          
+          // Update query state immediately
           setQuery(storedQuery);
+          setQueryUpdateAnimation(true);
+          
+          // Clear animation after transition completes
+          setTimeout(() => {
+            setQueryUpdateAnimation(false);
+            setIsUpdatingQuery(false);
+          }, 2000); // Animation duration
+          
           localStorage.removeItem(storedQueryKey);
         } catch (err) {
           console.error('Stored query is not valid JSON on interval check:', err);
           localStorage.removeItem(storedQueryKey); // Clear invalid query
+          setIsUpdatingQuery(false);
         }
       }
     }, 200); // Check every 200ms for faster response
@@ -322,14 +372,35 @@ export function DatasourceDetail({
           <div className="flex items-center gap-2 mb-3 flex-shrink-0">
             <Code2 className="h-4 w-4 text-gray-500 dark:text-gray-400" />
             <h3 className="font-semibold text-gray-900 dark:text-white">VizQL Data Service Query</h3>
+            {isUpdatingQuery && (
+              <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 animate-pulse">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Updating query...</span>
+              </div>
+            )}
           </div>
-          <div className="flex-1 flex flex-col space-y-3 min-h-0">
-            <textarea
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="flex-1 w-full font-mono text-sm bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded p-3 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 min-h-0"
-              placeholder="Enter VizQL Data Service query as JSON..."
-            />
+          <div className="flex-1 flex flex-col space-y-3 min-h-0 relative">
+            <div className="relative flex-1">
+              <textarea
+                key={`query-editor-${datasourceId}`}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className={`w-full h-full font-mono text-sm bg-gray-50 dark:bg-gray-800 border rounded p-3 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition-all duration-500 ${
+                  queryUpdateAnimation 
+                    ? 'border-blue-500 dark:border-blue-400 ring-2 ring-blue-500/50 dark:ring-blue-400/50 bg-blue-50/30 dark:bg-blue-900/20' 
+                    : 'border-gray-300 dark:border-gray-700'
+                }`}
+                placeholder="Enter VizQL Data Service query as JSON..."
+              />
+              {isUpdatingQuery && (
+                <div className="absolute top-2 right-2 z-20 pointer-events-none">
+                  <div className="flex flex-col items-center gap-2 bg-white/95 dark:bg-gray-900/95 px-3 py-2 rounded-lg shadow-lg border border-blue-200 dark:border-blue-800 backdrop-blur-sm">
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
+                    <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">Updating...</span>
+                  </div>
+                </div>
+              )}
+            </div>
             {queryError && (
               <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded flex-shrink-0">
                 {queryError}

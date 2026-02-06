@@ -635,7 +635,12 @@ async def send_message(
             agent_type_setting = settings.VIZQL_AGENT_TYPE
             use_tool_use = agent_type_setting == "tool_use"
             use_controlled = agent_type_setting == "controlled"
-            graph = AgentGraphFactory.create_vizql_graph(use_tool_use=use_tool_use, use_controlled=use_controlled)
+            use_streamlined = agent_type_setting == "streamlined"
+            graph = AgentGraphFactory.create_vizql_graph(
+                use_tool_use=use_tool_use,
+                use_controlled=use_controlled,
+                use_streamlined=use_streamlined
+            )
             
             # Initialize state for VizQL agent
             if use_controlled:
@@ -658,6 +663,43 @@ async def send_message(
                     "model": request.model,
                     "attempt": 1,
                     "current_thought": None,
+                }
+            elif use_streamlined:
+                # Streamlined agent state
+                message_history = []
+                for msg in history_messages:
+                    msg_dict = {
+                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
+                        "content": msg.content
+                    }
+                    # Add query_draft and query_results for prior query reuse
+                    if msg.role == MessageRole.ASSISTANT and msg.extra_metadata:
+                        if isinstance(msg.extra_metadata, dict):
+                            msg_dict["query_draft"] = msg.extra_metadata.get('vizql_query')
+                            msg_dict["query_results"] = msg.extra_metadata.get('query_results')
+                    message_history.append(msg_dict)
+                
+                logger.info(f"Initializing streamlined graph state with model: {request.model}")
+                initial_state = {
+                    "user_query": refined_query,
+                    "agent_type": "vizql",
+                    "context_datasources": datasource_ids,
+                    "context_views": view_ids,
+                    "messages": message_history,
+                    "tool_calls": [],
+                    "tool_results": [],
+                    "current_thought": None,
+                    "final_answer": None,
+                    "error": None,
+                    "confidence": None,
+                    "processing_time": None,
+                    "api_key": api_key,
+                    "model": request.model,
+                    "attempt": 1,
+                    "query_version": 0,
+                    "reasoning_steps": [],
+                    "enriched_schema": None,  # Optional - can be pre-fetched
+                    "schema": None,  # Will be fetched if needed
                 }
             elif use_tool_use:
                 # Tool-use agent state (simplified)
@@ -788,12 +830,17 @@ async def send_message(
                                     node_thought_key = f"{node_name}_thought"
                                     if node_thought_key not in stream_graph._streamed_node_thoughts:
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                        
+                                        # Extract step metadata if available (tool calls, tokens)
+                                        step_metadata = node_state.get("step_metadata", {})
+                                        
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
                                             content=AgentMessageContent(type="text", data=thought),
                                             step_name=node_name,
                                             timestamp=time.time(),  # Unix timestamp in seconds
-                                            step_index=reasoningStepIndex
+                                            step_index=reasoningStepIndex,
+                                            metadata=step_metadata if step_metadata else None
                                         )
                                         reasoningStepIndex += 1
                                         yield reasoning_chunk.to_sse_format()
@@ -1397,12 +1444,17 @@ async def send_message(
                                     node_thought_key = f"{node_name}_thought"
                                     if node_thought_key not in stream_graph._streamed_node_thoughts:
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
+                                        
+                                        # Extract step metadata if available (tool calls, tokens)
+                                        step_metadata = node_state.get("step_metadata", {})
+                                        
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
                                             content=AgentMessageContent(type="text", data=thought),
                                             step_name=node_name,
                                             timestamp=time.time(),  # Unix timestamp in seconds
-                                            step_index=reasoningStepIndex
+                                            step_index=reasoningStepIndex,
+                                            metadata=step_metadata if step_metadata else None
                                         )
                                         reasoningStepIndex += 1
                                         yield reasoning_chunk.to_sse_format()

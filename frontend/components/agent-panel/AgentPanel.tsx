@@ -24,6 +24,7 @@ interface AgentPanelProps {
   onAddToContextRef?: (handler: (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) => void;
   onContextChange?: (context: ChatContextObject[]) => void;
   onWidthChange?: (width: number) => void;
+  onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
 }
 
 const MIN_WIDTH = 384; // w-96 equivalent

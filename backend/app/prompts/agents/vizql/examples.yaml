@@ -1,4 +1,21 @@
 examples:
+  - user: "how many customers"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Customer Name", "function": "COUNTD"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
   - user: "show total sales by region"
     assistant: |
       {
@@ -44,11 +61,16 @@ examples:
         },
         "query": {
           "fields": [
-            {"fieldCaption": "Order ID", "function": "COUNT"},
-            {"fieldCaption": "Month"}
+            {"fieldCaption": "Order ID", "function": "COUNTD"},
+            {"fieldCaption": "Order Date", "function": "TRUNC_MONTH"}
           ],
           "filters": [
-            {"fieldCaption": "Year", "values": ["2024"]}
+            {
+              "field": {"fieldCaption": "Order Date"},
+              "filterType": "DATE",
+              "periodType": "YEARS",
+              "dateRangeType": "CURRENT"
+            }
           ]
         },
         "options": {
@@ -86,6 +108,124 @@ examples:
           "fields": [
             {"fieldCaption": "Sales", "function": "SUM"},
             {"fieldCaption": "Region"}
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "given the top region, show me the top 3 customers"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Region"},
+            {"fieldCaption": "Customer Name"},
+            {"fieldCaption": "Sales", "function": "SUM"}
+          ],
+          "filters": [
+            {
+              "field": {"fieldCaption": "Region"},
+              "filterType": "TOP",
+              "howMany": 1,
+              "direction": "TOP",
+              "fieldToMeasure": {
+                "fieldCaption": "Sales",
+                "function": "SUM"
+              },
+              "context": true
+            },
+            {
+              "field": {"fieldCaption": "Customer Name"},
+              "filterType": "TOP",
+              "howMany": 3,
+              "direction": "TOP",
+              "fieldToMeasure": {
+                "fieldCaption": "Sales",
+                "function": "SUM"
+              }
+            }
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "in the Furniture category, what are the top 5 subcategories"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Category"},
+            {"fieldCaption": "Sub-Category"},
+            {"fieldCaption": "Sales", "function": "SUM"}
+          ],
+          "filters": [
+            {
+              "field": {"fieldCaption": "Category"},
+              "filterType": "SET",
+              "values": ["Furniture"],
+              "exclude": false,
+              "context": true
+            },
+            {
+              "field": {"fieldCaption": "Sub-Category"},
+              "filterType": "TOP",
+              "howMany": 5,
+              "direction": "TOP",
+              "fieldToMeasure": {
+                "fieldCaption": "Sales",
+                "function": "SUM"
+              }
+            }
+          ]
+        },
+        "options": {
+          "returnFormat": "OBJECTS",
+          "disaggregate": false
+        }
+      }
+
+  - user: "for Q1 2024, show the best performing products"
+    assistant: |
+      {
+        "datasource": {
+          "datasourceLuid": "ds-123"
+        },
+        "query": {
+          "fields": [
+            {"fieldCaption": "Product Name"},
+            {"fieldCaption": "Sales", "function": "SUM"}
+          ],
+          "filters": [
+            {
+              "field": {"fieldCaption": "Order Date"},
+              "filterType": "DATE",
+              "periodType": "QUARTERS",
+              "dateRangeType": "LASTN",
+              "lastN": 1,
+              "context": true
+            },
+            {
+              "field": {"fieldCaption": "Product Name"},
+              "filterType": "TOP",
+              "howMany": 10,
+              "direction": "TOP",
+              "fieldToMeasure": {
+                "fieldCaption": "Sales",
+                "function": "SUM"
+              }
+            }
           ]
         },
         "options": {
