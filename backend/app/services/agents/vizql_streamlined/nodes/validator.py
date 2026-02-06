@@ -94,6 +94,10 @@ async def validate_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                     errors.append("Field missing fieldCaption")
                 continue
             
+            # Skip schema validation for calculated fields
+            if "calculation" in field:
+                continue
+            
             # Check if field exists in schema (case-insensitive)
             field_lower = field_name.lower()
             if field_lower not in schema_fields:

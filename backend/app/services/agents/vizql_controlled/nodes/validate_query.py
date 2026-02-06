@@ -84,6 +84,10 @@ async def validate_query_node(state: VizQLGraphState) -> Dict[str, Any]:
         for field in query_fields:
             field_caption = field.get("fieldCaption")
             if field_caption:
+                # Skip schema validation for calculated fields
+                if "calculation" in field:
+                    continue
+                
                 field_lower = field_caption.lower()
                 if field_lower not in field_map:
                     errors.append(f"Field '{field_caption}' not found in schema")

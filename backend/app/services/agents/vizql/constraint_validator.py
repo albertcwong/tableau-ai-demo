@@ -53,6 +53,10 @@ class VizQLConstraintValidator:
                 errors.append("Field missing fieldCaption")
                 continue
             
+            # Skip schema validation for calculated fields
+            if "calculation" in field:
+                continue
+            
             field_lower = field_caption.lower()
             
             # Check if field exists in schema
