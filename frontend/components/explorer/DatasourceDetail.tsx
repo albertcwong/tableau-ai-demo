@@ -6,7 +6,7 @@ import type { DatasourceSample } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown, GripVertical } from 'lucide-react';
 import { DatasourceEnrichButton } from './DatasourceEnrichButton';
 
 interface DatasourceDetailProps {
@@ -32,6 +32,9 @@ export function DatasourceDetail({
   const [error, setError] = useState<string | null>(null);
   const [sortColumn, setSortColumn] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [queryPanelHeight, setQueryPanelHeight] = useState(456); // Initial height: 256px (h-64) + 200px = 456px
+  const [isResizingQueryPanel, setIsResizingQueryPanel] = useState(false);
+  const queryPanelResizeRef = useRef<HTMLDivElement>(null);
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -128,6 +131,46 @@ export function DatasourceDetail({
     setSortColumn(null);
     setSortDirection('asc');
   }, [datasourceId]);
+
+  // Handle query panel resize
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingQueryPanel) return;
+      
+      const cardElement = queryPanelResizeRef.current?.closest('.query-panel-card');
+      if (!cardElement) return;
+      
+      const cardRect = cardElement.getBoundingClientRect();
+      const newHeight = e.clientY - cardRect.top;
+      const minHeight = 200; // Minimum height
+      const maxHeight = 800; // Maximum height
+      const clampedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+      setQueryPanelHeight(clampedHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingQueryPanel(false);
+    };
+
+    if (isResizingQueryPanel) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingQueryPanel]);
+
+  const handleQueryPanelResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingQueryPanel(true);
+  };
 
   const handleSort = (columnIndex: number) => {
     if (sortColumn === columnIndex) {
@@ -275,24 +318,24 @@ export function DatasourceDetail({
           />
         </Card>
         
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
+        <Card className="p-4 query-panel-card relative flex flex-col" style={{ height: `${queryPanelHeight}px` }}>
+          <div className="flex items-center gap-2 mb-3 flex-shrink-0">
             <Code2 className="h-4 w-4 text-gray-500 dark:text-gray-400" />
             <h3 className="font-semibold text-gray-900 dark:text-white">VizQL Data Service Query</h3>
           </div>
-          <div className="space-y-3">
+          <div className="flex-1 flex flex-col space-y-3 min-h-0">
             <textarea
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full h-64 font-mono text-sm bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded p-3 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+              className="flex-1 w-full font-mono text-sm bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded p-3 text-gray-900 dark:text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 min-h-0"
               placeholder="Enter VizQL Data Service query as JSON..."
             />
             {queryError && (
-              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded">
+              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded flex-shrink-0">
                 {queryError}
               </div>
             )}
-            <div className="flex justify-end">
+            <div className="flex justify-end flex-shrink-0">
               <Button
                 onClick={handleExecuteQuery}
                 disabled={!query || executing}
@@ -310,6 +353,18 @@ export function DatasourceDetail({
                   </>
                 )}
               </Button>
+            </div>
+          </div>
+          {/* Resize handle */}
+          <div
+            ref={queryPanelResizeRef}
+            onMouseDown={handleQueryPanelResizeStart}
+            className="absolute bottom-0 left-0 right-0 h-2 cursor-row-resize hover:bg-blue-200/50 dark:hover:bg-blue-700/50 active:bg-blue-300 dark:active:bg-blue-600 transition-colors z-10 group"
+            style={{ touchAction: 'none' }}
+            title="Drag to resize"
+          >
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              <GripVertical className="h-5 w-5 text-gray-600 dark:text-gray-300 rotate-90" />
             </div>
           </div>
         </Card>
