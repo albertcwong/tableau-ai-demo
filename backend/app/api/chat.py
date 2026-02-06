@@ -632,11 +632,34 @@ async def send_message(
             node_states = []  # Track node states for debugging
             
             # Check which agent type to use
-            use_tool_use = settings.VIZQL_AGENT_TYPE == "tool_use"
-            graph = AgentGraphFactory.create_vizql_graph(use_tool_use=use_tool_use)
+            agent_type_setting = settings.VIZQL_AGENT_TYPE
+            use_tool_use = agent_type_setting == "tool_use"
+            use_controlled = agent_type_setting == "controlled"
+            graph = AgentGraphFactory.create_vizql_graph(use_tool_use=use_tool_use, use_controlled=use_controlled)
             
             # Initialize state for VizQL agent
-            if use_tool_use:
+            if use_controlled:
+                # Controlled graph state
+                message_history = []
+                for msg in history_messages:
+                    msg_dict = {
+                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
+                        "content": msg.content
+                    }
+                    message_history.append(msg_dict)
+                
+                logger.info(f"Initializing controlled graph state with model: {request.model}")
+                initial_state = {
+                    "user_query": refined_query,
+                    "datasource_id": datasource_ids[0] if datasource_ids else None,
+                    "site_id": settings.TABLEAU_SITE_ID,
+                    "message_history": message_history,
+                    "api_key": api_key,
+                    "model": request.model,
+                    "attempt": 1,
+                    "current_thought": None,
+                }
+            elif use_tool_use:
                 # Tool-use agent state (simplified)
                 # Format message history for tool-use agent
                 # Convert database messages to format expected by tool-use agent
