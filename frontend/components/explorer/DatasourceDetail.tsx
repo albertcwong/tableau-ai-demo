@@ -310,12 +310,39 @@ export function DatasourceDetail({
       
       const results = await tableauExplorerApi.executeVDSQuery(datasourceId, parsedQuery);
       setQueryResults(results);
-    } catch (err) {
+    } catch (err: any) {
       if (err instanceof SyntaxError) {
         const errorMsg = err.message || 'Invalid JSON format';
         setQueryError(`Failed to parse query JSON: ${errorMsg}`);
       } else {
-        setQueryError(err instanceof Error ? err.message : 'Failed to execute query');
+        // Extract detailed error message from API response
+        // FastAPI returns errors in {detail: "..."} format
+        // Axios wraps errors with response.data containing the error
+        let errorMessage = 'Failed to execute query';
+        
+        if (err?.response?.data?.detail) {
+          // FastAPI error format: {detail: "error message"}
+          errorMessage = err.response.data.detail;
+        } else if (err?.response?.data?.message) {
+          // Alternative API error format: {message: "error message"}
+          errorMessage = err.response.data.message;
+        } else if (err?.response?.data) {
+          // If response.data is a string, use it directly
+          if (typeof err.response.data === 'string') {
+            errorMessage = err.response.data;
+          } else {
+            // Try to stringify if it's an object
+            errorMessage = JSON.stringify(err.response.data);
+          }
+        } else if (err?.message) {
+          // Standard Error object or AxiosError
+          errorMessage = err.message;
+        } else if (typeof err === 'string') {
+          // String error
+          errorMessage = err;
+        }
+        
+        setQueryError(errorMessage);
       }
     } finally {
       setExecuting(false);
@@ -402,7 +429,7 @@ export function DatasourceDetail({
               )}
             </div>
             {queryError && (
-              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded flex-shrink-0">
+              <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded flex-shrink-0 whitespace-pre-wrap break-words max-h-[7.5rem] overflow-y-auto">
                 {queryError}
               </div>
             )}

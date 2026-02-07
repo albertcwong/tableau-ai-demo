@@ -188,8 +188,8 @@ export function DatasourceEnrichButton({
                                     </>
                                   )}
                                 </div>
-                                {field && (field.min != null || field.max != null || field.cardinality != null) && (
-                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-4">
+                                {field && (field.min != null || field.max != null || field.cardinality != null || field.formula) && (
+                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-4 space-y-0.5">
                                     {field.min != null && field.max != null && (
                                       <span>Range: {field.min} - {field.max}</span>
                                     )}
@@ -198,6 +198,14 @@ export function DatasourceEnrichButton({
                                         {field.min != null && <span className="mx-1">•</span>}
                                         <span>Distinct: {field.cardinality.toLocaleString()}</span>
                                       </>
+                                    )}
+                                    {field.formula && (
+                                      <div className="mt-1">
+                                        <span className="font-medium text-gray-600 dark:text-gray-300">Formula:</span>
+                                        <code className="ml-1 text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded font-mono break-all">
+                                          {field.formula}
+                                        </code>
+                                      </div>
                                     )}
                                   </div>
                                 )}
@@ -248,8 +256,8 @@ export function DatasourceEnrichButton({
                                     </>
                                   )}
                                 </div>
-                                {field && (field.cardinality != null || (field.sample_values && field.sample_values.length > 0)) && (
-                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-4">
+                                {field && (field.cardinality != null || (field.sample_values && field.sample_values.length > 0) || field.formula) && (
+                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 pl-4 space-y-0.5">
                                     {field.cardinality != null && typeof field.cardinality === 'number' && (
                                       <span>Distinct: {field.cardinality.toLocaleString()}</span>
                                     )}
@@ -261,6 +269,14 @@ export function DatasourceEnrichButton({
                                           {field.sample_values.length > 3 && "..."}
                                         </span>
                                       </>
+                                    )}
+                                    {field.formula && (
+                                      <div className="mt-1">
+                                        <span className="font-medium text-gray-600 dark:text-gray-300">Formula:</span>
+                                        <code className="ml-1 text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded font-mono break-all">
+                                          {field.formula}
+                                        </code>
+                                      </div>
                                     )}
                                   </div>
                                 )}
@@ -284,17 +300,27 @@ export function DatasourceEnrichButton({
                           {result.enriched_schema.fields.map((field) => (
                             <div
                               key={field.fieldCaption}
-                              className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400"
+                              className="text-xs text-gray-600 dark:text-gray-400"
                             >
-                              <span className="font-medium">{field.fieldCaption}</span>
-                              <span className="text-gray-400 dark:text-gray-500">•</span>
-                              <span className="text-gray-500 dark:text-gray-500">
-                                {field.dataType}
-                              </span>
-                              <span className="text-gray-400 dark:text-gray-500">•</span>
-                              <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded text-xs">
-                                {field.fieldRole}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{field.fieldCaption}</span>
+                                <span className="text-gray-400 dark:text-gray-500">•</span>
+                                <span className="text-gray-500 dark:text-gray-500">
+                                  {field.dataType}
+                                </span>
+                                <span className="text-gray-400 dark:text-gray-500">•</span>
+                                <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded text-xs">
+                                  {field.fieldRole}
+                                </span>
+                              </div>
+                              {field.formula && (
+                                <div className="mt-1 pl-4">
+                                  <span className="font-medium text-gray-600 dark:text-gray-300">Formula:</span>
+                                  <code className="ml-1 text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded font-mono break-all">
+                                    {field.formula}
+                                  </code>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>

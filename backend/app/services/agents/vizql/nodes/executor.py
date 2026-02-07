@@ -147,6 +147,18 @@ async def execute_query_node(state: VizQLAgentState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error executing query: {e}", exc_info=True)
         
+        # Extract detailed error message
+        error_message = str(e)
+        # If it's a TableauAPIError, the message should already include Tableau server details
+        # For httpx errors, try to extract more details
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            try:
+                error_detail = e.response.text
+                if error_detail and error_detail not in error_message:
+                    error_message = f"{error_message}: {error_detail[:500]}"
+            except Exception:
+                pass
+        
         # Try to get cached result as fallback
         try:
             cache = get_cache()
@@ -159,19 +171,19 @@ async def execute_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 return {
                     **state,
                     "query_results": cached_result,
-                    "execution_error": f"Execution failed but using cached result: {str(e)}",
+                    "execution_error": f"Execution failed but using cached result: {error_message}",
                     "current_thought": f"Query execution failed, using cached result with {cached_result.get('row_count', 0)} rows"
                 }
         except Exception as cache_error:
             logger.warning(f"Failed to get cached result: {cache_error}")
         return {
             **state,
-            "execution_error": str(e),
-            "error": f"Query execution failed: {str(e)}",
+            "execution_error": error_message,
+            "error": f"Query execution failed: {error_message}",
             "tool_calls": state.get("tool_calls", []) + [{
                 "tool": "execute_vds_query",
                 "args": {"query": query},
                 "result": "error",
-                "error": str(e)
+                "error": error_message
             }]
         }

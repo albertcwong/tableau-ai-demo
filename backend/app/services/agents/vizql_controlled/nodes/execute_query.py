@@ -76,23 +76,30 @@ async def execute_query_node(state: VizQLGraphState) -> Dict[str, Any]:
                 "timeout_error": "Query execution timed out",
                 "current_thought": "Error: Query timeout"
             }
-        except (TableauClientError, httpx.HTTPStatusError) as e:
+        except (TableauClientError, TableauAPIError, httpx.HTTPStatusError) as e:
+            # Extract detailed error message
+            # TableauAPIError already includes detailed message from Tableau server
             error_msg = str(e)
-            # Try to extract more detailed error from the exception
+            
+            # For httpx.HTTPStatusError, try to extract more details
             if isinstance(e, httpx.HTTPStatusError):
                 try:
                     if e.response:
                         error_detail = e.response.text
-                        if error_detail:
+                        if error_detail and error_detail not in error_msg:
                             error_msg = f"HTTP {e.response.status_code}: {error_detail[:500]}"
-                        else:
+                        elif not error_detail:
                             error_msg = f"HTTP {e.response.status_code}: {error_msg}"
                 except:
                     pass
+            elif isinstance(e, TableauAPIError):
+                # TableauAPIError already contains detailed message from Tableau server
+                # Just use the error message as-is
+                pass
             elif hasattr(e, 'response') and hasattr(e.response, 'text'):
                 try:
                     error_detail = e.response.text
-                    if error_detail:
+                    if error_detail and error_detail not in error_msg:
                         error_msg = f"{error_msg}: {error_detail[:500]}"
                 except:
                     pass

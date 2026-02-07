@@ -1814,14 +1814,60 @@ class TableauClient:
             timeout=self.timeout,
         )
         
-        # Log response details for debugging
+        # Extract error message from Tableau response if request failed
         if response.status_code != 200:
             logger.error(f"VDS API returned status {response.status_code}")
+            error_message = None
             try:
                 error_body = response.text
                 logger.error(f"Response body: {error_body}")
-            except Exception:
-                pass
+                
+                # Try to extract error message from response
+                # Tableau errors can be in various formats (JSON, XML, plain text)
+                try:
+                    # Try parsing as JSON first
+                    error_json = response.json()
+                    # Look for common error message fields
+                    if isinstance(error_json, dict):
+                        # Try multiple common error message locations in order of preference
+                        error_obj = error_json.get("error")
+                        if isinstance(error_obj, dict):
+                            error_message = error_obj.get("message") or error_obj.get("detail") or error_obj.get("error")
+                        elif isinstance(error_obj, str):
+                            error_message = error_obj
+                        else:
+                            error_message = None
+                        
+                        # Fallback to other common fields
+                        if not error_message:
+                            error_message = (
+                                error_json.get("message") or
+                                error_json.get("detail") or
+                                error_json.get("errorMessage") or
+                                error_json.get("error_message") or
+                                error_body
+                            )
+                    else:
+                        error_message = error_body
+                except (ValueError, json.JSONDecodeError):
+                    # Not JSON, use the raw error body
+                    # Could be XML or plain text - use as-is
+                    error_message = error_body
+                
+                # Clean up error message (limit length, remove excessive whitespace)
+                if error_message:
+                    error_message = error_message.strip()
+                    if len(error_message) > 1000:
+                        error_message = error_message[:1000] + "..."
+            except Exception as e:
+                logger.warning(f"Failed to extract error message: {e}")
+                error_message = f"HTTP {response.status_code}"
+            
+            # Raise TableauAPIError with detailed error message from Tableau
+            if error_message:
+                raise TableauAPIError(f"Tableau server error (HTTP {response.status_code}): {error_message}")
+            else:
+                raise TableauAPIError(f"Tableau server error: HTTP {response.status_code}")
         
         response.raise_for_status()
         response_data = response.json()
@@ -2018,6 +2064,12 @@ class TableauClient:
                     name
                     description
                     __typename
+                    ... on CalculatedField {
+                        formula
+                    }
+                    ... on TableCalculationField {
+                        formula
+                    }
                 }
             }
         }
@@ -2079,6 +2131,19 @@ class TableauClient:
                 field_info = {
                     "description": field.get("description"),
                 }
+                
+                # Extract formula if this is a calculated field
+                # Formula is available for CalculatedField types
+                # Also check aggregation property which may contain the formula
+                if "formula" in field:
+                    field_info["formula"] = field.get("formula")
+                elif "aggregation" in field:
+                    # Some calculated fields store formula in aggregation property
+                    aggregation_value = field.get("aggregation")
+                    if isinstance(aggregation_value, str):
+                        field_info["formula"] = aggregation_value
+                    elif isinstance(aggregation_value, dict) and "formula" in aggregation_value:
+                        field_info["formula"] = aggregation_value.get("formula")
                 
                 # Try to infer role from field type name (if available)
                 # Common patterns in Tableau Metadata API: MeasureField, DimensionField, CalculatedField, etc.

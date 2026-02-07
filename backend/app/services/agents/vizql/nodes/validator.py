@@ -126,6 +126,33 @@ async def validate_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                     error_msg = f"Invalid aggregation function '{func}' for field '{field_name}'. Valid: {', '.join(sorted(valid_aggs))}"
                     if error_msg not in errors:
                         errors.append(error_msg)
+                
+                # Check if field is a calculated field with aggregation in formula
+                # This check requires enriched schema, so skip if not available
+                if enriched_schema:
+                    field_lower = field_name.lower()
+                    field_map = enriched_schema.get("field_map", {})
+                    if field_lower in field_map:
+                        field_meta = field_map[field_lower]
+                        field_formula = field_meta.get("formula")
+                        if field_formula:
+                            # Check if formula contains aggregation functions
+                            import re
+                            aggregation_patterns = [
+                                r'\bSUM\s*\(', r'\bAVG\s*\(', r'\bAVERAGE\s*\(', r'\bCOUNT\s*\(', r'\bCOUNTD\s*\(',
+                                r'\bMIN\s*\(', r'\bMAX\s*\(', r'\bMEDIAN\s*\(', r'\bSTDEV\s*\(', r'\bVAR\s*\(',
+                            ]
+                            formula_upper = field_formula.upper()
+                            has_agg_in_formula = any(re.search(pattern, formula_upper) for pattern in aggregation_patterns)
+                            
+                            if has_agg_in_formula:
+                                error_msg = f"Field '{field_name}' is a calculated field that already contains aggregation in its formula. Remove the 'function' field - calculated fields with aggregation should be used directly."
+                                if error_msg not in errors:
+                                    errors.append(error_msg)
+                                    suggestions.append(
+                                        f"Remove function from '{field_name}': "
+                                        f"{{\"fieldCaption\": \"{field_name}\"}}"
+                                    )
         
         # Validate filters (basic check)
         for filter_obj in query.get("query", {}).get("filters", []):

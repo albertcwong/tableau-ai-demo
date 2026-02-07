@@ -140,6 +140,18 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error executing query: {e}", exc_info=True)
         
+        # Extract detailed error message
+        error_message = str(e)
+        # If it's a TableauAPIError, the message should already include Tableau server details
+        # For httpx errors, try to extract more details
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            try:
+                error_detail = e.response.text
+                if error_detail and error_detail not in error_message:
+                    error_message = f"{error_message}: {error_detail[:500]}"
+            except Exception:
+                pass
+        
         # Try to get cached result as fallback
         try:
             cache = get_cache()
@@ -153,7 +165,7 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                     **state,
                     "query_results": cached_result,
                     "execution_status": "success",
-                    "execution_errors": [f"Execution failed but using cached result: {str(e)}"],
+                    "execution_errors": [f"Execution failed but using cached result: {error_message}"],
                     "current_thought": f"Query execution failed, using cached result with {cached_result.get('row_count', 0)} rows"
                 }
         except Exception as cache_error:
@@ -162,6 +174,6 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         return {
             **state,
             "execution_status": "failed",
-            "execution_errors": [str(e)],
-            "error": f"Query execution failed: {str(e)}"
+            "execution_errors": [error_message],
+            "error": f"Query execution failed: {error_message}"
         }

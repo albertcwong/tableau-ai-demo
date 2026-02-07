@@ -1,6 +1,7 @@
 """Semantic constraint validation for VizQL queries."""
 import logging
 import difflib
+import re
 from typing import Dict, Any, List, Tuple, Optional
 
 from app.services.agents.vizql.semantic_rules import validate_aggregation_for_type
@@ -20,6 +21,43 @@ class VizQLConstraintValidator:
         """
         self.schema = enriched_schema
         self.field_map = enriched_schema.get("field_map", {})
+    
+    def _formula_has_aggregation(self, formula: Optional[str]) -> bool:
+        """
+        Check if a formula contains aggregation functions.
+        
+        Args:
+            formula: Formula string to check
+            
+        Returns:
+            True if formula contains aggregation functions
+        """
+        if not formula:
+            return False
+        
+        # Common aggregation functions in Tableau formulas
+        aggregation_patterns = [
+            r'\bSUM\s*\(',
+            r'\bAVG\s*\(',
+            r'\bAVERAGE\s*\(',
+            r'\bCOUNT\s*\(',
+            r'\bCOUNTD\s*\(',
+            r'\bMIN\s*\(',
+            r'\bMAX\s*\(',
+            r'\bMEDIAN\s*\(',
+            r'\bSTDEV\s*\(',
+            r'\bSTDEVP\s*\(',
+            r'\bVAR\s*\(',
+            r'\bVARP\s*\(',
+            r'\bAGG\s*\(',
+        ]
+        
+        formula_upper = formula.upper()
+        for pattern in aggregation_patterns:
+            if re.search(pattern, formula_upper):
+                return True
+        
+        return False
     
     def validate_query(self, query: Dict[str, Any]) -> Tuple[bool, List[str], List[str]]:
         """
@@ -53,8 +91,26 @@ class VizQLConstraintValidator:
                 errors.append("Field missing fieldCaption")
                 continue
             
-            # Skip schema validation for calculated fields
-            if "calculation" in field:
+            has_function = "function" in field
+            function_name = field.get("function", "").upper() if has_function else None
+            
+            # Check if this is a calculated field in the query
+            is_calculated_field = "calculation" in field
+            
+            # For calculated fields in query, check if calculation formula has aggregation
+            if is_calculated_field:
+                calculation_formula = field.get("calculation", "")
+                if self._formula_has_aggregation(calculation_formula):
+                    # Calculated field already has aggregation - should not have a function field
+                    if has_function:
+                        errors.append(
+                            f"Calculated field '{field_caption}' already contains aggregation in its formula. "
+                            f"Remove the 'function' field - calculated fields with aggregation should be used directly."
+                        )
+                        suggestions.append(
+                            f"Remove function from '{field_caption}': "
+                            f"{{\"fieldCaption\": \"{field_caption}\", \"calculation\": \"{calculation_formula}\"}}"
+                        )
                 continue
             
             field_lower = field_caption.lower()
@@ -71,10 +127,45 @@ class VizQLConstraintValidator:
                 continue
             
             field_meta = self.field_map[field_lower]
-            has_function = "function" in field
+            
+            # Check if this is an existing calculated field from schema that has aggregation in formula
+            field_formula = field_meta.get("formula")
+            has_aggregation_in_formula = False
+            
+            # Check if field has a formula with aggregation
+            if field_formula:
+                if self._formula_has_aggregation(field_formula):
+                    has_aggregation_in_formula = True
+                    # Existing calculated field already has aggregation - should not have a function field
+                    if has_function:
+                        errors.append(
+                            f"Field '{field_caption}' is a calculated field that already contains aggregation in its formula. "
+                            f"Remove the 'function' field - calculated fields with aggregation should be used directly."
+                        )
+                        suggestions.append(
+                            f"Remove function from '{field_caption}': "
+                            f"{{\"fieldCaption\": \"{field_caption}\"}}"
+                        )
+                        continue
+            else:
+                # Log when formula is missing for debugging (especially for calculated fields)
+                column_class = field_meta.get("columnClass", "")
+                if column_class in ["CALCULATION", "TABLE_CALCULATION"]:
+                    logger.debug(
+                        f"Field '{field_caption}' is a calculated field (columnClass={column_class}) "
+                        f"but formula is not available in enriched schema"
+                    )
+            
+            # Check if this is a calculated field (by columnClass)
+            # Calculated fields may already have aggregation in their formula, so skip aggregation requirement
+            column_class = field_meta.get("columnClass", "")
+            is_calculated_field = column_class in ["CALCULATION", "TABLE_CALCULATION"]
             
             # CRITICAL: Measures must have aggregation
-            if field_meta.get("fieldRole") == "MEASURE" and not has_function:
+            # BUT: Skip this check if:
+            # 1. The field already has aggregation in its formula, OR
+            # 2. The field is a calculated field (which may have aggregation even if formula not available)
+            if field_meta.get("fieldRole") == "MEASURE" and not has_function and not has_aggregation_in_formula and not is_calculated_field:
                 errors.append(
                     f"MEASURE field '{field_caption}' requires aggregation function"
                 )
