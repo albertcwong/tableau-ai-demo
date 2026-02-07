@@ -161,7 +161,7 @@ export function ChatInterface({
       let reasoningStepsText = '';
       let finalAnswerText = '';
       // Track steps by step_index to handle multiple steps from same node
-      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }> = [];
+      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any> }> = [];
       let reasoningStepIndex = 0;
       let storedVizqlQuery: Record<string, any> | null = null; // Store vizql_query from metadata
       let firstReasoningStepTime: number | null = null; // Track when first reasoning step arrives
@@ -226,7 +226,7 @@ export function ChatInterface({
               const finalTime = Date.now() - startTime;
               
               // Store finalized timings in a variable accessible throughout this function
-              let finalizedTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }> = [];
+              let finalizedTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any> }> = [];
               
               if (finalStepTimings.length > 0 && finalTime > 0) {
                 // Most durations should already be calculated correctly during streaming
@@ -398,6 +398,9 @@ export function ChatInterface({
                 const existingStep = finalStepTimings[existingStepIndex];
                 // Duration = completion time - start time
                 const stepDuration = elapsedTime - existingStep.startTime;
+                // Extract query_draft from metadata if available (for build_query steps)
+                const queryDraft = stepMetadata.query_draft || stepMetadata.vizql_query;
+                
                 finalStepTimings[existingStepIndex] = {
                   ...existingStep,
                   duration: Math.max(50, stepDuration),
@@ -407,6 +410,7 @@ export function ChatInterface({
                     completion: tokens.completion,
                     total: tokens.total
                   } : existingStep.tokens,
+                  queryDraft: queryDraft || existingStep.queryDraft,  // Update query_draft if available
                 };
               } else {
                 // New step - calculate when it started and its duration
@@ -436,6 +440,9 @@ export function ChatInterface({
                   stepDuration = elapsedTime - stepStartTime;
                 }
                 
+                // Extract query_draft from metadata if available (for build_query steps)
+                const queryDraft = stepMetadata.query_draft || stepMetadata.vizql_query;
+                
                 // Add new step with calculated start time and duration
                 // Don't enforce minimum duration here - it will be calculated when next step arrives
                 finalStepTimings.push({
@@ -450,6 +457,7 @@ export function ChatInterface({
                     completion: tokens.completion,
                     total: tokens.total
                   } : undefined,
+                  queryDraft: queryDraft,  // Include query_draft for build_query steps
                 });
               }
               

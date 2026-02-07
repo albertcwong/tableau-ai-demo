@@ -21,13 +21,14 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
     This is a "Reason" step in ReAct - reflect on errors and fix.
     """
     # Check max refinement attempts
-    # Allow up to 3 refinement attempts (query_version 1, 2, 3)
-    # After 3 refinements, query_version will be 4, so stop
+    # query_version starts at 1, so max_retries means we can have versions 1 through max_retries
+    # After max_retries refinements, query_version will be max_retries + 1, so stop
+    max_retries = settings.VIZQL_MAX_RETRIES
     query_version = state.get("query_version", 0)
-    if query_version >= 4:
+    if query_version >= max_retries + 1:
         return {
             **state,
-            "error": f"Max refinement attempts (3) reached. Errors: {state.get('validation_errors', [])}"
+            "error": f"Max refinement attempts ({max_retries}) reached. Errors: {state.get('validation_errors', [])}"
         }
     
     try:
@@ -46,30 +47,55 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         validation_errors = state.get("validation_errors", [])
         validation_suggestions = state.get("validation_suggestions", [])
         
+        # Check for execution errors (from Tableau API)
+        execution_error = state.get("execution_error")
+        tableau_error_message = state.get("tableau_error_message")
+        execution_error_query = state.get("execution_error_query")
+        
+        # If we have an execution error, use the failed query as the original query
+        # and add the Tableau error to the errors list
+        original_query = state.get("query_draft", {})
+        if execution_error_query:
+            original_query = execution_error_query
+            logger.info(f"Using execution_error_query as original_query for refinement")
+        
+        # Combine validation errors with execution errors
+        all_errors = list(validation_errors) if isinstance(validation_errors, list) else []
+        if execution_error:
+            error_msg = f"Query execution failed: {execution_error}"
+            if tableau_error_message and tableau_error_message != execution_error:
+                error_msg += f"\n\nTableau Server Error Details:\n{tableau_error_message}"
+            all_errors.append(error_msg)
+        
         # Ensure errors and suggestions are lists (not None or empty)
-        if not isinstance(validation_errors, list):
-            validation_errors = []
+        if not isinstance(all_errors, list):
+            all_errors = []
         if not isinstance(validation_suggestions, list):
             validation_suggestions = []
         
         # Log what we're sending to LLM for debugging
         logger.info(
             f"Refining query (attempt {query_version + 1}) with "
-            f"{len(validation_errors)} errors and {len(validation_suggestions)} suggestions"
+            f"{len(all_errors)} total errors ({len(validation_errors)} validation, {1 if execution_error else 0} execution) "
+            f"and {len(validation_suggestions)} suggestions"
         )
-        if validation_errors:
-            logger.info(f"Validation errors: {validation_errors}")
+        if all_errors:
+            logger.info(f"All errors: {all_errors}")
         if validation_suggestions:
             logger.info(f"Validation suggestions: {validation_suggestions}")
+        if tableau_error_message:
+            logger.info(f"Tableau error message: {tableau_error_message[:200]}...")
         
         system_prompt = prompt_registry.get_prompt(
             "agents/vizql/query_refinement.txt",
             variables={
-                "original_query": json.dumps(state.get("query_draft", {}), indent=2),
-                "errors": validation_errors,  # Pass as list for template to loop
+                "original_query": json.dumps(original_query, indent=2),
+                "errors": all_errors,  # Pass combined errors as list for template to loop
                 "suggestions": validation_suggestions,  # Pass as list for template to loop
                 "schema": schema_context,
-                "user_query": state.get("user_query", "")
+                "user_query": state.get("user_query", ""),
+                "has_execution_error": bool(execution_error),
+                "tableau_error": tableau_error_message or ""
             }
         )
         
@@ -95,9 +121,11 @@ async def refine_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         )
         
         # Build user message with explicit instruction
-        user_message = "Fix the query based on the validation errors and suggestions provided above. Apply ALL fixes."
-        if validation_errors:
-            user_message += f"\n\nThere are {len(validation_errors)} error(s) to fix."
+        user_message = "Fix the query based on the errors and suggestions provided above. Apply ALL fixes."
+        if all_errors:
+            user_message += f"\n\nThere are {len(all_errors)} error(s) to fix."
+            if execution_error:
+                user_message += "\n\n⚠️ CRITICAL: This query failed when executed against Tableau Server. Check the Tableau Server Error Details above to understand what went wrong."
         if validation_suggestions:
             user_message += f"\n\nThere are {len(validation_suggestions)} suggestion(s) to follow."
         

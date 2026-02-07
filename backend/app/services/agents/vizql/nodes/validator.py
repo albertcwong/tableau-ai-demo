@@ -155,8 +155,94 @@ async def validate_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                                     )
         
         # Validate filters (basic check)
-        for filter_obj in query.get("query", {}).get("filters", []):
-            filter_field = filter_obj.get("fieldCaption")
+        filters = query.get("query", {}).get("filters", [])
+        for i, filter_obj in enumerate(filters):
+            # CRITICAL: All filters MUST have "filterType" property
+            if "filterType" not in filter_obj:
+                error_msg = f"Filter at index {i} is missing required 'filterType' property. All filters must have a 'filterType' property."
+                if error_msg not in errors:
+                    errors.append(error_msg)
+                    suggestions.append(
+                        f"Add 'filterType' property to filter: "
+                        f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"SET\"}}"
+                    )
+                continue
+            
+            filter_type = filter_obj.get("filterType", "")
+            
+            # QUANTITATIVE_NUMERICAL filters require "field" property (like other filters)
+            if filter_type == "QUANTITATIVE_NUMERICAL":
+                # QUANTITATIVE_NUMERICAL filters must have "field" property
+                if "field" not in filter_obj:
+                    error_msg = f"QUANTITATIVE_NUMERICAL filter at index {i} is missing required 'field' property. All filters must have a 'field' property."
+                    if error_msg not in errors:
+                        errors.append(error_msg)
+                        suggestions.append(
+                            f"Add 'field' property to QUANTITATIVE_NUMERICAL filter: "
+                            f"{{\"field\": {{\"fieldCaption\": \"MeasureName\"}}, \"filterType\": \"QUANTITATIVE_NUMERICAL\", \"quantitativeFilterType\": \"MIN\", \"min\": 1000}}"
+                        )
+                    continue
+                
+                # Extract field caption from filter
+                filter_field_obj = filter_obj.get("field", {})
+                filter_field = None
+                
+                if isinstance(filter_field_obj, dict):
+                    filter_field = filter_field_obj.get("fieldCaption")
+                elif isinstance(filter_field_obj, str):
+                    filter_field = filter_field_obj
+                
+                if filter_field:
+                    filter_field_lower = filter_field.lower()
+                    if filter_field_lower not in schema_fields:
+                        if f"QUANTITATIVE_NUMERICAL filter field '{filter_field}' not found in schema" not in errors:
+                            errors.append(f"QUANTITATIVE_NUMERICAL filter field '{filter_field}' not found in schema")
+                            close_matches_lower = difflib.get_close_matches(filter_field_lower, schema_fields.keys(), n=3, cutoff=0.4)
+                            
+                            if not close_matches_lower:
+                                for schema_field_lower in schema_fields.keys():
+                                    if filter_field_lower in schema_field_lower or schema_field_lower in filter_field_lower:
+                                        close_matches_lower.append(schema_field_lower)
+                                        if len(close_matches_lower) >= 3:
+                                            break
+                            
+                            if close_matches_lower:
+                                original_names = [schema_fields[match].get("name", match.title()) for match in close_matches_lower[:3]]
+                                suggestions.append(f"QUANTITATIVE_NUMERICAL filter field '{filter_field}' not found. Did you mean: {', '.join(original_names)}?")
+                else:
+                    # Field exists but doesn't have fieldCaption
+                    error_msg = f"QUANTITATIVE_NUMERICAL filter at index {i} has 'field' property but it's missing 'fieldCaption'. Field should be: {{\"fieldCaption\": \"FieldName\"}}"
+                    if error_msg not in errors:
+                        errors.append(error_msg)
+                        suggestions.append(
+                            f"Fix QUANTITATIVE_NUMERICAL filter field structure: "
+                            f"{{\"field\": {{\"fieldCaption\": \"MeasureName\"}}, \"filterType\": \"QUANTITATIVE_NUMERICAL\", \"quantitativeFilterType\": \"{filter_obj.get('quantitativeFilterType', 'MIN')}\", \"min\": {filter_obj.get('min', 1000)}}}"
+                        )
+                continue
+            
+            # All filter types require "field" property
+            if "field" not in filter_obj:
+                error_msg = f"Filter at index {i} (type: {filter_type}) is missing required 'field' property. All filters must have a 'field' property."
+                if error_msg not in errors:
+                    errors.append(error_msg)
+                    suggestions.append(
+                        f"Add 'field' property to filter: "
+                        f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"{filter_type}\"}}"
+                    )
+                continue
+            
+            # Extract field caption from filter
+            filter_field_obj = filter_obj.get("field", {})
+            filter_field = None
+            
+            if isinstance(filter_field_obj, dict):
+                filter_field = filter_field_obj.get("fieldCaption")
+            elif isinstance(filter_field_obj, str):
+                filter_field = filter_field_obj
+            else:
+                # Fallback: check if fieldCaption is directly on filter object
+                filter_field = filter_obj.get("fieldCaption")
+            
             if filter_field:
                 filter_field_lower = filter_field.lower()
                 if filter_field_lower not in schema_fields:
@@ -174,6 +260,15 @@ async def validate_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                         if close_matches_lower:
                             original_names = [schema_fields[match].get("name", match.title()) for match in close_matches_lower[:3]]
                             suggestions.append(f"Filter field '{filter_field}' not found. Did you mean: {', '.join(original_names)}?")
+            else:
+                # Field exists but doesn't have fieldCaption
+                error_msg = f"Filter at index {i} has 'field' property but it's missing 'fieldCaption'. Field should be: {{\"fieldCaption\": \"FieldName\"}}"
+                if error_msg not in errors:
+                    errors.append(error_msg)
+                    suggestions.append(
+                        f"Fix filter field structure: "
+                        f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"{filter_type}\"}}"
+                    )
     
     is_valid = len(errors) == 0
     

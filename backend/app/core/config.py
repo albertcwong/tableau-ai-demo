@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     
     # VizQL Agent
     VIZQL_AGENT_TYPE: str = "tool_use"  # "tool_use", "graph_based", "controlled", or "streamlined"
+    VIZQL_MAX_BUILD_RETRIES: int = 3  # Maximum number of query build/refinement attempts (default: 3)
+    VIZQL_MAX_EXECUTION_RETRIES: int = 3  # Maximum number of execution retry attempts (default: 3)
     
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE) if ENV_FILE.exists() else ".env",

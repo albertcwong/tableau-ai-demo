@@ -136,6 +136,9 @@ async def execute_query_node(state: VizQLAgentState) -> Dict[str, Any]:
             **state,
             "query_results": results,
             "execution_error": None,
+            "execution_error_query": None,  # Clear failed query on success
+            "tableau_error_message": None,  # Clear error message on success
+            "error": None,  # Clear general error on success
             "current_thought": f"Query executed successfully. Retrieved {row_count} rows",
             "tool_calls": state.get("tool_calls", []) + [{
                 "tool": "execute_vds_query",
@@ -176,9 +179,24 @@ async def execute_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 }
         except Exception as cache_error:
             logger.warning(f"Failed to get cached result: {cache_error}")
+        # Extract detailed Tableau error message if available
+        tableau_error = error_message
+        if isinstance(e, TableauAPIError):
+            # TableauAPIError already contains detailed message from Tableau server
+            tableau_error = str(e)
+        elif hasattr(e, 'response') and hasattr(e.response, 'text'):
+            try:
+                error_detail = e.response.text
+                if error_detail:
+                    tableau_error = error_detail[:1000]  # Limit length
+            except Exception:
+                pass
+        
         return {
             **state,
             "execution_error": error_message,
+            "execution_error_query": query,  # Store the query that failed
+            "tableau_error_message": tableau_error,  # Store detailed Tableau error
             "error": f"Query execution failed: {error_message}",
             "tool_calls": state.get("tool_calls", []) + [{
                 "tool": "execute_vds_query",

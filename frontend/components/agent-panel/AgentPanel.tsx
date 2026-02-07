@@ -25,13 +25,15 @@ interface AgentPanelProps {
   onContextChange?: (context: ChatContextObject[]) => void;
   onWidthChange?: (width: number) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
+  selectedDatasource?: { id: string; name: string } | null;
+  onActiveThreadChange?: (threadId: number | null) => void;
 }
 
 const MIN_WIDTH = 384; // w-96 equivalent
 const MAX_WIDTH = 1200; // Maximum width
 const DEFAULT_WIDTH = 384;
 
-export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery }: AgentPanelProps) {
+export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange }: AgentPanelProps) {
   const [agentType, setAgentType] = useState<AgentType>('general');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
@@ -54,6 +56,11 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
       loadContext(activeThreadId);
     }
   }, [activeThreadId]);
+
+  // Notify parent of active thread changes separately to avoid infinite loops
+  useEffect(() => {
+    onActiveThreadChange?.(activeThreadId);
+  }, [activeThreadId, onActiveThreadChange]);
 
   const loadThreads = async () => {
     try {
@@ -88,6 +95,24 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
       setActiveThreadId(newThread.id);
       // Reload context for the new thread (will be empty initially)
       setContext([]);
+      
+      // Automatically add selected datasource to context if one is open
+      if (selectedDatasource) {
+        try {
+          const obj = await chatContextApi.addContext({
+            conversation_id: newThread.id,
+            object_id: selectedDatasource.id,
+            object_type: 'datasource',
+            object_name: selectedDatasource.name,
+          });
+          setContext([obj]);
+          onContextChange?.([obj]);
+          onAddToContext?.(selectedDatasource.id, 'datasource');
+        } catch (err) {
+          console.error('Failed to add datasource to context:', err);
+          // Don't fail thread creation if context add fails
+        }
+      }
     } catch (err) {
       console.error('Failed to create thread:', err);
     }

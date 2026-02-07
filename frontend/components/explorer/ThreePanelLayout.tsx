@@ -32,13 +32,15 @@ interface ThreePanelLayoutProps {
   onAddToContext?: (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void;
   contextObjects?: Array<{ object_id: string; object_type: 'datasource' | 'view' }>;
   onLoadQueryRef?: React.MutableRefObject<((datasourceId: string, query: Record<string, any>) => void) | null>;
+  onDatasourceSelect?: (datasource: TableauDatasource | null) => void;
+  activeThreadId?: number | null;
 }
 
 const MIN_LEFT_PANEL_WIDTH = 250;
 const MAX_LEFT_PANEL_WIDTH = 600;
 const DEFAULT_LEFT_PANEL_WIDTH = 320;
 
-export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef }: ThreePanelLayoutProps) {
+export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onDatasourceSelect, activeThreadId }: ThreePanelLayoutProps) {
   const [allDatasources, setAllDatasources] = useState<TableauDatasource[]>([]);
   const [allWorkbooks, setAllWorkbooks] = useState<TableauWorkbook[]>([]);
   const [expandedWorkbooks, setExpandedWorkbooks] = useState<Set<string>>(new Set());
@@ -231,6 +233,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     if (!connected) {
       setSelectedObject(null);
       setError(null);
+      onDatasourceSelect?.(null);
     }
   };
 
@@ -266,6 +269,18 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
 
   const handleSelectDatasource = (datasource: TableauDatasource) => {
     setSelectedObject({ type: 'datasource', data: datasource });
+    onDatasourceSelect?.(datasource);
+    
+    // Automatically add to context if there's an active thread and datasource is not already in context
+    if (activeThreadId && onAddToContext) {
+      const isInContext = contextObjects.some(
+        (ctx) => ctx.object_id === datasource.id && ctx.object_type === 'datasource'
+      );
+      
+      if (!isInContext) {
+        onAddToContext(datasource.id, 'datasource', datasource.name);
+      }
+    }
   };
 
   // Expose function to programmatically select datasource and load query

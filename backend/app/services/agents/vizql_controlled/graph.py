@@ -10,6 +10,7 @@ from app.services.agents.vizql_controlled.nodes.validate_query import validate_q
 from app.services.agents.vizql_controlled.nodes.execute_query import execute_query_node
 from app.services.agents.vizql_controlled.nodes.summarize import summarize_node
 from app.services.agents.vizql_controlled.nodes.error_handler import error_handler_node
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,11 @@ def route_after_validation(state: VizQLGraphState) -> str:
     """Route after query validation."""
     validation_status = state.get("validation_status")
     attempt = state.get("attempt", 1)
+    max_retries = settings.VIZQL_MAX_RETRIES
     
     if validation_status == "valid":
         return "execute"
-    elif attempt < 3:
+    elif attempt <= max_retries:
         return "retry"
     return "error"
 
@@ -37,10 +39,11 @@ def route_after_execution(state: VizQLGraphState) -> str:
     """Route after query execution."""
     execution_status = state.get("execution_status")
     attempt = state.get("attempt", 1)
+    max_retries = settings.VIZQL_MAX_RETRIES
     
     if execution_status == "success":
         return "summarize"
-    elif attempt < 3:
+    elif attempt <= max_retries:
         # Check error type - only retry syntax errors, not auth/timeout
         if state.get("auth_error") or state.get("timeout_error"):
             return "error"

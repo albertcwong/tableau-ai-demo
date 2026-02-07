@@ -59,6 +59,82 @@ class VizQLConstraintValidator:
         
         return False
     
+    def _has_nested_aggregations(self, formula: Optional[str]) -> bool:
+        """
+        Check if a formula contains nested aggregations (aggregation on top of aggregation).
+        
+        Examples of nested aggregations (INVALID):
+        - AVG(SUM([Sales]))
+        - COUNTD(SUM([Sales]))
+        - SUM(AVG([Sales]))
+        
+        Args:
+            formula: Formula string to check
+            
+        Returns:
+            True if formula contains nested aggregations
+        """
+        if not formula:
+            return False
+        
+        formula_upper = formula.upper()
+        
+        # Aggregation function patterns
+        agg_functions = [
+            r'\bSUM\s*\(',
+            r'\bAVG\s*\(',
+            r'\bAVERAGE\s*\(',
+            r'\bCOUNT\s*\(',
+            r'\bCOUNTD\s*\(',
+            r'\bMIN\s*\(',
+            r'\bMAX\s*\(',
+            r'\bMEDIAN\s*\(',
+            r'\bSTDEV\s*\(',
+            r'\bSTDEVP\s*\(',
+            r'\bVAR\s*\(',
+            r'\bVARP\s*\(',
+            r'\bAGG\s*\(',
+        ]
+        
+        # Pattern to match aggregation function followed by another aggregation function
+        # This matches patterns like: AVG(SUM(...)) or COUNTD(IF ... SUM(...) ...)
+        # We look for an aggregation function, then check if there's another aggregation inside its parentheses
+        
+        for outer_agg in agg_functions:
+            # Find all matches of outer aggregation
+            for match in re.finditer(outer_agg, formula_upper):
+                start_pos = match.end() - 1  # Position of opening parenthesis
+                
+                # Find the matching closing parenthesis
+                paren_count = 0
+                i = start_pos
+                found_inner = False
+                
+                while i < len(formula_upper):
+                    if formula_upper[i] == '(':
+                        paren_count += 1
+                    elif formula_upper[i] == ')':
+                        paren_count -= 1
+                        if paren_count == 0:
+                            # Found matching closing paren
+                            break
+                    
+                    # Check if there's an inner aggregation function
+                    if paren_count > 0:  # Inside the outer aggregation's parentheses
+                        for inner_agg in agg_functions:
+                            if re.match(inner_agg, formula_upper[i:]):
+                                found_inner = True
+                                break
+                    
+                    if found_inner:
+                        break
+                    i += 1
+                
+                if found_inner:
+                    return True
+        
+        return False
+    
     def validate_query(self, query: Dict[str, Any]) -> Tuple[bool, List[str], List[str]]:
         """
         Validate query semantics.
@@ -100,6 +176,19 @@ class VizQLConstraintValidator:
             # For calculated fields in query, check if calculation formula has aggregation
             if is_calculated_field:
                 calculation_formula = field.get("calculation", "")
+                
+                # Check for nested aggregations (aggregation on top of aggregation)
+                if self._has_nested_aggregations(calculation_formula):
+                    errors.append(
+                        f"Calculated field '{field_caption}' contains nested aggregations (e.g., AVG(SUM(...))). "
+                        f"Aggregations cannot be applied on top of aggregations. "
+                        f"Formula: {calculation_formula[:200]}"
+                    )
+                    suggestions.append(
+                        f"Refactor the calculation to avoid nested aggregations. "
+                        f"Use FIXED level-of-detail expressions or restructure the calculation."
+                    )
+                
                 if self._formula_has_aggregation(calculation_formula):
                     # Calculated field already has aggregation - should not have a function field
                     if has_function:
@@ -200,9 +289,89 @@ class VizQLConstraintValidator:
         
         # Validate filters
         filters = query_obj.get("filters", [])
-        for filter_obj in filters:
+        for i, filter_obj in enumerate(filters):
+            # CRITICAL: All filters MUST have "filterType" property
+            if "filterType" not in filter_obj:
+                errors.append(
+                    f"Filter at index {i} is missing required 'filterType' property. "
+                    f"All filters must have a 'filterType' property."
+                )
+                suggestions.append(
+                    f"Add 'filterType' property to filter: "
+                    f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"SET\"}}"
+                )
+                continue
+            
+            filter_type = filter_obj.get("filterType", "")
+            
+            # QUANTITATIVE_NUMERICAL filters require "field" property (like other filters)
+            if filter_type == "QUANTITATIVE_NUMERICAL":
+                # QUANTITATIVE_NUMERICAL filters must have "field" property
+                if "field" not in filter_obj:
+                    errors.append(
+                        f"QUANTITATIVE_NUMERICAL filter at index {i} is missing required 'field' property. "
+                        f"All filters must have a 'field' property."
+                    )
+                    suggestions.append(
+                        f"Add 'field' property to QUANTITATIVE_NUMERICAL filter: "
+                        f"{{\"field\": {{\"fieldCaption\": \"MeasureName\", \"function\": \"SUM\"}}, \"filterType\": \"QUANTITATIVE_NUMERICAL\", \"quantitativeFilterType\": \"MIN\", \"min\": 1000}}"
+                    )
+                    continue
+                
+                # Validate field structure
+                filter_field = filter_obj.get("field", {})
+                filter_caption = None
+                
+                if isinstance(filter_field, dict):
+                    filter_caption = filter_field.get("fieldCaption")
+                elif isinstance(filter_field, str):
+                    filter_caption = filter_field
+                
+                if filter_caption:
+                    filter_lower = filter_caption.lower()
+                    if filter_lower not in self.field_map:
+                        errors.append(f"QUANTITATIVE_NUMERICAL filter field '{filter_caption}' not found in schema")
+                        close_matches = self._find_close_matches(filter_caption)
+                        if close_matches:
+                            suggestions.append(
+                                f"QUANTITATIVE_NUMERICAL filter field '{filter_caption}' not found. Did you mean: {', '.join(close_matches)}?"
+                            )
+                else:
+                    # Field exists but doesn't have fieldCaption
+                    errors.append(
+                        f"QUANTITATIVE_NUMERICAL filter at index {i} has 'field' property but it's missing 'fieldCaption'. "
+                        f"Field should be: {{\"fieldCaption\": \"FieldName\"}}"
+                    )
+                    suggestions.append(
+                        f"Fix QUANTITATIVE_NUMERICAL filter field structure: "
+                        f"{{\"field\": {{\"fieldCaption\": \"MeasureName\"}}, \"filterType\": \"QUANTITATIVE_NUMERICAL\", \"quantitativeFilterType\": \"{filter_obj.get('quantitativeFilterType', 'MIN')}\", \"min\": {filter_obj.get('min', 1000)}}}"
+                    )
+                continue
+            
+            # All filter types require "field" property
+            if "field" not in filter_obj:
+                errors.append(
+                    f"Filter at index {i} (type: {filter_type}) is missing required 'field' property. "
+                    f"All filters must have a 'field' property."
+                )
+                suggestions.append(
+                    f"Add 'field' property to filter: "
+                    f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"{filter_type}\"}}"
+                )
+                continue
+            
+            # Extract field caption from filter
             filter_field = filter_obj.get("field", {})
-            filter_caption = filter_field.get("fieldCaption") if isinstance(filter_field, dict) else filter_obj.get("fieldCaption")
+            filter_caption = None
+            
+            if isinstance(filter_field, dict):
+                filter_caption = filter_field.get("fieldCaption")
+            elif isinstance(filter_field, str):
+                # Handle case where field is a string (should be fieldCaption)
+                filter_caption = filter_field
+            else:
+                # Fallback: check if fieldCaption is directly on filter object
+                filter_caption = filter_obj.get("fieldCaption")
             
             if filter_caption:
                 filter_lower = filter_caption.lower()
@@ -213,6 +382,16 @@ class VizQLConstraintValidator:
                         suggestions.append(
                             f"Filter field '{filter_caption}' not found. Did you mean: {', '.join(close_matches)}?"
                         )
+            else:
+                # Field exists but doesn't have fieldCaption
+                errors.append(
+                    f"Filter at index {i} has 'field' property but it's missing 'fieldCaption'. "
+                    f"Field should be: {{\"fieldCaption\": \"FieldName\"}}"
+                )
+                suggestions.append(
+                    f"Fix filter field structure: "
+                    f"{{\"field\": {{\"fieldCaption\": \"FieldName\"}}, \"filterType\": \"{filter_type}\"}}"
+                )
         
         is_valid = len(errors) == 0
         

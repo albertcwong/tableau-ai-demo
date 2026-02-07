@@ -39,8 +39,13 @@ class StreamlinedVizQLState(BaseAgentState):
     previous_results: Optional[Dict[str, Any]]
     
     # Control Flow
-    attempt: int  # 1, 2, or 3 (defaults to 1)
+    build_attempt: int  # Track query build/refinement attempts (configurable via VIZQL_MAX_BUILD_RETRIES, defaults to 1)
+    execution_attempt: int  # Track execution attempts (configurable via VIZQL_MAX_EXECUTION_RETRIES, defaults to 1)
     query_version: int  # Track refinement iterations (defaults to 0)
+    
+    # Error Tracking (separate build vs execution errors)
+    build_errors: Optional[List[str]]  # Errors from query building/validation
+    execution_errors: Optional[List[str]]  # Errors from query execution
     
     # Reasoning Capture (NEW)
     reasoning_steps: Optional[List[Dict[str, Any]]]  # Capture all reasoning including format

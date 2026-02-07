@@ -1,6 +1,7 @@
 """Executor node for executing VizQL queries."""
 import logging
 from typing import Dict, Any
+from datetime import datetime
 
 from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.tableau.client import TableauClient, TableauAPIError
@@ -89,10 +90,12 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
     
     if not query:
         logger.error("No query to execute")
+        execution_attempt = state.get("execution_attempt", 1)
         return {
             **state,
             "execution_status": "failed",
             "execution_errors": ["No query to execute"],
+            "execution_attempt": execution_attempt,
             "error": "No query to execute"
         }
     
@@ -105,10 +108,12 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         
         if not datasource_id:
             logger.error("Missing datasource LUID in query")
+            execution_attempt = state.get("execution_attempt", 1)
             return {
                 **state,
                 "execution_status": "failed",
                 "execution_errors": ["Missing datasource LUID in query"],
+                "execution_attempt": execution_attempt,
                 "error": "Missing datasource LUID in query"
             }
         
@@ -124,6 +129,18 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         if optimized_query != query:
             logger.info("Query optimized for large dataset")
         
+        # Track execution attempt
+        execution_attempt = state.get("execution_attempt", 1)
+        
+        # Track execution attempt in reasoning steps
+        reasoning_steps = state.get("reasoning_steps", [])
+        reasoning_steps.append({
+            "node": "execute_query",
+            "timestamp": datetime.utcnow().isoformat(),
+            "thought": f"Executing query for datasource: {datasource_id}",
+            "execution_attempt": execution_attempt
+        })
+        
         # Execute query with retry and caching
         results = await _execute_query_with_retry(tableau_client, optimized_query)
         
@@ -135,10 +152,25 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             "query_results": results,
             "execution_status": "success",
             "execution_errors": None,
+            "execution_attempt": execution_attempt,
+            "reasoning_steps": reasoning_steps,
             "current_thought": f"Query executed successfully. Retrieved {row_count} rows"
         }
     except Exception as e:
         logger.error(f"Error executing query: {e}", exc_info=True)
+        
+        # Track execution attempt
+        execution_attempt = state.get("execution_attempt", 1)
+        
+        # Track execution attempt in reasoning steps (even on failure)
+        reasoning_steps = state.get("reasoning_steps", [])
+        reasoning_steps.append({
+            "node": "execute_query",
+            "timestamp": datetime.utcnow().isoformat(),
+            "thought": f"Query execution failed: {str(e)[:100]}",
+            "execution_attempt": execution_attempt,
+            "error": True
+        })
         
         # Extract detailed error message
         error_message = str(e)
@@ -175,5 +207,7 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             **state,
             "execution_status": "failed",
             "execution_errors": [error_message],
+            "execution_attempt": execution_attempt,
+            "reasoning_steps": reasoning_steps,
             "error": f"Query execution failed: {error_message}"
         }

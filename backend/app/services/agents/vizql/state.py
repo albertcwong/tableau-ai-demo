@@ -26,7 +26,7 @@ class VizQLAgentState(BaseAgentState):
     
     # Query construction
     query_draft: Optional[dict]
-    query_version: int  # Track refinement iterations (max 3)
+    query_version: int  # Track refinement iterations (configurable via VIZQL_MAX_RETRIES)
     
     # Validation
     is_valid: bool
@@ -36,6 +36,8 @@ class VizQLAgentState(BaseAgentState):
     # Execution
     query_results: Optional[dict]
     execution_error: Optional[str]
+    execution_error_query: Optional[dict]  # Store the query that caused the execution error
+    tableau_error_message: Optional[str]  # Detailed error message from Tableau server
     previous_results: Optional[dict]  # Store previous query results for reformatting
     
     # Schema query handling

@@ -661,7 +661,7 @@ async def send_message(
                     "message_history": message_history,
                     "api_key": api_key,
                     "model": request.model,
-                    "attempt": 1,
+                    "attempt": 1,  # Controlled agent still uses attempt
                     "current_thought": None,
                 }
             elif use_streamlined:
@@ -695,9 +695,12 @@ async def send_message(
                     "processing_time": None,
                     "api_key": api_key,
                     "model": request.model,
-                    "attempt": 1,
+                    "build_attempt": 1,
+                    "execution_attempt": 1,
                     "query_version": 0,
                     "reasoning_steps": [],
+                    "build_errors": None,
+                    "execution_errors": None,
                     "enriched_schema": None,  # Optional - can be pre-fetched
                     "schema": None,  # Will be fetched if needed
                 }
@@ -826,13 +829,30 @@ async def send_message(
                                 # Only stream one step per node (from current_thought), not individual tool calls
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
-                                    # Only stream if it's different from what we've already sent for this node
-                                    node_thought_key = f"{node_name}_thought"
+                                    
+                                    # For build_query node, use build_attempt to create unique key (allow multiple builds)
+                                    # For other nodes, use node name to prevent duplicates
+                                    if node_name == "build_query":
+                                        build_attempt = node_state.get("build_attempt", 1)
+                                        node_thought_key = f"{node_name}_thought_attempt_{build_attempt}"
+                                    else:
+                                        node_thought_key = f"{node_name}_thought"
+                                    
                                     if node_thought_key not in stream_graph._streamed_node_thoughts:
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         
-                                        # Extract step metadata if available (tool calls, tokens)
+                                        # Extract step metadata if available (tool calls, tokens, query_draft)
                                         step_metadata = node_state.get("step_metadata", {})
+                                        
+                                        # For build_query node, always include query_draft in metadata (even if None)
+                                        if node_name == "build_query":
+                                            if not step_metadata:
+                                                step_metadata = {}
+                                            # Include query_draft if available (even if build failed)
+                                            if "query_draft" in node_state:
+                                                step_metadata["query_draft"] = node_state.get("query_draft")
+                                            # Include build_attempt for tracking
+                                            step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
                                         
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
@@ -1440,13 +1460,30 @@ async def send_message(
                                 # Only stream one step per node (from current_thought), not individual tool calls
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
-                                    # Only stream if it's different from what we've already sent for this node
-                                    node_thought_key = f"{node_name}_thought"
+                                    
+                                    # For build_query node, use build_attempt to create unique key (allow multiple builds)
+                                    # For other nodes, use node name to prevent duplicates
+                                    if node_name == "build_query":
+                                        build_attempt = node_state.get("build_attempt", 1)
+                                        node_thought_key = f"{node_name}_thought_attempt_{build_attempt}"
+                                    else:
+                                        node_thought_key = f"{node_name}_thought"
+                                    
                                     if node_thought_key not in stream_graph._streamed_node_thoughts:
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         
-                                        # Extract step metadata if available (tool calls, tokens)
+                                        # Extract step metadata if available (tool calls, tokens, query_draft)
                                         step_metadata = node_state.get("step_metadata", {})
+                                        
+                                        # For build_query node, always include query_draft in metadata (even if None)
+                                        if node_name == "build_query":
+                                            if not step_metadata:
+                                                step_metadata = {}
+                                            # Include query_draft if available (even if build failed)
+                                            if "query_draft" in node_state:
+                                                step_metadata["query_draft"] = node_state.get("query_draft")
+                                            # Include build_attempt for tracking
+                                            step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
                                         
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",

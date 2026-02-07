@@ -505,11 +505,28 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
     """
     try:
         datasource_ids = state.get("context_datasources", [])
+        build_attempt = state.get("build_attempt", 1)
+        execution_attempt = state.get("execution_attempt", 1)
         if not datasource_ids:
+            reasoning_steps = state.get("reasoning_steps", [])
+            reasoning_steps.append({
+                "node": "build_query",
+                "timestamp": datetime.utcnow().isoformat(),
+                "action": "error",
+                "error": "No datasource ID available."
+            })
             return {
                 **state,
                 "error": "No datasource ID available.",
-                "query_draft": None
+                "query_draft": None,
+                "build_attempt": build_attempt,
+                "execution_attempt": execution_attempt,
+                "reasoning_steps": reasoning_steps,
+                "current_thought": f"Build attempt {build_attempt} failed: No datasource ID available.",
+                "step_metadata": {
+                    "build_attempt": build_attempt,
+                    "query_draft": None
+                }
             }
         
         datasource_id = datasource_ids[0]
@@ -517,13 +534,24 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         message_history = state.get("messages", [])
         enriched_schema = state.get("enriched_schema")
         schema = state.get("schema")
-        attempt = state.get("attempt", 1)
         validation_errors = state.get("validation_errors", [])
+        build_errors = state.get("build_errors", [])
         execution_errors = state.get("execution_errors", [])
         
-        # Increment attempt if this is a retry
-        if validation_errors or execution_errors:
-            attempt = attempt + 1
+        # If we're retrying after execution failure, reset build_attempt to start fresh
+        # and increment execution_attempt
+        # IMPORTANT: Also clear the error field so validation routing works correctly
+        should_clear_error = False
+        if execution_errors and not validation_errors and not build_errors:
+            build_attempt = 1  # Reset build retry count for fresh build attempt
+            execution_attempt = state.get("execution_attempt", 1) + 1
+            should_clear_error = True  # Clear error from previous execution
+        else:
+            execution_attempt = state.get("execution_attempt", 1)
+        
+        # Increment build_attempt if this is a retry due to validation/build errors
+        if validation_errors or build_errors:
+            build_attempt = build_attempt + 1
         
         # Initialize reasoning steps
         reasoning_steps = state.get("reasoning_steps", [])
@@ -531,7 +559,7 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             "node": "build_query",
             "timestamp": datetime.utcnow().isoformat(),
             "thought": f"Building query for: {user_query}",
-            "attempt": attempt
+            "build_attempt": build_attempt
         })
         
         # Get API key and model
@@ -544,7 +572,14 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 **state,
                 "error": "Failed to build query: Authorization header required",
                 "query_draft": None,
-                "reasoning_steps": reasoning_steps
+                "build_attempt": build_attempt,
+                "execution_attempt": execution_attempt,
+                "reasoning_steps": reasoning_steps,
+                "current_thought": f"Build attempt {build_attempt} failed: Authorization header required",
+                "step_metadata": {
+                    "build_attempt": build_attempt,
+                    "query_draft": None
+                }
             }
         
         # Step 1: Extract context from conversation history
@@ -779,9 +814,11 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             }
         
         # Add retry context if this is a retry
-        if attempt > 1:
+        if build_attempt > 1 or execution_attempt > 1:
             retry_context = "\n\n## Previous Attempt Failed\n"
-            if validation_errors:
+            if build_errors:
+                retry_context += f"Build/Validation Errors:\n" + "\n".join(f"- {e}" for e in build_errors) + "\n"
+            elif validation_errors:
                 retry_context += f"Validation Errors:\n" + "\n".join(f"- {e}" for e in validation_errors) + "\n"
             if execution_errors:
                 retry_context += f"Execution Errors:\n" + "\n".join(f"- {e}" for e in execution_errors) + "\n"
@@ -1053,7 +1090,7 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 "fields_count": len(query_draft.get("query", {}).get("fields", []))
             })
             
-            return {
+            result = {
                 **state,
                 "query_draft": query_draft,
                 "query_version": query_version,
@@ -1062,13 +1099,25 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 "query_reused": prior_query_result is not None,
                 "reasoning": response.content,
                 "reasoning_steps": reasoning_steps,
-                "attempt": attempt,  # Include updated attempt
-                "current_thought": f"Built query version {query_version} with {len(query_draft.get('query', {}).get('fields', []))} fields",
+                "build_attempt": build_attempt,  # Include updated build_attempt
+                "execution_attempt": execution_attempt,  # Include execution_attempt (may be incremented if retrying after execution failure)
+                "build_errors": None,  # Clear build errors on successful build
+                "current_thought": f"Build attempt {build_attempt}: Built query version {query_version} with {len(query_draft.get('query', {}).get('fields', []))} fields",
                 "step_metadata": {
                     "tool_calls": tool_calls_made,
-                    "tokens": tokens_used
+                    "tokens": tokens_used,
+                    "build_attempt": build_attempt,
+                    "query_draft": query_draft
                 }
             }
+            
+            # Clear error field if retrying after execution failure
+            # This is critical so route_after_validation doesn't route to error_handler
+            if should_clear_error:
+                result["error"] = None
+                result["execution_errors"] = None
+            
+            return result
             
         except (json.JSONDecodeError, ValueError) as e:
             # Handle JSON parsing errors and validation errors
@@ -1101,7 +1150,16 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 **state,
                 "error": error_msg,
                 "query_draft": None,
-                "reasoning_steps": reasoning_steps
+                "build_attempt": build_attempt,
+                "execution_attempt": execution_attempt,
+                "reasoning_steps": reasoning_steps,
+                "current_thought": f"Build attempt {build_attempt} failed: {error_msg[:150]}",
+                "step_metadata": {
+                    "tool_calls": tool_calls_made if 'tool_calls_made' in locals() else [],
+                    "tokens": tokens_used if 'tokens_used' in locals() else None,
+                    "build_attempt": build_attempt,
+                    "query_draft": None  # Explicitly set to None so frontend knows this build failed
+                }
             }
         except Exception as e:
             logger.error(f"Error building query: {e}", exc_info=True)
@@ -1115,12 +1173,23 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 **state,
                 "error": f"Failed to build query: {str(e)}",
                 "query_draft": None,
-                "reasoning_steps": reasoning_steps
+                "build_attempt": build_attempt,
+                "execution_attempt": execution_attempt,
+                "reasoning_steps": reasoning_steps,
+                "current_thought": f"Build attempt {build_attempt} failed: {str(e)[:150]}",
+                "step_metadata": {
+                    "tool_calls": tool_calls_made if 'tool_calls_made' in locals() else [],
+                    "tokens": tokens_used if 'tokens_used' in locals() else None,
+                    "build_attempt": build_attempt,
+                    "query_draft": None
+                }
             }
     except Exception as e:
         # Catch any exceptions that escape the inner try blocks
         logger.error(f"Unexpected error in build_query_node: {e}", exc_info=True)
         reasoning_steps = state.get("reasoning_steps", [])
+        build_attempt = state.get("build_attempt", 1)
+        execution_attempt = state.get("execution_attempt", 1)
         reasoning_steps.append({
             "node": "build_query",
             "timestamp": datetime.utcnow().isoformat(),
@@ -1131,5 +1200,12 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             **state,
             "error": f"Failed to build query: {str(e)}",
             "query_draft": None,
-            "reasoning_steps": reasoning_steps
+            "build_attempt": build_attempt,
+            "execution_attempt": execution_attempt,
+            "reasoning_steps": reasoning_steps,
+            "current_thought": f"Build attempt {build_attempt} failed: {str(e)[:150]}",
+            "step_metadata": {
+                "build_attempt": build_attempt,
+                "query_draft": None
+            }
         }

@@ -334,7 +334,7 @@ def build_full_compressed_context(
                             parts.append(f"  Max: {params.get('max')}")
                         parts.append("  Example structure:")
                         parts.append(json.dumps({
-                            "column": {"fieldCaption": field_name, "function": "SUM"},
+                            "field": {"fieldCaption": field_name},
                             "filterType": "QUANTITATIVE_NUMERICAL",
                             "quantitativeFilterType": params.get("quantitativeFilterType", "MIN"),
                             "min": params.get("min")

@@ -15,6 +15,7 @@ from app.services.agents.vizql.nodes.validator import validate_query_node
 from app.services.agents.vizql.nodes.refiner import refine_query_node
 from app.services.agents.vizql.nodes.executor import execute_query_node
 from app.services.agents.vizql.nodes.formatter import format_results_node
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +127,11 @@ def create_vizql_graph() -> StateGraph:
             return "execute"
         
         # Invalid query - check if we can refine
-        # Allow up to 3 refinement attempts (query_version 1, 2, 3)
-        # After 3 refinements, query_version will be 4, so stop
+        # query_version starts at 1, so max_retries means we can have versions 1 through max_retries
+        # After max_retries refinements, query_version will be max_retries + 1, so stop
+        max_retries = settings.VIZQL_MAX_RETRIES
         query_version = state.get("query_version", 0)
-        if query_version >= 4:
+        if query_version >= max_retries + 1:
             return "error_handler"
         
         return "refine"
@@ -146,9 +148,21 @@ def create_vizql_graph() -> StateGraph:
     
     # Handle errors in executor
     def route_after_execution(state: VizQLAgentState) -> str:
-        """Route after execution - check for errors."""
+        """Route after execution - check for errors and retry if possible."""
         if state.get("error") or state.get("execution_error"):
-            return "error_handler"  # Route to error handler
+            # Check if we can retry
+            max_retries = settings.VIZQL_MAX_RETRIES
+            query_version = state.get("query_version", 0)
+            if query_version < max_retries + 1:
+                # Check error type - don't retry auth/timeout errors
+                error_msg = state.get("execution_error", "") or state.get("error", "")
+                if "auth" in error_msg.lower() or "unauthorized" in error_msg.lower() or "401" in error_msg:
+                    return "error_handler"  # Don't retry auth errors
+                if "timeout" in error_msg.lower():
+                    return "error_handler"  # Don't retry timeout errors
+                # For other errors (like 400 bad request), retry by refining
+                return "refine"  # Retry by refining the query
+            return "error_handler"  # Max attempts reached
         return "formatter"
     
     workflow.add_conditional_edges(
@@ -156,6 +170,7 @@ def create_vizql_graph() -> StateGraph:
         route_after_execution,
         {
             "formatter": "formatter",
+            "refine": "refiner",
             "error_handler": "error_handler"
         }
     )

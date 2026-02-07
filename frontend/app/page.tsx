@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,7 @@ function HomeContent() {
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
   const [contextObjects, setContextObjects] = useState<ChatContextObject[]>([]);
   const [agentPanelWidth, setAgentPanelWidth] = useState(384);
+  const [activeThreadId, setActiveThreadId] = useState<number | null>(null);
   const addToContextRef = useRef<((objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) | null>(null);
   const loadQueryRef = useRef<((datasourceId: string, query: Record<string, any>) => void) | null>(null);
 
@@ -49,9 +50,13 @@ function HomeContent() {
     }
   };
 
-  const handleContextChange = (context: ChatContextObject[]) => {
+  const handleContextChange = useCallback((context: ChatContextObject[]) => {
     setContextObjects(context);
-  };
+  }, []);
+
+  const handleActiveThreadChange = useCallback((threadId: number | null) => {
+    setActiveThreadId(threadId);
+  }, []);
 
   return (
     <AgentContext.Provider
@@ -124,6 +129,8 @@ function HomeContent() {
               onAddToContext={handleAddToContext}
               contextObjects={contextObjects}
               onLoadQueryRef={loadQueryRef}
+              onDatasourceSelect={setSelectedDatasource}
+              activeThreadId={activeThreadId}
             />
           </div>
 
@@ -136,6 +143,8 @@ function HomeContent() {
             }}
             onContextChange={handleContextChange}
             onWidthChange={setAgentPanelWidth}
+            selectedDatasource={selectedDatasource ? { id: selectedDatasource.id, name: selectedDatasource.name } : null}
+            onActiveThreadChange={handleActiveThreadChange}
             onLoadQuery={(datasourceId, query) => {
               console.log('page.tsx onLoadQuery called:', { datasourceId, query, loadQueryRef: loadQueryRef.current });
               // Use the ref to call ThreePanelLayout's load query handler

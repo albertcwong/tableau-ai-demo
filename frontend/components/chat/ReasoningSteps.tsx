@@ -14,6 +14,7 @@ interface StepWithTiming {
   nodeName?: string; // LangGraph node name (e.g., "data_fetcher", "analyzer")
   toolCalls?: string[]; // Tool calls made in this step
   tokens?: { prompt?: number; completion?: number; total?: number }; // Token usage
+  queryDraft?: Record<string, any>; // VizQL query draft for build_query steps
 }
 
 interface ReasoningStepsProps {
@@ -112,6 +113,89 @@ function formatDuration(ms: number): string {
   // Always display in seconds with up to 2 decimal places
   const seconds = (ms / 1000).toFixed(2);
   return `${seconds}s`;
+}
+
+interface ReasoningStepItemProps {
+  step: { text: string; duration: number; startTime: number };
+  stepTiming?: StepWithTiming;
+  index: number;
+  isReasoningActive: boolean;
+  currentStepElapsed: number;
+  stepTimings?: StepWithTiming[];
+}
+
+function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, currentStepElapsed, stepTimings }: ReasoningStepItemProps) {
+  const [isQueryExpanded, setIsQueryExpanded] = useState(false);
+  const isBuildQueryStep = stepTiming?.nodeName === 'build_query' || stepTiming?.nodeName === 'query_builder';
+  const hasDetails = stepTiming?.toolCalls || stepTiming?.tokens || stepTiming?.queryDraft;
+  
+  return (
+    <div className="flex gap-2 items-start text-xs text-gray-700 dark:text-gray-300">
+      <div className="flex-shrink-0 mt-0.5">
+        <CheckCircle2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+      </div>
+      <div className="flex-1 break-words">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1">
+            <span className="font-medium text-gray-900 dark:text-gray-100">
+              Step {index + 1}:
+            </span>{' '}
+            <span>{step.text.trim()}</span>
+          </div>
+          {stepTimings && stepTimings.length > 0 && (
+            <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 font-mono whitespace-nowrap">
+              {step.duration > 0 
+                ? formatDuration(step.duration) 
+                : (isReasoningActive && index === (stepTimings?.length || 0) - 1 && currentStepElapsed > 0)
+                  ? formatDuration(currentStepElapsed)
+                  : '—'}
+            </div>
+          )}
+        </div>
+        {hasDetails && (
+          <div className="mt-1 pl-0 space-y-0.5">
+            {stepTiming?.toolCalls && stepTiming.toolCalls.length > 0 && (
+              <div className="text-[10px] text-gray-600 dark:text-gray-400">
+                <span className="font-semibold">Tools:</span>{' '}
+                {stepTiming.toolCalls.join(', ')}
+              </div>
+            )}
+            {stepTiming?.tokens && (
+              <div className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">
+                <span className="font-semibold">Tokens:</span>{' '}
+                {stepTiming.tokens.prompt && `${stepTiming.tokens.prompt} in`}
+                {stepTiming.tokens.prompt && stepTiming.tokens.completion && ' / '}
+                {stepTiming.tokens.completion && `${stepTiming.tokens.completion} out`}
+                {stepTiming.tokens.total && ` (${stepTiming.tokens.total} total)`}
+              </div>
+            )}
+            {isBuildQueryStep && stepTiming?.queryDraft && (
+              <div className="mt-1">
+                <button
+                  onClick={() => setIsQueryExpanded(!isQueryExpanded)}
+                  className="flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-semibold"
+                >
+                  {isQueryExpanded ? (
+                    <ChevronUp className="h-3 w-3" />
+                  ) : (
+                    <ChevronDown className="h-3 w-3" />
+                  )}
+                  VizQL Query
+                </button>
+                {isQueryExpanded && (
+                  <div className="mt-1 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
+                    <pre className="text-[10px] font-mono text-gray-800 dark:text-gray-200 overflow-x-auto whitespace-pre-wrap break-words">
+                      {JSON.stringify(stepTiming.queryDraft, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReasoningActive = false, streamStartTime, totalTimeMs }: ReasoningStepsProps) {
@@ -270,55 +354,16 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
             <div className="p-3 space-y-2">
               {organizedSteps.map((step, index) => {
                 const stepTiming = stepTimings && stepTimings[index];
-                const hasDetails = stepTiming?.toolCalls || stepTiming?.tokens;
-                
                 return (
-                  <div
+                  <ReasoningStepItem
                     key={index}
-                    className="flex gap-2 items-start text-xs text-gray-700 dark:text-gray-300"
-                  >
-                    <div className="flex-shrink-0 mt-0.5">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div className="flex-1 break-words">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <span className="font-medium text-gray-900 dark:text-gray-100">
-                            Step {index + 1}:
-                          </span>{' '}
-                          <span>{step.text.trim()}</span>
-                        </div>
-                        {stepTimings && stepTimings.length > 0 && (
-                          <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 font-mono whitespace-nowrap">
-                            {step.duration > 0 
-                              ? formatDuration(step.duration) 
-                              : (isReasoningActive && index === organizedSteps.length - 1 && currentStepElapsed > 0)
-                                ? formatDuration(currentStepElapsed)
-                                : '—'}
-                          </div>
-                        )}
-                      </div>
-                      {hasDetails && (
-                        <div className="mt-1 pl-0 space-y-0.5">
-                          {stepTiming?.toolCalls && stepTiming.toolCalls.length > 0 && (
-                            <div className="text-[10px] text-gray-600 dark:text-gray-400">
-                              <span className="font-semibold">Tools:</span>{' '}
-                              {stepTiming.toolCalls.join(', ')}
-                            </div>
-                          )}
-                          {stepTiming?.tokens && (
-                            <div className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">
-                              <span className="font-semibold">Tokens:</span>{' '}
-                              {stepTiming.tokens.prompt && `${stepTiming.tokens.prompt} in`}
-                              {stepTiming.tokens.prompt && stepTiming.tokens.completion && ' / '}
-                              {stepTiming.tokens.completion && `${stepTiming.tokens.completion} out`}
-                              {stepTiming.tokens.total && ` (${stepTiming.tokens.total} total)`}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                    step={step}
+                    stepTiming={stepTiming}
+                    index={index}
+                    isReasoningActive={isReasoningActive}
+                    currentStepElapsed={currentStepElapsed}
+                    stepTimings={stepTimings}
+                  />
                 );
               })}
               {stepTimings && stepTimings.length > 0 && totalTime > 0 && (
