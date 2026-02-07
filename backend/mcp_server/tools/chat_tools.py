@@ -26,9 +26,12 @@ def get_db_session():
 
 
 @mcp.tool()
-async def chat_create_conversation() -> Dict[str, Any]:
+async def chat_create_conversation(agent_type: Optional[str] = None) -> Dict[str, Any]:
     """
-    Create a new conversation.
+    Create a new conversation with personalized greeting based on agent type.
+    
+    Args:
+        agent_type: Optional agent type ('general', 'vizql', or 'summary') for personalized greeting
     
     Returns:
         Dictionary with 'conversation_id' and 'created_at'
@@ -40,17 +43,29 @@ async def chat_create_conversation() -> Dict[str, Any]:
         db.commit()
         db.refresh(conversation)
         
+        # Personalized greetings per agent type
+        greeting_messages = {
+            'general': "Hello! I'm your General Agent assistant. I can help you explore Tableau objects, answer questions about your data, and assist with general queries. What would you like to know?",
+            'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
+            'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
+        }
+        
+        # Default greeting if agent_type is not provided or invalid
+        agent_type_normalized = agent_type.lower() if agent_type else 'general'
+        greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['general'])
+        
         # Create initial greeting message from assistant
         greeting_message = Message(
             conversation_id=conversation.id,
             role=MessageRole.ASSISTANT,
-            content="What can I help you with?",
-            created_at=datetime.now()
+            content=greeting_content,
+            created_at=datetime.now(),
+            extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}  # Mark as greeting message
         )
         db.add(greeting_message)
         db.commit()
         
-        logger.info(f"Created conversation {conversation.id} with initial greeting")
+        logger.info(f"Created conversation {conversation.id} with initial greeting for agent type: {agent_type_normalized}")
         return {
             "conversation_id": conversation.id,
             "created_at": conversation.created_at.isoformat(),

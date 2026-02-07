@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node server.js",
     "dev:http": "next dev",
+    "dev:http-only": "HTTP_PORT=3000 node server.js",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

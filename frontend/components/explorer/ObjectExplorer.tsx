@@ -196,6 +196,7 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
       <TableauConnectionError 
         error={error} 
         onRetry={loadRootProjects}
+        onCancel={() => setError(null)}
       />
     );
   }

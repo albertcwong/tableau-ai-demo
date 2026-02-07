@@ -349,7 +349,7 @@ function MessageItem({
                 </ReactMarkdown>
               </div>
             )}
-            {message.role === 'assistant' && !isStreaming && (
+            {message.role === 'assistant' && !isStreaming && !message.extraMetadata?.is_greeting && (
               <MessageActionBar
                 messageId={parseInt(message.id)}
                 content={message.content}

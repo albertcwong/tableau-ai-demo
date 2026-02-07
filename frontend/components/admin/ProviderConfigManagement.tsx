@@ -184,7 +184,7 @@ export function ProviderConfigManagement() {
       )}
 
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Provider Configurations</h2>
+        <h2 className="text-xl font-semibold">Providers</h2>
         <Button 
           onClick={() => {
             if (showCreateForm) {
@@ -362,8 +362,8 @@ export function ProviderConfigManagement() {
         </Card>
       )}
 
-      <div className="border rounded-lg">
-        <table className="w-full">
+      <div className="border rounded-lg overflow-x-auto">
+        <table className="w-full min-w-full">
           <thead className="bg-gray-100 dark:bg-gray-800">
             <tr>
               <th className="px-4 py-2 text-left">ID</th>

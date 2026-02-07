@@ -24,6 +24,7 @@ export interface Message {
   feedbackText?: string | null;
   totalTimeMs?: number | null;
   vizqlQuery?: Record<string, any> | null;  // VizQL query used to generate the answer (for vizql agent)
+  extraMetadata?: Record<string, any> | null;  // Additional metadata (e.g., is_greeting flag)
 }
 
 /**

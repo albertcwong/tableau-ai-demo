@@ -78,10 +78,16 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    # User preferences for AI agent
+    preferred_provider = Column(String(50), nullable=True, comment="Preferred AI provider (e.g., 'openai', 'anthropic')")
+    preferred_model = Column(String(100), nullable=True, comment="Preferred AI model (e.g., 'gpt-4', 'claude-3-opus')")
+    preferred_agent_type = Column(String(50), nullable=True, comment="Preferred agent type ('general', 'vizql', 'summary')")
 
     # Relationships
     tableau_configs = relationship("TableauServerConfig", back_populates="created_by_user", cascade="all, delete-orphan")
     provider_configs = relationship("ProviderConfig", back_populates="created_by_user", cascade="all, delete-orphan")
+    tableau_server_mappings = relationship("UserTableauServerMapping", back_populates="user", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -111,6 +117,7 @@ class TableauServerConfig(Base):
 
     # Relationships
     created_by_user = relationship("User", back_populates="tableau_configs")
+    user_mappings = relationship("UserTableauServerMapping", back_populates="tableau_server_config", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -120,6 +127,31 @@ class TableauServerConfig(Base):
 
     def __repr__(self):
         return f"<TableauServerConfig(id={self.id}, name={self.name}, server_url={self.server_url}, site_id={self.site_id})>"
+
+
+class UserTableauServerMapping(Base):
+    """Mapping between users and Tableau Connected App configurations with custom username."""
+    __tablename__ = "user_tableau_server_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tableau_server_config_id = Column(Integer, ForeignKey("tableau_server_configs.id"), nullable=False, index=True)
+    tableau_username = Column(String(255), nullable=False, comment="Tableau server username to use for this user/Connected App combination. Site ID comes from the Connected App configuration.")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="tableau_server_mappings")
+    tableau_server_config = relationship("TableauServerConfig", back_populates="user_mappings")
+
+    # Indexes
+    # Unique constraint: one mapping per user per Connected App (site comes from config)
+    __table_args__ = (
+        Index("idx_user_tableau_mapping_unique", "user_id", "tableau_server_config_id", unique=True),
+    )
+
+    def __repr__(self):
+        return f"<UserTableauServerMapping(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, tableau_username={self.tableau_username})>"
 
 
 class ProviderConfig(Base):

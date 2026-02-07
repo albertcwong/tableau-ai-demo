@@ -68,16 +68,51 @@ class VizQLConstraintValidator:
         - COUNTD(SUM([Sales]))
         - SUM(AVG([Sales]))
         
+        EXCEPTION: FIXED level-of-detail expressions return row-level data, so they can be aggregated:
+        - AVG({ FIXED [Order ID] : SUM([Sales]) }) - VALID
+        - { FIXED : AVG( IF { FIXED [Order ID] : SUM([Profit]) } > 100 THEN { FIXED [Order ID] : SUM([Sales]) } END ) } - VALID
+        
         Args:
             formula: Formula string to check
             
         Returns:
-            True if formula contains nested aggregations
+            True if formula contains nested aggregations (excluding FIXED expressions)
         """
         if not formula:
             return False
         
         formula_upper = formula.upper()
+        
+        # First, identify all FIXED expression ranges
+        fixed_ranges = []
+        i = 0
+        while i < len(formula_upper):
+            if formula_upper[i] == '{':
+                # Check if it's a FIXED expression
+                # Skip whitespace after opening brace
+                j = i + 1
+                while j < len(formula_upper) and formula_upper[j] in ' \t':
+                    j += 1
+                # Check if followed by FIXED
+                if j + 5 <= len(formula_upper) and formula_upper[j:j+5] == 'FIXED':
+                    # This is a FIXED expression, find matching closing brace
+                    brace_count = 0
+                    k = i
+                    fixed_start = i
+                    while k < len(formula_upper):
+                        if formula_upper[k] == '{':
+                            brace_count += 1
+                        elif formula_upper[k] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                fixed_ranges.append((fixed_start, k))
+                                logger.debug(f"Nested agg check: Found FIXED range [{fixed_start}, {k}]")
+                                i = k
+                                break
+                        k += 1
+            i += 1
+        
+        logger.debug(f"Nested agg check: Total FIXED ranges: {len(fixed_ranges)}")
         
         # Aggregation function patterns
         agg_functions = [
@@ -96,18 +131,28 @@ class VizQLConstraintValidator:
             r'\bAGG\s*\(',
         ]
         
-        # Pattern to match aggregation function followed by another aggregation function
-        # This matches patterns like: AVG(SUM(...)) or COUNTD(IF ... SUM(...) ...)
-        # We look for an aggregation function, then check if there's another aggregation inside its parentheses
-        
+        # Check for nested aggregations: outer aggregation containing inner aggregation
+        # Skip if inner aggregation is inside a FIXED expression
         for outer_agg in agg_functions:
             # Find all matches of outer aggregation
             for match in re.finditer(outer_agg, formula_upper):
-                start_pos = match.end() - 1  # Position of opening parenthesis
+                outer_start = match.start()
+                outer_paren_start = match.end() - 1  # Position of opening parenthesis
                 
-                # Find the matching closing parenthesis
+                # Check if outer aggregation is inside a FIXED expression (if so, it's valid)
+                outer_inside_fixed = False
+                for fixed_start, fixed_end in fixed_ranges:
+                    if fixed_start <= outer_start <= fixed_end:
+                        outer_inside_fixed = True
+                        logger.debug(f"Nested agg check: Outer aggregation at {outer_start} is inside FIXED range [{fixed_start}, {fixed_end}] - skipping")
+                        break
+                
+                if outer_inside_fixed:
+                    continue  # Outer aggregation is inside FIXED, skip this check
+                
+                # Find the matching closing parenthesis for outer aggregation
                 paren_count = 0
-                i = start_pos
+                i = outer_paren_start
                 found_inner = False
                 
                 while i < len(formula_upper):
@@ -119,18 +164,112 @@ class VizQLConstraintValidator:
                             # Found matching closing paren
                             break
                     
-                    # Check if there's an inner aggregation function
+                    # Check if there's an inner aggregation function at this position
                     if paren_count > 0:  # Inside the outer aggregation's parentheses
-                        for inner_agg in agg_functions:
-                            if re.match(inner_agg, formula_upper[i:]):
-                                found_inner = True
+                        # Check if this position is inside a FIXED expression
+                        inner_inside_fixed = False
+                        for fixed_start, fixed_end in fixed_ranges:
+                            if fixed_start <= i <= fixed_end:
+                                inner_inside_fixed = True
                                 break
+                        
+                        # Only check for inner aggregation if NOT inside FIXED
+                        if not inner_inside_fixed:
+                            for inner_agg in agg_functions:
+                                if re.match(inner_agg, formula_upper[i:]):
+                                    found_inner = True
+                                    break
                     
                     if found_inner:
                         break
                     i += 1
                 
                 if found_inner:
+                    return True
+        
+        return False
+    
+    def _formula_has_aggregation_outside_fixed(self, formula: Optional[str]) -> bool:
+        """
+        Check if a formula contains aggregation functions outside of FIXED expressions.
+        
+        FIXED expressions return row-level data, so aggregations inside FIXED can be aggregated.
+        This method only flags aggregations that are NOT inside FIXED expressions.
+        
+        Examples:
+        - SUM([Sales]) - True (aggregation outside FIXED)
+        - { FIXED [Order ID] : SUM([Sales]) } - False (aggregation inside FIXED)
+        - AVG({ FIXED [Order ID] : SUM([Sales]) }) - True (AVG is outside FIXED)
+        - COUNTD(IF { FIXED [Order ID] : SUM([Sales]) } > 100 THEN [Order ID] END) - True (COUNTD is outside FIXED)
+        
+        Args:
+            formula: Formula string to check
+            
+        Returns:
+            True if formula contains aggregation functions outside FIXED expressions
+        """
+        if not formula:
+            return False
+        
+        formula_upper = formula.upper()
+        
+        # Aggregation function patterns
+        aggregation_patterns = [
+            r'\bSUM\s*\(',
+            r'\bAVG\s*\(',
+            r'\bAVERAGE\s*\(',
+            r'\bCOUNT\s*\(',
+            r'\bCOUNTD\s*\(',
+            r'\bMIN\s*\(',
+            r'\bMAX\s*\(',
+            r'\bMEDIAN\s*\(',
+            r'\bSTDEV\s*\(',
+            r'\bSTDEVP\s*\(',
+            r'\bVAR\s*\(',
+            r'\bVARP\s*\(',
+            r'\bAGG\s*\(',
+        ]
+        
+        # Track FIXED expression boundaries
+        fixed_ranges = []
+        i = 0
+        while i < len(formula_upper):
+            if formula_upper[i] == '{':
+                # Check if it's a FIXED expression
+                # Skip whitespace after opening brace
+                j = i + 1
+                while j < len(formula_upper) and formula_upper[j] in ' \t':
+                    j += 1
+                # Check if followed by FIXED
+                if j + 5 <= len(formula_upper) and formula_upper[j:j+5] == 'FIXED':
+                    # This is a FIXED expression, find matching closing brace
+                    brace_count = 0
+                    k = i
+                    fixed_start = i
+                    while k < len(formula_upper):
+                        if formula_upper[k] == '{':
+                            brace_count += 1
+                        elif formula_upper[k] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                fixed_ranges.append((fixed_start, k))
+                                i = k
+                                break
+                        k += 1
+            i += 1
+        
+        # Check for aggregation patterns that are NOT inside FIXED expressions
+        for pattern in aggregation_patterns:
+            for match in re.finditer(pattern, formula_upper):
+                agg_pos = match.start()
+                # Check if this aggregation is inside any FIXED expression
+                inside_fixed = False
+                for fixed_start, fixed_end in fixed_ranges:
+                    if fixed_start <= agg_pos <= fixed_end:
+                        inside_fixed = True
+                        break
+                
+                if not inside_fixed:
                     return True
         
         return False
@@ -178,7 +317,12 @@ class VizQLConstraintValidator:
                 calculation_formula = field.get("calculation", "")
                 
                 # Check for nested aggregations (aggregation on top of aggregation)
-                if self._has_nested_aggregations(calculation_formula):
+                logger.debug(f"Checking for nested aggregations in calculated field '{field_caption}'")
+                logger.debug(f"  Formula: {calculation_formula[:200]}")
+                has_nested = self._has_nested_aggregations(calculation_formula)
+                logger.debug(f"  Has nested aggregations: {has_nested}")
+                
+                if has_nested:
                     errors.append(
                         f"Calculated field '{field_caption}' contains nested aggregations (e.g., AVG(SUM(...))). "
                         f"Aggregations cannot be applied on top of aggregations. "
@@ -189,7 +333,11 @@ class VizQLConstraintValidator:
                         f"Use FIXED level-of-detail expressions or restructure the calculation."
                     )
                 
-                if self._formula_has_aggregation(calculation_formula):
+                # Check if calculation has aggregation that's NOT inside FIXED expressions
+                # FIXED expressions return row-level data, so they can be aggregated
+                has_aggregation_outside_fixed = self._formula_has_aggregation_outside_fixed(calculation_formula)
+                
+                if has_aggregation_outside_fixed:
                     # Calculated field already has aggregation - should not have a function field
                     if has_function:
                         errors.append(
@@ -221,9 +369,9 @@ class VizQLConstraintValidator:
             field_formula = field_meta.get("formula")
             has_aggregation_in_formula = False
             
-            # Check if field has a formula with aggregation
+            # Check if field has a formula with aggregation (outside FIXED expressions)
             if field_formula:
-                if self._formula_has_aggregation(field_formula):
+                if self._formula_has_aggregation_outside_fixed(field_formula):
                     has_aggregation_in_formula = True
                     # Existing calculated field already has aggregation - should not have a function field
                     if has_function:
@@ -324,10 +472,27 @@ class VizQLConstraintValidator:
                 
                 if isinstance(filter_field, dict):
                     filter_caption = filter_field.get("fieldCaption")
+                    
+                    # CRITICAL: Filter fields with calculations cannot have fieldCaption
+                    if "calculation" in filter_field and filter_caption:
+                        errors.append(
+                            f"QUANTITATIVE_NUMERICAL filter at index {i} has both 'fieldCaption' and 'calculation' keys. "
+                            f"Filter fields with calculations must not include 'fieldCaption'. "
+                            f"Remove 'fieldCaption' from the filter field object."
+                        )
+                        suggestions.append(
+                            f"Remove 'fieldCaption' from calculated filter field: "
+                            f"{{\"field\": {{\"calculation\": \"{filter_field.get('calculation', '...')[:50]}\"}}, \"filterType\": \"QUANTITATIVE_NUMERICAL\", \"quantitativeFilterType\": \"{filter_obj.get('quantitativeFilterType', 'MIN')}\", \"min\": {filter_obj.get('min', 1000)}}}"
+                        )
+                        continue
                 elif isinstance(filter_field, str):
                     filter_caption = filter_field
                 
                 if filter_caption:
+                    # If filter field has a "calculation" key, it's a new calculated field - skip schema check
+                    if isinstance(filter_field, dict) and "calculation" in filter_field:
+                        continue
+                    
                     filter_lower = filter_caption.lower()
                     if filter_lower not in self.field_map:
                         errors.append(f"QUANTITATIVE_NUMERICAL filter field '{filter_caption}' not found in schema")
@@ -366,6 +531,19 @@ class VizQLConstraintValidator:
             
             if isinstance(filter_field, dict):
                 filter_caption = filter_field.get("fieldCaption")
+                
+                # CRITICAL: Filter fields with calculations cannot have fieldCaption
+                if "calculation" in filter_field and filter_caption:
+                    errors.append(
+                        f"Filter at index {i} (type: {filter_type}) has both 'fieldCaption' and 'calculation' keys. "
+                        f"Filter fields with calculations must not include 'fieldCaption'. "
+                        f"Remove 'fieldCaption' from the filter field object."
+                    )
+                    suggestions.append(
+                        f"Remove 'fieldCaption' from calculated filter field: "
+                        f"{{\"field\": {{\"calculation\": \"{filter_field.get('calculation', '...')[:50]}\"}}, \"filterType\": \"{filter_type}\"}}"
+                    )
+                    continue
             elif isinstance(filter_field, str):
                 # Handle case where field is a string (should be fieldCaption)
                 filter_caption = filter_field
@@ -374,6 +552,10 @@ class VizQLConstraintValidator:
                 filter_caption = filter_obj.get("fieldCaption")
             
             if filter_caption:
+                # If filter field has a "calculation" key, it's a new calculated field - skip schema check
+                if isinstance(filter_field, dict) and "calculation" in filter_field:
+                    continue
+                
                 filter_lower = filter_caption.lower()
                 if filter_lower not in self.field_map:
                     errors.append(f"Filter field '{filter_caption}' not found in schema")

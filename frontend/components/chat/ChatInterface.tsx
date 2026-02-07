@@ -59,6 +59,7 @@ export function ChatInterface({
   const [error, setError] = useState<Error | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const previousAgentTypeRef = useRef<'general' | 'vizql' | 'summary'>(agentType);
 
   // Sync selectedModel when defaultModel prop changes
   useEffect(() => {
@@ -72,7 +73,7 @@ export function ChatInterface({
     const initConversation = async () => {
       if (!conversationId && !initialConversationId) {
         try {
-          const conv = await chatApi.createConversation();
+          const conv = await chatApi.createConversation(agentType);
           setConversationId(conv.id);
         } catch (error) {
           console.error('Failed to create conversation:', error);
@@ -84,7 +85,7 @@ export function ChatInterface({
     };
 
     initConversation();
-  }, [initialConversationId]); // Only depend on prop, not conversationId to avoid loops
+  }, [initialConversationId, agentType]); // Include agentType to create with correct greeting
 
   // Load messages when conversation changes
   useEffect(() => {
@@ -109,6 +110,7 @@ export function ChatInterface({
           feedbackText: msg.feedback_text,
           totalTimeMs: msg.total_time_ms,
           vizqlQuery: msg.vizql_query,
+          extraMetadata: msg.extra_metadata,
         }));
         setMessages(formattedMessages);
       } catch (error) {
@@ -122,6 +124,42 @@ export function ChatInterface({
 
     loadMessages();
   }, [conversationId]);
+
+  // Detect agent type changes and add greeting message
+  useEffect(() => {
+    const handleAgentTypeChange = async () => {
+      // Skip on initial mount or if no conversation yet
+      if (!conversationId || messages.length === 0) {
+        previousAgentTypeRef.current = agentType;
+        return;
+      }
+      
+      // Only add greeting if agent type actually changed (not initial load)
+      if (agentType !== previousAgentTypeRef.current) {
+        try {
+          const greetingMessage = await chatApi.createGreetingMessage(conversationId, agentType);
+          const formattedGreeting: Message = {
+            id: greetingMessage.id.toString(),
+            role: greetingMessage.role.toLowerCase() as MessageRole,
+            content: greetingMessage.content,
+            createdAt: new Date(greetingMessage.created_at),
+            modelUsed: greetingMessage.model_used,
+            feedback: greetingMessage.feedback,
+            feedbackText: greetingMessage.feedback_text,
+            totalTimeMs: greetingMessage.total_time_ms,
+            vizqlQuery: greetingMessage.vizql_query,
+            extraMetadata: greetingMessage.extra_metadata,
+          };
+          setMessages(prev => [...prev, formattedGreeting]);
+        } catch (error) {
+          console.error('Failed to create greeting message:', error);
+        }
+      }
+      previousAgentTypeRef.current = agentType;
+    };
+
+    handleAgentTypeChange();
+  }, [agentType, conversationId, messages.length]); // Include messages.length to detect when messages are loaded
 
   const handleCancelMessage = useCallback(() => {
     if (abortControllerRef.current) {

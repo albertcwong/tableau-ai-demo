@@ -3,16 +3,17 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { AlertCircle, Server, Settings, RefreshCw } from 'lucide-react';
+import { AlertCircle, Server, Settings, RefreshCw, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthContext';
 
 interface TableauConnectionErrorProps {
   error: string;
   onRetry?: () => void;
+  onCancel?: () => void;
 }
 
-export function TableauConnectionError({ error, onRetry }: TableauConnectionErrorProps) {
+export function TableauConnectionError({ error, onRetry, onCancel }: TableauConnectionErrorProps) {
   const router = useRouter();
   const { isAdmin } = useAuth();
   
@@ -91,6 +92,16 @@ export function TableauConnectionError({ error, onRetry }: TableauConnectionErro
                       Retry Connection
                     </Button>
                   )}
+                  {onCancel && (
+                    <Button
+                      variant="outline"
+                      onClick={onCancel}
+                      className="flex items-center gap-2"
+                    >
+                      <X className="h-4 w-4" />
+                      Cancel
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -128,6 +139,16 @@ export function TableauConnectionError({ error, onRetry }: TableauConnectionErro
                   >
                     <Settings className="h-4 w-4" />
                     Check Configuration
+                  </Button>
+                )}
+                {onCancel && (
+                  <Button
+                    variant="outline"
+                    onClick={onCancel}
+                    className="flex items-center gap-2"
+                  >
+                    <X className="h-4 w-4" />
+                    Cancel
                   </Button>
                 )}
               </div>

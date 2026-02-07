@@ -74,6 +74,22 @@ export function TableauConfigManagement() {
     e.preventDefault();
     try {
       setError(null);
+      
+      // Warn about mixed content if frontend is HTTPS and server URL is HTTP
+      if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+        try {
+          const serverUrl = new URL(formData.server_url);
+          if (serverUrl.protocol === 'http:') {
+            const warning = 'Warning: This application is served over HTTPS, but the Tableau server URL uses HTTP. This will cause Mixed Content errors and prevent views from loading. Consider configuring your Tableau server to use HTTPS, or update the server URL to use HTTPS.';
+            if (!confirm(warning + '\n\nDo you want to continue anyway?')) {
+              return;
+            }
+          }
+        } catch (urlError) {
+          // Invalid URL format, let backend validation handle it
+        }
+      }
+      
       if (editingConfigId) {
         // Update existing config
         const updateData: TableauConfigUpdate = {
@@ -120,7 +136,7 @@ export function TableauConfigManagement() {
       )}
 
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Tableau Server Configurations</h2>
+        <h2 className="text-xl font-semibold">Tableau Connected Apps</h2>
         <Button 
           onClick={() => {
             if (showCreateForm) {
@@ -238,8 +254,8 @@ export function TableauConfigManagement() {
         </Card>
       )}
 
-      <div className="border rounded-lg">
-        <table className="w-full">
+      <div className="border rounded-lg overflow-x-auto">
+        <table className="w-full min-w-full">
           <thead className="bg-gray-100 dark:bg-gray-800">
             <tr>
               <th className="px-4 py-2 text-left">ID</th>
@@ -256,7 +272,16 @@ export function TableauConfigManagement() {
               <tr key={config.id} className="border-t">
                 <td className="px-4 py-2">{config.id}</td>
                 <td className="px-4 py-2">{config.name}</td>
-                <td className="px-4 py-2">{config.server_url}</td>
+                <td className="px-4 py-2 break-words max-w-xs">
+                  <div className="flex items-center gap-2">
+                    <span>{config.server_url}</span>
+                    {typeof window !== 'undefined' && window.location.protocol === 'https:' && config.server_url.startsWith('http://') && (
+                      <span className="text-xs text-red-600 dark:text-red-400" title="Mixed Content Warning: HTTP server URL with HTTPS frontend">
+                        ⚠️
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-4 py-2">{config.site_id || '(default)'}</td>
                 <td className="px-4 py-2">{config.api_version || '3.15'}</td>
                 <td className="px-4 py-2">

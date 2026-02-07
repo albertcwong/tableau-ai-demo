@@ -5,7 +5,7 @@ import { ConversationResponse, chatApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { MessageSquare, Plus, ChevronDown, ChevronUp, Edit2, Check, X } from 'lucide-react';
+import { MessageSquare, Plus, ChevronDown, ChevronUp, Edit2, Check, X, Trash2 } from 'lucide-react';
 
 // Simple date formatting without date-fns
 const formatDate = (dateString: string) => {
@@ -28,6 +28,7 @@ interface ThreadListProps {
   onSelectThread: (threadId: number) => void;
   onCreateThread: () => void;
   onThreadsChange?: () => void;
+  onDeleteThread?: (threadId: number) => void;
 }
 
 export function ThreadList({
@@ -36,11 +37,13 @@ export function ThreadList({
   onSelectThread,
   onCreateThread,
   onThreadsChange,
+  onDeleteThread,
 }: ThreadListProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
+  const [deletingThreadId, setDeletingThreadId] = useState<number | null>(null);
 
   const handleStartEdit = (thread: ConversationResponse, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent thread selection
@@ -84,6 +87,32 @@ export function ThreadList({
       handleSaveEdit(threadId);
     } else if (e.key === 'Escape') {
       handleCancelEdit();
+    }
+  };
+
+  const handleDeleteThread = async (threadId: number, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent thread selection
+    
+    if (!confirm('Are you sure you want to delete this chat thread? This action cannot be undone.')) {
+      return;
+    }
+
+    setDeletingThreadId(threadId);
+    try {
+      await chatApi.deleteConversation(threadId);
+      // Notify parent component about deletion
+      if (onDeleteThread) {
+        onDeleteThread(threadId);
+      }
+      // Refresh threads list
+      if (onThreadsChange) {
+        onThreadsChange();
+      }
+    } catch (err) {
+      console.error('Failed to delete thread:', err);
+      alert('Failed to delete thread. Please try again.');
+    } finally {
+      setDeletingThreadId(null);
     }
   };
 
@@ -172,15 +201,27 @@ export function ThreadList({
                               )}
                             </div>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 hover:opacity-100 flex-shrink-0"
-                            onClick={(e) => handleStartEdit(thread, e)}
-                            title="Rename thread"
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </Button>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 hover:opacity-100">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 flex-shrink-0"
+                              onClick={(e) => handleStartEdit(thread, e)}
+                              title="Rename thread"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 flex-shrink-0 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                              onClick={(e) => handleDeleteThread(thread.id, e)}
+                              disabled={deletingThreadId === thread.id}
+                              title="Delete thread"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>

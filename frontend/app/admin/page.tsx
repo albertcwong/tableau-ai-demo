@@ -106,16 +106,16 @@ function AdminDashboardContent() {
 
         <Tabs defaultValue="users" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="users">User Management</TabsTrigger>
-            <TabsTrigger value="tableau">Tableau Configurations</TabsTrigger>
-            <TabsTrigger value="providers">Provider Configurations</TabsTrigger>
+            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="tableau">Tableau Connected Apps</TabsTrigger>
+            <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="feedback">Feedback</TabsTrigger>
           </TabsList>
           
           <TabsContent value="users">
             <Card>
               <CardHeader>
-                <CardTitle>User Management</CardTitle>
+                <CardTitle>Users</CardTitle>
                 <CardDescription>
                   Add, edit, and manage system users
                 </CardDescription>
@@ -143,7 +143,7 @@ function AdminDashboardContent() {
           <TabsContent value="providers">
             <Card>
               <CardHeader>
-                <CardTitle>AI Provider Configurations</CardTitle>
+                <CardTitle>Providers</CardTitle>
                 <CardDescription>
                   Manage AI provider configurations (OpenAI, Anthropic, Salesforce, Vertex AI, Apple Endor)
                 </CardDescription>

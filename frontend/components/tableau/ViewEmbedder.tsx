@@ -62,6 +62,18 @@ export function ViewEmbedder({
         const embedData = await getViewEmbedUrl(viewId, filters);
         if (!mounted) return;
 
+        // Check for mixed content issue: HTTPS page trying to load HTTP resource
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+          const embedUrl = new URL(embedData.url);
+          if (embedUrl.protocol === 'http:') {
+            const errorMsg = 'Mixed Content Error: This page is served over HTTPS, but the Tableau server is configured with HTTP. Please configure your Tableau server to use HTTPS, or update the server URL in the Tableau Connected App configuration to use HTTPS.';
+            setError(errorMsg);
+            setLoading(false);
+            onError?.(new Error(errorMsg));
+            return;
+          }
+        }
+
         setEmbedInfo(embedData);
       } catch (err) {
         if (!mounted) return;

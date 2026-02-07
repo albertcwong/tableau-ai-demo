@@ -4,10 +4,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_
 from app.core.database import get_db
 from app.core.auth import get_password_hash
 from app.api.auth import get_current_admin_user
-from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType
+from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType, UserTableauServerMapping
 from app.models.chat import Message, Conversation, ChatContext
 
 
@@ -34,6 +35,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     """User update model."""
+    username: Optional[str] = None
     password: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
@@ -46,6 +48,9 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     created_at: str
+    preferred_provider: Optional[str] = None
+    preferred_model: Optional[str] = None
+    preferred_agent_type: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -160,7 +165,10 @@ async def list_users(
         username=u.username,
         role=u.role.value,
         is_active=u.is_active,
-        created_at=u.created_at.isoformat()
+        created_at=u.created_at.isoformat(),
+        preferred_provider=u.preferred_provider,
+        preferred_model=u.preferred_model,
+        preferred_agent_type=u.preferred_agent_type
     ) for u in users]
 
 
@@ -204,7 +212,10 @@ async def create_user(
         username=new_user.username,
         role=new_user.role.value,
         is_active=new_user.is_active,
-        created_at=new_user.created_at.isoformat()
+        created_at=new_user.created_at.isoformat(),
+        preferred_provider=new_user.preferred_provider,
+        preferred_model=new_user.preferred_model,
+        preferred_agent_type=new_user.preferred_agent_type
     )
 
 
@@ -226,7 +237,10 @@ async def get_user(
         username=user.username,
         role=user.role.value,
         is_active=user.is_active,
-        created_at=user.created_at.isoformat()
+        created_at=user.created_at.isoformat(),
+        preferred_provider=user.preferred_provider,
+        preferred_model=user.preferred_model,
+        preferred_agent_type=user.preferred_agent_type
     )
 
 
@@ -244,6 +258,20 @@ async def update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+    
+    # Update username if provided
+    if user_data.username is not None:
+        # Check if username already exists (excluding current user)
+        existing_user = db.query(User).filter(
+            User.username == user_data.username,
+            User.id != user_id
+        ).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already exists"
+            )
+        user.username = user_data.username
     
     # Update password if provided
     if user_data.password:
@@ -271,7 +299,10 @@ async def update_user(
         username=user.username,
         role=user.role.value,
         is_active=user.is_active,
-        created_at=user.created_at.isoformat()
+        created_at=user.created_at.isoformat(),
+        preferred_provider=user.preferred_provider,
+        preferred_model=user.preferred_model,
+        preferred_agent_type=user.preferred_agent_type
     )
 
 
@@ -281,7 +312,7 @@ async def delete_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user)
 ):
-    """Delete user (soft delete by setting is_active=False)."""
+    """Permanently delete user from the database."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(
@@ -296,7 +327,13 @@ async def delete_user(
             detail="Cannot delete your own account"
         )
     
-    user.is_active = False
+    # Hard delete - permanently remove user from database
+    # Related objects will be handled by cascade deletes:
+    # - tableau_configs (cascade="all, delete-orphan")
+    # - provider_configs (cascade="all, delete-orphan")
+    # - tableau_server_mappings (cascade="all, delete-orphan")
+    # Conversations will have user_id set to NULL (ondelete="SET NULL")
+    db.delete(user)
     db.commit()
 
 
@@ -824,3 +861,181 @@ async def list_feedback(
         ))
     
     return result
+
+
+# User-Tableau Server Mapping endpoints
+class UserTableauMappingCreate(BaseModel):
+    """User-Tableau server mapping creation model."""
+    user_id: int
+    tableau_server_config_id: int
+    tableau_username: str
+    # Note: site_id comes from the Tableau Connected App configuration, not from user input
+
+
+class UserTableauMappingUpdate(BaseModel):
+    """User-Tableau server mapping update model."""
+    tableau_username: str
+    # Note: site_id comes from the Tableau Connected App configuration, not from user input
+
+
+class UserTableauMappingResponse(BaseModel):
+    """User-Tableau server mapping response model."""
+    id: int
+    user_id: int
+    tableau_server_config_id: int
+    tableau_username: str
+    created_at: str
+    updated_at: str
+    # Note: site_id is not included as it comes from the Connected App configuration
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/admin/users/{user_id}/tableau-mappings", response_model=List[UserTableauMappingResponse])
+async def list_user_tableau_mappings(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """List all Tableau server mappings for a user."""
+    # Verify user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    mappings = db.query(UserTableauServerMapping).filter(
+        UserTableauServerMapping.user_id == user_id
+    ).all()
+    
+    return [UserTableauMappingResponse(
+        id=m.id,
+        user_id=m.user_id,
+        tableau_server_config_id=m.tableau_server_config_id,
+        tableau_username=m.tableau_username,
+        created_at=m.created_at.isoformat(),
+        updated_at=m.updated_at.isoformat()
+    ) for m in mappings]
+
+
+@router.post("/admin/users/{user_id}/tableau-mappings", response_model=UserTableauMappingResponse, status_code=status.HTTP_201_CREATED)
+async def create_user_tableau_mapping(
+    user_id: int,
+    mapping_data: UserTableauMappingCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Create a new user-Tableau server mapping."""
+    # Verify user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Verify tableau server config exists
+    config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.id == mapping_data.tableau_server_config_id
+    ).first()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tableau server configuration not found"
+        )
+    
+    # Check if mapping already exists for this user/Connected App combination
+    # Site ID comes from the config, so we only need to check user_id + config_id
+    existing = db.query(UserTableauServerMapping).filter(
+        UserTableauServerMapping.user_id == user_id,
+        UserTableauServerMapping.tableau_server_config_id == mapping_data.tableau_server_config_id
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mapping already exists for this user and Connected App configuration"
+        )
+    
+    # Create mapping (site_id comes from config, not stored in mapping table)
+    new_mapping = UserTableauServerMapping(
+        user_id=user_id,
+        tableau_server_config_id=mapping_data.tableau_server_config_id,
+        tableau_username=mapping_data.tableau_username
+    )
+    db.add(new_mapping)
+    db.commit()
+    db.refresh(new_mapping)
+    
+    return UserTableauMappingResponse(
+        id=new_mapping.id,
+        user_id=new_mapping.user_id,
+        tableau_server_config_id=new_mapping.tableau_server_config_id,
+        tableau_username=new_mapping.tableau_username,
+        created_at=new_mapping.created_at.isoformat(),
+        updated_at=new_mapping.updated_at.isoformat()
+    )
+
+
+@router.put("/admin/users/{user_id}/tableau-mappings/{mapping_id}", response_model=UserTableauMappingResponse)
+async def update_user_tableau_mapping(
+    user_id: int,
+    mapping_id: int,
+    mapping_data: UserTableauMappingUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Update a user-Tableau server mapping."""
+    mapping = db.query(UserTableauServerMapping).filter(
+        UserTableauServerMapping.id == mapping_id,
+        UserTableauServerMapping.user_id == user_id
+    ).first()
+    
+    if not mapping:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Mapping not found"
+        )
+    
+    # Update tableau username
+    # Note: site_id comes from the config, not from the update request
+    mapping.tableau_username = mapping_data.tableau_username
+    db.commit()
+    db.refresh(mapping)
+    
+    return UserTableauMappingResponse(
+        id=mapping.id,
+        user_id=mapping.user_id,
+        tableau_server_config_id=mapping.tableau_server_config_id,
+        tableau_username=mapping.tableau_username,
+        created_at=mapping.created_at.isoformat(),
+        updated_at=mapping.updated_at.isoformat()
+    )
+
+
+@router.delete("/admin/users/{user_id}/tableau-mappings/{mapping_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_tableau_mapping(
+    user_id: int,
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Delete a user-Tableau server mapping."""
+    mapping = db.query(UserTableauServerMapping).filter(
+        UserTableauServerMapping.id == mapping_id,
+        UserTableauServerMapping.user_id == user_id
+    ).first()
+    
+    if not mapping:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Mapping not found"
+        )
+    
+    db.delete(mapping)
+    db.commit()
+    
+    return None

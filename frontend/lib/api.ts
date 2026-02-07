@@ -164,6 +164,7 @@ export interface MessageResponse {
   feedback?: string | null;
   feedback_text?: string | null;
   total_time_ms?: number | null;
+  extra_metadata?: Record<string, any> | null;  // Additional metadata (e.g., is_greeting flag)
   created_at: string;
 }
 
@@ -186,8 +187,11 @@ export interface MessageRequest {
 
 export const chatApi = {
   // Create a new conversation
-  createConversation: async (): Promise<ConversationResponse> => {
-    const response = await apiClient.post<ConversationResponse>('/api/v1/chat/conversations');
+  createConversation: async (agentType?: 'general' | 'vizql' | 'summary'): Promise<ConversationResponse> => {
+    const url = agentType 
+      ? `/api/v1/chat/conversations?agent_type=${agentType}`
+      : '/api/v1/chat/conversations';
+    const response = await apiClient.post<ConversationResponse>(url);
     return response.data;
   },
 
@@ -220,6 +224,14 @@ export const chatApi = {
     const response = await apiClient.patch<ConversationResponse>(
       `/api/v1/chat/conversations/${conversationId}/rename`,
       { name }
+    );
+    return response.data;
+  },
+
+  // Create a greeting message when agent type changes
+  createGreetingMessage: async (conversationId: number, agentType: 'general' | 'vizql' | 'summary'): Promise<MessageResponse> => {
+    const response = await apiClient.post<MessageResponse>(
+      `/api/v1/chat/conversations/${conversationId}/greeting?agent_type=${agentType}`
     );
     return response.data;
   },
@@ -578,6 +590,29 @@ export interface UserResponse {
   username: string;
   role: string;
   is_active: boolean;
+  preferred_provider?: string | null;
+  preferred_model?: string | null;
+  preferred_agent_type?: string | null;
+}
+
+export interface UserTableauMappingCreate {
+  user_id: number;
+  tableau_server_config_id: number;
+  tableau_username: string;
+}
+
+export interface UserTableauMappingUpdate {
+  tableau_username: string;
+}
+
+export interface UserTableauMappingResponse {
+  id: number;
+  user_id: number;
+  tableau_server_config_id: number;
+  tableau_username: string;
+  created_at: string;
+  updated_at: string;
+  // Note: site_id is not included as it comes from the Connected App configuration
 }
 
 export interface TableauConfigOption {
@@ -622,6 +657,15 @@ export const authApi = {
     return response.data;
   },
 
+  updatePreferences: async (preferences: {
+    preferred_provider?: string;
+    preferred_model?: string;
+    preferred_agent_type?: string;
+  }): Promise<UserResponse> => {
+    const response = await apiClient.put<UserResponse>('/api/v1/auth/preferences', preferences);
+    return response.data;
+  },
+
   listTableauConfigs: async (): Promise<TableauConfigOption[]> => {
     const response = await apiClient.get<TableauConfigOption[]>('/api/v1/tableau-auth/configs');
     return response.data;
@@ -638,6 +682,13 @@ export interface UserCreate {
   username: string;
   password: string;
   role: string;
+}
+
+export interface UserUpdate {
+  username?: string;
+  password?: string;
+  role?: string;
+  is_active?: boolean;
 }
 
 export interface TableauConfigCreate {
@@ -841,6 +892,11 @@ export const adminApi = {
     return response.data;
   },
 
+  updateUser: async (userId: number, userData: UserUpdate): Promise<UserResponse> => {
+    const response = await apiClient.put<UserResponse>(`/api/v1/admin/users/${userId}`, userData);
+    return response.data;
+  },
+
   deleteUser: async (userId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/admin/users/${userId}`);
   },
@@ -890,6 +946,26 @@ export const adminApi = {
     const params = feedbackType ? { feedback_type: feedbackType } : {};
     const response = await apiClient.get<FeedbackDetailResponse[]>('/api/v1/admin/feedback', { params });
     return response.data;
+  },
+
+  // User-Tableau Server Mapping management
+  listUserTableauMappings: async (userId: number): Promise<UserTableauMappingResponse[]> => {
+    const response = await apiClient.get<UserTableauMappingResponse[]>(`/api/v1/admin/users/${userId}/tableau-mappings`);
+    return response.data;
+  },
+
+  createUserTableauMapping: async (userId: number, mappingData: UserTableauMappingCreate): Promise<UserTableauMappingResponse> => {
+    const response = await apiClient.post<UserTableauMappingResponse>(`/api/v1/admin/users/${userId}/tableau-mappings`, mappingData);
+    return response.data;
+  },
+
+  updateUserTableauMapping: async (userId: number, mappingId: number, mappingData: UserTableauMappingUpdate): Promise<UserTableauMappingResponse> => {
+    const response = await apiClient.put<UserTableauMappingResponse>(`/api/v1/admin/users/${userId}/tableau-mappings/${mappingId}`, mappingData);
+    return response.data;
+  },
+
+  deleteUserTableauMapping: async (userId: number, mappingId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/admin/users/${userId}/tableau-mappings/${mappingId}`);
   },
 };
 

@@ -28,7 +28,8 @@ from app.services.tableau.client import (
 )
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.user import User, TableauServerConfig
+from app.models.user import User, TableauServerConfig, UserTableauServerMapping
+from sqlalchemy import or_
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +72,29 @@ def get_tableau_client(
                     detail=f"Tableau server configuration {x_tableau_config_id} not found or inactive"
                 )
             
+            # Check if user has a custom Tableau username mapping for this Connected App
+            # Site ID comes from the config, so we only need to match on user_id + config_id
+            mapping = db.query(UserTableauServerMapping).filter(
+                UserTableauServerMapping.user_id == current_user.id,
+                UserTableauServerMapping.tableau_server_config_id == config.id
+            ).first()
+            
+            # Use mapped username if available, otherwise use app username
+            tableau_username = mapping.tableau_username if mapping else current_user.username
+            
+            # Normalize config site_id for TableauClient (empty string = default site = None)
+            if config.site_id and isinstance(config.site_id, str) and config.site_id.strip():
+                site_id_for_client = config.site_id.strip() or None
+            else:
+                site_id_for_client = None  # Default site
+            
             return TableauClient(
                 server_url=config.server_url,
-                site_id=config.site_id if config.site_id else None,
+                site_id=site_id_for_client,
                 api_version=config.api_version or "3.15",
                 client_id=config.client_id,
                 client_secret=config.client_secret,
-                username=current_user.username,
+                username=tableau_username,
                 secret_id=config.secret_id or config.client_id
             )
         else:

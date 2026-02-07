@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chatApi, chatContextApi } from '@/lib/api';
+import { chatApi, chatContextApi, authApi } from '@/lib/api';
 import { AgentSelector, AgentType } from './AgentSelector';
 import { ContextManager } from './ContextManager';
 import { ModelSettings } from './ModelSettings';
@@ -17,6 +17,14 @@ import {
 import { X, GripVertical, Settings } from 'lucide-react';
 import type { ChatContextObject, ConversationResponse } from '@/types';
 
+interface RenderedState {
+  selectedObject: {
+    type: 'datasource' | 'view' | 'workbook';
+    data: { id: string; name: string; [key: string]: any };
+  } | null;
+  multiViews: Array<{ id: string; name: string; [key: string]: any } | null>;
+}
+
 interface AgentPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -27,13 +35,14 @@ interface AgentPanelProps {
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   selectedDatasource?: { id: string; name: string } | null;
   onActiveThreadChange?: (threadId: number | null) => void;
+  renderedState?: RenderedState | null;
 }
 
 const MIN_WIDTH = 384; // w-96 equivalent
 const MAX_WIDTH = 1200; // Maximum width
 const DEFAULT_WIDTH = 384;
 
-export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange }: AgentPanelProps) {
+export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange, renderedState }: AgentPanelProps) {
   const [agentType, setAgentType] = useState<AgentType>('general');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
@@ -48,8 +57,38 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
   useEffect(() => {
     if (isOpen) {
       loadThreads();
+      loadUserPreferences();
     }
   }, [isOpen]);
+
+  const loadUserPreferences = async () => {
+    try {
+      const user = await authApi.getCurrentUser();
+      if (user.preferred_provider) {
+        setProvider(user.preferred_provider);
+      }
+      if (user.preferred_model) {
+        setModel(user.preferred_model);
+      }
+      if (user.preferred_agent_type) {
+        setAgentType(user.preferred_agent_type as AgentType);
+      }
+    } catch (err) {
+      console.error('Failed to load user preferences:', err);
+    }
+  };
+
+  const savePreferences = async (preferences: {
+    preferred_provider?: string;
+    preferred_model?: string;
+    preferred_agent_type?: string;
+  }) => {
+    try {
+      await authApi.updatePreferences(preferences);
+    } catch (err) {
+      console.error('Failed to save user preferences:', err);
+    }
+  };
 
   useEffect(() => {
     if (activeThreadId) {
@@ -78,6 +117,23 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
     loadThreads();
   };
 
+  const handleDeleteThread = async (threadId: number) => {
+    // Reload threads to get updated list
+    const updatedThreads = await chatApi.listConversations();
+    setThreads(updatedThreads);
+    
+    // If the deleted thread was active, switch to another thread or clear active
+    if (activeThreadId === threadId) {
+      if (updatedThreads.length > 0) {
+        setActiveThreadId(updatedThreads[0].id);
+      } else {
+        setActiveThreadId(null);
+        setContext([]);
+        onContextChange?.([]);
+      }
+    }
+  };
+
   const loadContext = async (conversationId: number) => {
     try {
       const ctx = await chatContextApi.getContext(conversationId);
@@ -90,27 +146,71 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
 
   const handleCreateThread = async () => {
     try {
-      const newThread = await chatApi.createConversation();
+      // Store current thread's context before creating new thread
+      const currentThreadContext = activeThreadId && context.length > 0 ? [...context] : [];
+      
+      const newThread = await chatApi.createConversation(agentType);
       setThreads([newThread, ...threads]);
       setActiveThreadId(newThread.id);
       // Reload context for the new thread (will be empty initially)
       setContext([]);
       
-      // Automatically add selected datasource to context if one is open
-      if (selectedDatasource) {
-        try {
-          const obj = await chatContextApi.addContext({
-            conversation_id: newThread.id,
-            object_id: selectedDatasource.id,
-            object_type: 'datasource',
-            object_name: selectedDatasource.name,
+      // Restore context based on what's currently rendered and what was in previous thread
+      if (renderedState && currentThreadContext.length > 0) {
+        const contextToAdd: ChatContextObject[] = [];
+        
+        // Check if datasource is rendered and was in previous context
+        if (renderedState.selectedObject?.type === 'datasource') {
+          const datasourceId = renderedState.selectedObject.data.id;
+          const wasInContext = currentThreadContext.some(
+            (ctx) => ctx.object_id === datasourceId && ctx.object_type === 'datasource'
+          );
+          if (wasInContext) {
+            try {
+              const obj = await chatContextApi.addContext({
+                conversation_id: newThread.id,
+                object_id: datasourceId,
+                object_type: 'datasource',
+                object_name: renderedState.selectedObject.data.name,
+              });
+              contextToAdd.push(obj);
+            } catch (err) {
+              console.error('Failed to add datasource to context:', err);
+            }
+          }
+        }
+        
+        // Check if views are rendered and were in previous context
+        if (renderedState.multiViews && renderedState.multiViews.length > 0) {
+          for (const view of renderedState.multiViews) {
+            if (view) {
+              const wasInContext = currentThreadContext.some(
+                (ctx) => ctx.object_id === view.id && ctx.object_type === 'view'
+              );
+              if (wasInContext) {
+                try {
+                  const obj = await chatContextApi.addContext({
+                    conversation_id: newThread.id,
+                    object_id: view.id,
+                    object_type: 'view',
+                    object_name: view.name,
+                  });
+                  contextToAdd.push(obj);
+                } catch (err) {
+                  console.error('Failed to add view to context:', err);
+                }
+              }
+            }
+          }
+        }
+        
+        if (contextToAdd.length > 0) {
+          setContext(contextToAdd);
+          onContextChange?.(contextToAdd);
+          // Notify parent of context additions
+          contextToAdd.forEach((obj) => {
+            onAddToContext?.(obj.object_id, obj.object_type);
           });
-          setContext([obj]);
-          onContextChange?.([obj]);
-          onAddToContext?.(selectedDatasource.id, 'datasource');
-        } catch (err) {
-          console.error('Failed to add datasource to context:', err);
-          // Don't fail thread creation if context add fails
         }
       }
     } catch (err) {
@@ -148,7 +248,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
     let threadId = activeThreadId;
     if (!threadId) {
       try {
-        const newThread = await chatApi.createConversation();
+        const newThread = await chatApi.createConversation(agentType);
         setThreads((prev) => [newThread, ...prev]);
         threadId = newThread.id;
         setActiveThreadId(threadId);
@@ -267,8 +367,14 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
                 <ModelSettings
                   provider={provider}
                   model={model}
-                  onProviderChange={setProvider}
-                  onModelChange={setModel}
+                  onProviderChange={(newProvider) => {
+                    setProvider(newProvider);
+                    savePreferences({ preferred_provider: newProvider });
+                  }}
+                  onModelChange={(newModel) => {
+                    setModel(newModel);
+                    savePreferences({ preferred_model: newModel });
+                  }}
                 />
               </DropdownMenuContent>
             </DropdownMenu>
@@ -288,6 +394,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             onSelectThread={setActiveThreadId}
             onCreateThread={handleCreateThread}
             onThreadsChange={handleThreadsChange}
+            onDeleteThread={handleDeleteThread}
           />
         </div>
       </div>
@@ -299,7 +406,10 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             defaultModel={model}
             hideModelSelector={true}
             agentType={agentType}
-            onAgentTypeChange={setAgentType}
+            onAgentTypeChange={(newAgentType) => {
+              setAgentType(newAgentType);
+              savePreferences({ preferred_agent_type: newAgentType });
+            }}
             context={context}
             onRemoveContext={handleRemoveContext}
             onLoadQuery={onLoadQuery}

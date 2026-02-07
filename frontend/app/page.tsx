@@ -23,6 +23,10 @@ function HomeContent() {
   const [contextObjects, setContextObjects] = useState<ChatContextObject[]>([]);
   const [agentPanelWidth, setAgentPanelWidth] = useState(384);
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null);
+  const [renderedState, setRenderedState] = useState<{
+    selectedObject: any;
+    multiViews: Array<any>;
+  } | null>(null);
   const addToContextRef = useRef<((objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) | null>(null);
   const loadQueryRef = useRef<((datasourceId: string, query: Record<string, any>) => void) | null>(null);
 
@@ -131,6 +135,7 @@ function HomeContent() {
               onLoadQueryRef={loadQueryRef}
               onDatasourceSelect={setSelectedDatasource}
               activeThreadId={activeThreadId}
+              onRenderedStateChange={setRenderedState}
             />
           </div>
 
@@ -145,6 +150,7 @@ function HomeContent() {
             onWidthChange={setAgentPanelWidth}
             selectedDatasource={selectedDatasource ? { id: selectedDatasource.id, name: selectedDatasource.name } : null}
             onActiveThreadChange={handleActiveThreadChange}
+            renderedState={renderedState}
             onLoadQuery={(datasourceId, query) => {
               console.log('page.tsx onLoadQuery called:', { datasourceId, query, loadQueryRef: loadQueryRef.current });
               // Use the ref to call ThreePanelLayout's load query handler

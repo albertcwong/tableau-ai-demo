@@ -5,7 +5,7 @@ import { authApi, type TableauConfigOption, type TableauAuthResponse } from '@/l
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, CheckCircle2, XCircle, Server } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Server, X } from 'lucide-react';
 import { HiOutlineLink } from 'react-icons/hi';
 import { FaUnlink } from 'react-icons/fa';
 import { useAuth } from '@/components/auth/AuthContext';
@@ -78,7 +78,20 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
 
       onConnectionChange?.(true, config);
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to connect to Tableau server';
+      // Extract detailed error message from response
+      let errorMessage = 'Failed to connect to Tableau server';
+      if (err.response?.data) {
+        // FastAPI returns errors in 'detail' field
+        if (err.response.data.detail) {
+          errorMessage = err.response.data.detail;
+        } else if (typeof err.response.data === 'string') {
+          errorMessage = err.response.data;
+        } else if (err.response.data.message) {
+          errorMessage = err.response.data.message;
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
       setError(errorMessage);
       setConnectionStatus({ connected: false });
       onConnectionChange?.(false);
@@ -140,11 +153,14 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
               <SelectValue placeholder="Select Tableau server..." />
             </SelectTrigger>
             <SelectContent>
-              {configs.map((config) => (
-                <SelectItem key={config.id} value={config.id.toString()}>
-                  <span className="font-medium">{config.name}</span>
-                </SelectItem>
-              ))}
+              {configs.map((config) => {
+                const siteDisplay = config.site_id && config.site_id.trim() ? config.site_id : 'Default';
+                return (
+                  <SelectItem key={config.id} value={config.id.toString()}>
+                    <span className="font-medium">{config.name}</span> ({siteDisplay})
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
 
@@ -188,9 +204,22 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
       )}
 
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="relative">
           <XCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription className="pr-8">{error}</AlertDescription>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="absolute top-2 right-2 h-6 w-6 p-0 hover:bg-destructive/20"
+            onClick={() => {
+              setError(null);
+              // Reset connection state to allow trying a different server
+              setConnectionStatus({ connected: false });
+            }}
+            title="Dismiss error and try another server"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </Alert>
       )}
 

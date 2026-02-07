@@ -20,17 +20,17 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "your-secret-key-change-in-production"  # Change in production!
     
     # CORS - stored as string in env, converted to list
-    CORS_ORIGINS: str = "http://localhost:3000,https://localhost:3000"
+    CORS_ORIGINS: str = "http://localhost:3000,https://localhost:3000,http://localhost:3001"
     
     @property
     def cors_origins_list(self) -> List[str]:
         """Get CORS origins as a list."""
         if isinstance(self.CORS_ORIGINS, str):
             origins = [origin.strip() for origin in self.CORS_ORIGINS.split(',') if origin.strip()]
-            return origins if origins else ["http://localhost:3000", "https://localhost:3000"]
+            return origins if origins else ["http://localhost:3000", "https://localhost:3000", "http://localhost:3001"]
         elif isinstance(self.CORS_ORIGINS, list):
             return self.CORS_ORIGINS
-        return ["http://localhost:3000", "https://localhost:3000"]
+        return ["http://localhost:3000", "https://localhost:3000", "http://localhost:3001"]
     
     # Database
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/tableau_demo"

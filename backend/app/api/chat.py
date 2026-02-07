@@ -74,6 +74,7 @@ class MessageResponse(BaseModel):
     feedback_text: Optional[str] = None
     total_time_ms: Optional[float] = None
     vizql_query: Optional[dict] = None  # VizQL query used to generate the answer (for vizql agent)
+    extra_metadata: Optional[dict] = None  # Additional metadata (e.g., is_greeting flag)
     created_at: datetime
     
     @model_validator(mode='before')
@@ -120,21 +121,34 @@ def get_current_user_optional(
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     request: Request,
+    agent_type: Optional[str] = Query(None, description="Agent type for personalized greeting: 'general', 'vizql', or 'summary'"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    """Create a new conversation."""
+    """Create a new conversation with personalized greeting based on agent type."""
     conversation = Conversation(user_id=current_user.id if current_user else None)
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
     
+    # Personalized greetings per agent type
+    greeting_messages = {
+        'general': "Hello! I'm your General Agent assistant. I can help you explore Tableau objects, answer questions about your data, and assist with general queries. What would you like to know?",
+        'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
+        'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
+    }
+    
+    # Default greeting if agent_type is not provided or invalid
+    agent_type_normalized = agent_type.lower() if agent_type else 'general'
+    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['general'])
+    
     # Create initial greeting message from assistant
     greeting_message = Message(
         conversation_id=conversation.id,
         role=MessageRole.ASSISTANT,
-        content="What can I help you with?",
-        created_at=datetime.now()
+        content=greeting_content,
+        created_at=datetime.now(),
+        extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}  # Mark as greeting message
     )
     db.add(greeting_message)
     db.commit()
@@ -143,8 +157,63 @@ async def create_conversation(
     # Compute message count (should be 1 after adding greeting)
     conversation.message_count = db.query(Message).filter(Message.conversation_id == conversation.id).count()
     
-    logger.info(f"Created conversation {conversation.id} with initial greeting")
+    logger.info(f"Created conversation {conversation.id} with initial greeting for agent type: {agent_type_normalized}")
     return conversation
+
+
+@router.post("/conversations/{conversation_id}/greeting", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+async def create_greeting_message(
+    conversation_id: int,
+    agent_type: str = Query(..., description="Agent type for personalized greeting: 'general', 'vizql', or 'summary'"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
+    """Create a greeting message for an existing conversation when agent type changes."""
+    # Verify conversation exists
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Personalized greetings per agent type
+    greeting_messages = {
+        'general': "Hello! I'm your General Agent assistant. I can help you explore Tableau objects, answer questions about your data, and assist with general queries. What would you like to know?",
+        'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
+        'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
+    }
+    
+    # Normalize agent type
+    agent_type_normalized = agent_type.lower() if agent_type else 'general'
+    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['general'])
+    
+    # Create greeting message
+    greeting_message = Message(
+        conversation_id=conversation_id,
+        role=MessageRole.ASSISTANT,
+        content=greeting_content,
+        created_at=datetime.now(),
+        extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}
+    )
+    db.add(greeting_message)
+    db.commit()
+    db.refresh(greeting_message)
+    
+    logger.info(f"Created greeting message {greeting_message.id} for conversation {conversation_id} with agent type: {agent_type_normalized}")
+    
+    # Convert to response model
+    return MessageResponse(
+        id=greeting_message.id,
+        conversation_id=greeting_message.conversation_id,
+        role=greeting_message.role.value,
+        content=greeting_message.content,
+        model_used=greeting_message.model_used,
+        tokens_used=greeting_message.tokens_used,
+        feedback=greeting_message.feedback,
+        feedback_text=greeting_message.feedback_text,
+        total_time_ms=greeting_message.total_time_ms,
+        vizql_query=None,
+        extra_metadata=greeting_message.extra_metadata,
+        created_at=greeting_message.created_at
+    )
 
 
 @router.get("/conversations", response_model=List[ConversationResponse])
@@ -239,6 +308,7 @@ async def get_conversation_messages(conversation_id: int, db: Session = Depends(
             feedback_text=msg.feedback_text,
             total_time_ms=msg.total_time_ms,
             vizql_query=vizql_query,
+            extra_metadata=msg.extra_metadata,
             created_at=msg.created_at
         ))
     return result

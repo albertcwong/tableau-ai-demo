@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { tableauExplorerApi, authApi } from '@/lib/api';
 import { DatasourceDetail } from './DatasourceDetail';
 import { ViewDetail } from './ViewDetail';
+import { MultiViewPanel } from './MultiViewPanel';
 import { TableauConnectionError } from './TableauConnectionError';
 import { TableauConnectionStatus } from './TableauConnectionStatus';
 import type {
@@ -34,13 +35,17 @@ interface ThreePanelLayoutProps {
   onLoadQueryRef?: React.MutableRefObject<((datasourceId: string, query: Record<string, any>) => void) | null>;
   onDatasourceSelect?: (datasource: TableauDatasource | null) => void;
   activeThreadId?: number | null;
+  onRenderedStateChange?: (state: {
+    selectedObject: SelectedObject | null;
+    multiViews: Array<TableauView | null>;
+  }) => void;
 }
 
 const MIN_LEFT_PANEL_WIDTH = 250;
 const MAX_LEFT_PANEL_WIDTH = 600;
 const DEFAULT_LEFT_PANEL_WIDTH = 320;
 
-export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onDatasourceSelect, activeThreadId }: ThreePanelLayoutProps) {
+export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onDatasourceSelect, activeThreadId, onRenderedStateChange }: ThreePanelLayoutProps) {
   const [allDatasources, setAllDatasources] = useState<TableauDatasource[]>([]);
   const [allWorkbooks, setAllWorkbooks] = useState<TableauWorkbook[]>([]);
   const [expandedWorkbooks, setExpandedWorkbooks] = useState<Set<string>>(new Set());
@@ -56,6 +61,9 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const [leftPanelWidth, setLeftPanelWidth] = useState(DEFAULT_LEFT_PANEL_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
+  const [gridWidth, setGridWidth] = useState(1);
+  const [gridHeight, setGridHeight] = useState(1);
+  const [multiViews, setMultiViews] = useState<Array<TableauView | null>>([null]);
 
   // Check initial connection state - only restore if configs are available AND token is valid
   useEffect(() => {
@@ -270,18 +278,15 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const handleSelectDatasource = (datasource: TableauDatasource) => {
     setSelectedObject({ type: 'datasource', data: datasource });
     onDatasourceSelect?.(datasource);
-    
-    // Automatically add to context if there's an active thread and datasource is not already in context
-    if (activeThreadId && onAddToContext) {
-      const isInContext = contextObjects.some(
-        (ctx) => ctx.object_id === datasource.id && ctx.object_type === 'datasource'
-      );
-      
-      if (!isInContext) {
-        onAddToContext(datasource.id, 'datasource', datasource.name);
-      }
-    }
   };
+
+  // Notify parent of rendered state changes
+  useEffect(() => {
+    onRenderedStateChange?.({
+      selectedObject,
+      multiViews,
+    });
+  }, [selectedObject, multiViews, onRenderedStateChange]);
 
   // Expose function to programmatically select datasource and load query
   useEffect(() => {
@@ -387,6 +392,30 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
 
   const handleSelectView = (view: TableauView) => {
     setSelectedObject({ type: 'view', data: view });
+    // When a view is selected, add it to the first empty slot or replace the first slot
+    const firstEmptyIndex = multiViews.findIndex(v => v === null);
+    if (firstEmptyIndex !== -1) {
+      const newViews = [...multiViews];
+      newViews[firstEmptyIndex] = view;
+      setMultiViews(newViews);
+    } else if (multiViews.length > 0) {
+      // Replace first slot if all slots are filled
+      const newViews = [...multiViews];
+      newViews[0] = view;
+      setMultiViews(newViews);
+    } else {
+      setMultiViews([view]);
+    }
+    
+    // Add to context if not already there
+    if (onAddToContext) {
+      const isInContext = contextObjects.some(
+        (ctx) => ctx.object_id === view.id && ctx.object_type === 'view'
+      );
+      if (!isInContext) {
+        onAddToContext(view.id, 'view', view.name);
+      }
+    }
   };
 
   // Only show error if connection was attempted (isConnected is true)
@@ -397,6 +426,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
         <TableauConnectionError 
           error={error} 
           onRetry={loadDatasourcesAndWorkbooks}
+          onCancel={() => setError(null)}
         />
       </div>
     );
@@ -663,10 +693,19 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                                       <div
                                         key={view.id}
                                         className={cn(
-                                          "p-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors rounded",
+                                          "p-1.5 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-grab active:cursor-grabbing transition-colors rounded",
                                           selectedObject?.type === 'view' && selectedObject.data.id === view.id && "bg-blue-50 dark:bg-blue-900/20"
                                         )}
                                         onClick={() => handleSelectView(view)}
+                                        draggable
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.setData('application/json', JSON.stringify(view));
+                                          e.dataTransfer.effectAllowed = 'move';
+                                          e.currentTarget.style.opacity = '0.5';
+                                        }}
+                                        onDragEnd={(e) => {
+                                          e.currentTarget.style.opacity = '1';
+                                        }}
                                       >
                                         <div className="flex items-center justify-between">
                                           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -722,56 +761,28 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
               </p>
             </div>
           </div>
-        ) : selectedObject ? (
-          <>
-            {selectedObject.type === 'datasource' && (
-              <div className="flex-1 overflow-y-auto p-6">
-                <DatasourceDetail
-                  datasourceId={selectedObject.data.id}
-                  datasourceName={selectedObject.data.name}
-                  onAddToContext={onAddToContext}
-                  contextObjects={contextObjects}
-                />
-              </div>
-            )}
-            {selectedObject.type === 'view' && (
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <ViewDetail 
-                  viewId={selectedObject.data.id} 
-                  viewName={selectedObject.data.name}
-                  onAddToContext={onAddToContext}
-                  contextObjects={contextObjects}
-                />
-              </div>
-            )}
-            {selectedObject.type === 'workbook' && (
-              <div className="flex-1 overflow-y-auto p-6">
-                <div className="space-y-4">
-                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-                    Workbook: {selectedObject.data.name}
-                  </h2>
-                  {selectedObject.views && selectedObject.views.length > 0 ? (
-                    <p className="text-gray-600 dark:text-gray-400">
-                      Select a view from the left panel to see details.
-                    </p>
-                  ) : (
-                    <Card className="p-4">
-                      <p className="text-gray-600 dark:text-gray-400">
-                        No views found in this workbook.
-                      </p>
-                    </Card>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center text-gray-500 dark:text-gray-400">
-              <p className="text-lg mb-2">Select an object from the explorer</p>
-              <p className="text-sm">Browse datasources, workbooks, and views</p>
-            </div>
+        ) : selectedObject?.type === 'datasource' ? (
+          <div className="flex-1 overflow-y-auto p-6">
+            <DatasourceDetail
+              datasourceId={selectedObject.data.id}
+              datasourceName={selectedObject.data.name}
+              onAddToContext={onAddToContext}
+              contextObjects={contextObjects}
+            />
           </div>
+        ) : (
+          <MultiViewPanel
+            gridWidth={gridWidth}
+            gridHeight={gridHeight}
+            onGridChange={(width, height) => {
+              setGridWidth(width);
+              setGridHeight(height);
+            }}
+            views={multiViews}
+            onViewsChange={setMultiViews}
+            onAddToContext={onAddToContext}
+            contextObjects={contextObjects}
+          />
         )}
       </div>
     </div>
