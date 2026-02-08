@@ -73,11 +73,14 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # Nullable for Auth0 users
     role = Column(SQLEnum(UserRole, name="user_role", native_enum=True), default=UserRole.USER, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    # Auth0 integration (MVP)
+    auth0_user_id = Column(String(255), unique=True, nullable=True, index=True, comment="Auth0 user ID (sub claim)")
     
     # User preferences for AI agent
     preferred_provider = Column(String(50), nullable=True, comment="Preferred AI provider (e.g., 'openai', 'anthropic')")
@@ -193,3 +196,37 @@ class ProviderConfig(Base):
 
     def __repr__(self):
         return f"<ProviderConfig(id={self.id}, name={self.name}, provider_type={self.provider_type.value})>"
+
+
+class AuthConfig(Base):
+    """Authentication configuration model - stores system-wide auth settings."""
+    __tablename__ = "auth_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Authentication methods enabled
+    enable_password_auth = Column(Boolean, default=True, nullable=False, comment="Enable username/password authentication")
+    enable_oauth_auth = Column(Boolean, default=False, nullable=False, comment="Enable OAuth (Auth0) authentication")
+    
+    # Auth0 OAuth configuration
+    auth0_domain = Column(String(255), nullable=True, comment="Auth0 tenant domain (e.g., your-tenant.auth0.com)")
+    auth0_client_id = Column(String(255), nullable=True, comment="Auth0 SPA client ID (public, safe to store in DB)")
+    auth0_client_secret = Column(String(512), nullable=True, comment="Auth0 client secret (for server-side token exchange, optional for SPAs)")
+    auth0_audience = Column(String(255), nullable=True, comment="Auth0 API audience identifier")
+    auth0_issuer = Column(String(255), nullable=True, comment="Auth0 issuer URL")
+    
+    # Metadata
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    # Relationships
+    updated_by_user = relationship("User", foreign_keys=[updated_by])
+
+    # Indexes - only one active config
+    __table_args__ = (
+        Index("idx_auth_config_active", "enable_password_auth", "enable_oauth_auth"),
+    )
+
+    def __repr__(self):
+        return f"<AuthConfig(id={self.id}, password={self.enable_password_auth}, oauth={self.enable_oauth_auth})>"

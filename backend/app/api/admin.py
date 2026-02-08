@@ -8,8 +8,9 @@ from sqlalchemy import or_, and_
 from app.core.database import get_db
 from app.core.auth import get_password_hash
 from app.api.auth import get_current_admin_user
-from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType, UserTableauServerMapping
+from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType, UserTableauServerMapping, AuthConfig
 from app.models.chat import Message, Conversation, ChatContext
+from app.services.auth_config_service import get_auth_config, update_auth_config
 
 
 def get_provider_type_value(provider_type) -> str:
@@ -1039,3 +1040,116 @@ async def delete_user_tableau_mapping(
     db.commit()
     
     return None
+
+
+# Auth Configuration models
+class AuthConfigResponse(BaseModel):
+    """Auth configuration response model."""
+    id: int
+    enable_password_auth: bool
+    enable_oauth_auth: bool
+    auth0_domain: Optional[str] = None
+    auth0_client_id: Optional[str] = None
+    auth0_client_secret: Optional[str] = None  # Note: Only returned to admins
+    auth0_audience: Optional[str] = None
+    auth0_issuer: Optional[str] = None
+    updated_by: Optional[int] = None
+    updated_at: str
+    created_at: str
+
+
+class AuthConfigUpdate(BaseModel):
+    """Auth configuration update model."""
+    enable_password_auth: Optional[bool] = None
+    enable_oauth_auth: Optional[bool] = None
+    auth0_domain: Optional[str] = None
+    auth0_client_id: Optional[str] = None
+    auth0_client_secret: Optional[str] = None
+    auth0_audience: Optional[str] = None
+    auth0_issuer: Optional[str] = None
+
+
+@router.get("/admin/auth-config", response_model=AuthConfigResponse)
+async def get_auth_config_endpoint(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Get current authentication configuration."""
+    config = get_auth_config(db)
+    return AuthConfigResponse(
+        id=config.id,
+        enable_password_auth=config.enable_password_auth,
+        enable_oauth_auth=config.enable_oauth_auth,
+        auth0_domain=config.auth0_domain,
+        auth0_audience=config.auth0_audience,
+        auth0_issuer=config.auth0_issuer,
+        updated_by=config.updated_by,
+        updated_at=config.updated_at.isoformat(),
+        created_at=config.created_at.isoformat()
+    )
+
+
+@router.put("/admin/auth-config", response_model=AuthConfigResponse)
+async def update_auth_config_endpoint(
+    config_data: AuthConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Update authentication configuration."""
+    # Validate that at least one auth method is enabled
+    enable_password = config_data.enable_password_auth
+    enable_oauth = config_data.enable_oauth_auth
+    
+    # Get current config to check what's being changed
+    current_config = get_auth_config(db, use_cache=False)
+    
+    if enable_password is None:
+        enable_password = current_config.enable_password_auth
+    if enable_oauth is None:
+        enable_oauth = current_config.enable_oauth_auth
+    
+    if not enable_password and not enable_oauth:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one authentication method must be enabled"
+        )
+    
+    # Validate OAuth config if enabling OAuth
+    if enable_oauth:
+        if not config_data.auth0_domain:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="auth0_domain is required when OAuth authentication is enabled"
+            )
+        if not config_data.auth0_audience:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="auth0_audience is required when OAuth authentication is enabled"
+            )
+    
+    # Update configuration
+    config = update_auth_config(
+        db,
+        enable_password_auth=enable_password,
+        enable_oauth_auth=enable_oauth,
+        auth0_domain=config_data.auth0_domain,
+        auth0_client_id=config_data.auth0_client_id,
+        auth0_client_secret=config_data.auth0_client_secret,
+        auth0_audience=config_data.auth0_audience,
+        auth0_issuer=config_data.auth0_issuer,
+        updated_by=current_user.id
+    )
+    
+    return AuthConfigResponse(
+        id=config.id,
+        enable_password_auth=config.enable_password_auth,
+        enable_oauth_auth=config.enable_oauth_auth,
+        auth0_domain=config.auth0_domain,
+        auth0_client_id=config.auth0_client_id,
+        auth0_client_secret=config.auth0_client_secret,
+        auth0_audience=config.auth0_audience,
+        auth0_issuer=config.auth0_issuer,
+        updated_by=config.updated_by,
+        updated_at=config.updated_at.isoformat(),
+        created_at=config.created_at.isoformat()
+    )

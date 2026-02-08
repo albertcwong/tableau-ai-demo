@@ -39,9 +39,39 @@ export const apiClient = axios.create({
 
 // Request interceptor for error handling
 apiClient.interceptors.request.use(
-  (config) => {
-    // Add auth token if available
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  async (config) => {
+    // Try to get Auth0 access token first (if Auth0 is configured)
+    let token: string | null = null;
+    
+    if (typeof window !== 'undefined') {
+      // Try to get token from Auth0 session cookies via API route
+      // The Auth0 SDK stores tokens in httpOnly cookies, so we need a server route to access them
+      try {
+        const response = await fetch('/api/auth/token', { 
+          credentials: 'include',
+          cache: 'no-store' // Always fetch fresh token
+        });
+        if (response.ok) {
+          const data = await response.json();
+          token = data.token;
+          if (process.env.NODE_ENV === 'development') {
+            console.debug('[API Client] Auth0 token retrieved:', token ? `Token (${token.length} chars)` : 'null');
+          }
+        } else {
+          if (process.env.NODE_ENV === 'development') {
+            console.debug('[API Client] Failed to get Auth0 token, status:', response.status);
+          }
+        }
+      } catch (error) {
+        console.warn('[API Client] Failed to fetch Auth0 token:', error);
+      }
+      
+      // Fallback to localStorage for backward compatibility (internal tokens)
+      if (!token) {
+        token = localStorage.getItem('auth_token');
+      }
+    }
+    
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
       // Debug logging (remove in production)
@@ -49,8 +79,12 @@ apiClient.interceptors.request.use(
         console.debug(`[API] Adding auth token to request: ${config.method?.toUpperCase()} ${config.url}`);
       }
     } else {
+      // Public endpoints that don't require authentication
+      const publicEndpoints = ['/auth/config', '/auth/auth0-config', '/auth/login'];
+      const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint));
+      
       // Debug logging (remove in production)
-      if (process.env.NODE_ENV === 'development') {
+      if (process.env.NODE_ENV === 'development' && !isPublicEndpoint) {
         console.warn(`[API] No auth token found for request: ${config.method?.toUpperCase()} ${config.url}`);
       }
     }
@@ -636,20 +670,33 @@ export interface TableauAuthResponse {
 }
 
 export const authApi = {
-  login: async (credentials: LoginRequest): Promise<LoginResponse> => {
-    const response = await apiClient.post<LoginResponse>('/api/v1/auth/login', credentials);
-    // Store token
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('auth_token', response.data.access_token);
+  login: async (credentials?: LoginRequest): Promise<LoginResponse> => {
+    // For Auth0, login is handled via redirect, but we keep this for backward compatibility
+    if (credentials) {
+      const response = await apiClient.post<LoginResponse>('/api/v1/auth/login', credentials);
+      // Store token
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', response.data.access_token);
+      }
+      return response.data;
     }
+    // Auth0 login handled via redirect
+    throw new Error('Auth0 login must be handled via redirect to /api/auth/login');
+  },
+
+  getAuthConfig: async (): Promise<{ enable_password_auth: boolean; enable_oauth_auth: boolean }> => {
+    const response = await apiClient.get<{ enable_password_auth: boolean; enable_oauth_auth: boolean }>('/api/v1/auth/config');
     return response.data;
   },
 
   logout: async (): Promise<void> => {
-    await apiClient.post('/api/v1/auth/logout');
+    // For Auth0, logout is handled via redirect
+    // Clear any cached tokens
     if (typeof window !== 'undefined') {
       localStorage.removeItem('auth_token');
+      auth0TokenCache = { token: null, expiresAt: 0 };
     }
+    // Auth0 logout handled via redirect to /api/auth/logout
   },
 
   getCurrentUser: async (): Promise<UserResponse> => {
@@ -813,6 +860,30 @@ export interface FeedbackDetailResponse {
   conversation_thread: ConversationMessageResponse[];
 }
 
+export interface AuthConfigResponse {
+  id: number;
+  enable_password_auth: boolean;
+  enable_oauth_auth: boolean;
+  auth0_domain?: string | null;
+  auth0_client_id?: string | null;
+  auth0_client_secret?: string | null;
+  auth0_audience?: string | null;
+  auth0_issuer?: string | null;
+  updated_by?: number | null;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface AuthConfigUpdate {
+  enable_password_auth?: boolean;
+  enable_oauth_auth?: boolean;
+  auth0_domain?: string;
+  auth0_client_id?: string;
+  auth0_client_secret?: string;
+  auth0_audience?: string;
+  auth0_issuer?: string;
+}
+
 // VizQL API functions
 export interface EnrichSchemaResponse {
   datasource_id: string;
@@ -966,6 +1037,17 @@ export const adminApi = {
 
   deleteUserTableauMapping: async (userId: number, mappingId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/admin/users/${userId}/tableau-mappings/${mappingId}`);
+  },
+
+  // Auth configuration management
+  getAuthConfig: async (): Promise<AuthConfigResponse> => {
+    const response = await apiClient.get<AuthConfigResponse>('/api/v1/admin/auth-config');
+    return response.data;
+  },
+
+  updateAuthConfig: async (configData: AuthConfigUpdate): Promise<AuthConfigResponse> => {
+    const response = await apiClient.put<AuthConfigResponse>('/api/v1/admin/auth-config', configData);
+    return response.data;
   },
 };
 

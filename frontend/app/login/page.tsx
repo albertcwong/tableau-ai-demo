@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthContext';
+import { authApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,8 +16,31 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [authConfig, setAuthConfig] = useState<{ enable_password_auth: boolean; enable_oauth_auth: boolean } | null>(null);
   const { login, isAuthenticated, loading: authLoading } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    // Check for error in URL params (from Auth0 redirect)
+    const params = new URLSearchParams(window.location.search);
+    const errorParam = params.get('error');
+    const messageParam = params.get('message');
+    
+    if (errorParam && messageParam) {
+      setError(messageParam);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    
+    // Load auth config to determine available login methods
+    authApi.getAuthConfig()
+      .then(setAuthConfig)
+      .catch((err) => {
+        console.error('Failed to load auth config:', err);
+        // Default to password auth if config fails
+        setAuthConfig({ enable_password_auth: true, enable_oauth_auth: false });
+      });
+  }, []);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -44,14 +68,12 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await login(username, password);
-      // Note: login updates the auth context, we need to wait a tick for it to propagate
-      // But we can check the token to determine role after successful login
-      // For now, we'll use a small delay to ensure context updates
-      setTimeout(() => {
-        // Context should be updated by now
-        // This will be handled by the useEffect below
-      }, 100);
+      // Call the API directly for password authentication
+      const response = await authApi.login({ username, password });
+      
+      // Token is stored in localStorage by authApi.login
+      // Force a full page reload to ensure AuthContext picks up the new token
+      window.location.href = '/';
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
       setLoading(false);
@@ -76,40 +98,96 @@ export default function LoginPage() {
           <CardDescription>Enter your credentials to access the Tableau AI Demo</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <Alert variant="destructive">
-                {error}
-              </Alert>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
-              <Input
-                id="username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                autoFocus
-              />
+          {!authConfig && (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100"></div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
+          )}
+          
+          {/* Always show password form - admins can always use it, regular users only if enabled */}
+          {authConfig && (
+            <>
+              {!authConfig.enable_password_auth && (
+                <Alert className="mb-4">
+                  Password authentication is disabled for regular users. Admin accounts can still log in with password.
+                </Alert>
+              )}
+              
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {error && (
+                  <Alert variant="destructive">
+                    {error}
+                  </Alert>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="username">Username</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={loading}>
+                  {loading ? 'Logging in...' : 'Login'}
+                </Button>
+              </form>
+            </>
+          )}
+          
+          {authConfig?.enable_oauth_auth && (
+            <div className="mt-4">
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-gray-300 dark:border-gray-700" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-white dark:bg-gray-900 px-2 text-gray-500 dark:text-gray-400">Or</span>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full mt-4 flex items-center justify-center gap-2"
+                onClick={() => {
+                  window.location.href = '/api/auth/login';
+                }}
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="flex-shrink-0"
+                >
+                  <path
+                    d="M21.98 7.448L19.62 0H4.347L2.02 7.448c-1.352 4.312.03 9.206 3.815 12.015L12.007 24l6.157-4.533c3.785-2.81 5.166-7.708 3.815-12.015zM12 13.93c-2.484 0-4.5-2.016-4.5-4.5s2.016-4.5 4.5-4.5 4.5 2.016 4.5 4.5-2.016 4.5-4.5 4.5z"
+                    fill="currentColor"
+                  />
+                </svg>
+                Login with Auth0
+              </Button>
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Logging in...' : 'Login'}
-            </Button>
-          </form>
-          <div className="mt-4 text-sm text-gray-500 dark:text-gray-400">
-            <p>Default admin credentials: admin / admin</p>
-          </div>
+          )}
+          
+          {authConfig?.enable_password_auth && (
+            <div className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+              <p>Default admin credentials: admin / admin</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

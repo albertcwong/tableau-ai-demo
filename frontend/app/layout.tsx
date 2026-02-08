@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Auth0Provider } from '@auth0/nextjs-auth0/client';
 import "./globals.css";
 import { ValidationLoader } from "@/components/ValidationLoader";
 import { TableauScriptLoader } from "@/components/TableauScriptLoader";
 import { ThemeInitializer } from "@/components/ThemeInitializer";
 import { AuthProvider } from "@/components/auth/AuthContext";
+import { ConditionalAuth0Provider } from "@/components/auth/ConditionalAuth0Provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -38,13 +40,13 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthProvider>
+        <ConditionalAuth0Provider>
           <ThemeInitializer />
           {/* Load Tableau Embedding API v3 script */}
           <TableauScriptLoader />
           {process.env.NODE_ENV === 'development' && <ValidationLoader />}
           {children}
-        </AuthProvider>
+        </ConditionalAuth0Provider>
       </body>
     </html>
   );

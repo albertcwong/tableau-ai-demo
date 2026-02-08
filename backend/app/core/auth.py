@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
+import requests
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def decode_access_token(token: str) -> Optional[dict]:
-    """Decode and verify a JWT access token."""
+    """Decode and verify a JWT access token (internal HS256 tokens)."""
     logger.debug(f"Attempting to decode token with SECRET_KEY length: {len(SECRET_KEY)}")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -101,4 +102,92 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
     except Exception as e:
         logger.error(f"Unexpected error decoding token: {type(e).__name__}: {str(e)}")
+        return None
+
+
+def get_auth0_jwks(auth0_domain: Optional[str] = None) -> dict:
+    """Fetch Auth0 JWKS (JSON Web Key Set) for token verification."""
+    domain = auth0_domain or settings.AUTH0_DOMAIN
+    if not domain:
+        raise ValueError("AUTH0_DOMAIN not configured")
+    
+    jwks_url = f"https://{domain}/.well-known/jwks.json"
+    try:
+        response = requests.get(jwks_url, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch Auth0 JWKS: {e}")
+        raise
+
+
+def validate_auth0_token(token: str, auth0_domain: Optional[str] = None, auth0_audience: Optional[str] = None, auth0_issuer: Optional[str] = None) -> Optional[dict]:
+    """
+    Validate Auth0 JWT token (RS256 signature verification).
+    
+    Args:
+        token: JWT token to validate
+        auth0_domain: Auth0 domain (if None, uses settings or database config)
+        auth0_audience: Auth0 audience (if None, uses settings or database config)
+        auth0_issuer: Auth0 issuer (if None, uses settings or database config)
+    
+    Returns:
+        Decoded token claims or None if validation fails
+    """
+    # Use provided values or fall back to settings
+    domain = auth0_domain or settings.AUTH0_DOMAIN
+    audience = auth0_audience or settings.AUTH0_AUDIENCE
+    issuer = auth0_issuer or settings.AUTH0_ISSUER
+    
+    if not domain or not audience:
+        logger.warning("Auth0 not configured, skipping Auth0 token validation")
+        return None
+    
+    try:
+        # Get unverified header to find the key ID (kid)
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get('kid')
+        
+        if not kid:
+            logger.warning("Token missing 'kid' in header")
+            return None
+        
+        # Fetch JWKS
+        jwks = get_auth0_jwks(domain)
+        
+        # Find the key with matching kid
+        rsa_key = None
+        for key in jwks.get('keys', []):
+            if key.get('kid') == kid:
+                rsa_key = {
+                    'kty': key['kty'],
+                    'kid': key['kid'],
+                    'use': key['use'],
+                    'n': key['n'],
+                    'e': key['e']
+                }
+                break
+        
+        if not rsa_key:
+            logger.warning(f"Unable to find key with kid: {kid}")
+            return None
+        
+        # Decode and verify token
+        final_issuer = issuer or f"https://{domain}/"
+        payload = jwt.decode(
+            token,
+            rsa_key,
+            algorithms=['RS256'],
+            audience=audience,
+            issuer=final_issuer
+        )
+        
+        logger.debug(f"Auth0 token validated successfully: sub={payload.get('sub')}")
+        return payload
+        
+    except JWTError as e:
+        logger.warning(f"Auth0 token validation failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error validating Auth0 token: {type(e).__name__}: {str(e)}")
         return None

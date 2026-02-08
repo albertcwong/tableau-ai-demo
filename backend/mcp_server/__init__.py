@@ -17,3 +17,13 @@ def set_mcp(instance):
     """Set the MCP server instance (called by server.py)."""
     global _mcp_instance
     _mcp_instance = instance
+
+def get_auth0_token():
+    """Get Auth0 access token (if available)."""
+    from mcp_server.server import get_auth0_token as _get_token
+    return _get_token()
+
+def get_auth0_user_id():
+    """Get Auth0 user ID (sub claim) from validated token."""
+    from mcp_server.server import get_auth0_user_id as _get_user_id
+    return _get_user_id()

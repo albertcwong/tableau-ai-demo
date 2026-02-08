@@ -13,6 +13,7 @@ import { UserManagement } from '@/components/admin/UserManagement';
 import { TableauConfigManagement } from '@/components/admin/TableauConfigManagement';
 import { ProviderConfigManagement } from '@/components/admin/ProviderConfigManagement';
 import { FeedbackManagement } from '@/components/admin/FeedbackManagement';
+import { AuthConfigManagement } from '@/components/admin/AuthConfigManagement';
 import { Home, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -107,6 +108,7 @@ function AdminDashboardContent() {
         <Tabs defaultValue="users" className="space-y-4">
           <TabsList>
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="auth">Authentication</TabsTrigger>
             <TabsTrigger value="tableau">Tableau Connected Apps</TabsTrigger>
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="feedback">Feedback</TabsTrigger>
@@ -122,6 +124,20 @@ function AdminDashboardContent() {
               </CardHeader>
               <CardContent>
                 <UserManagement />
+              </CardContent>
+            </Card>
+          </TabsContent>
+          
+          <TabsContent value="auth">
+            <Card>
+              <CardHeader>
+                <CardTitle>Authentication Configuration</CardTitle>
+                <CardDescription>
+                  Configure authentication methods available for non-admin users. Changes take effect immediately.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AuthConfigManagement />
               </CardContent>
             </Card>
           </TabsContent>

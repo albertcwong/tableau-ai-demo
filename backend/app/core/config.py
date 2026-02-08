@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     MCP_TRANSPORT: str = "stdio"  # stdio or sse
     MCP_LOG_LEVEL: str = "info"
     
+    # Auth0 Configuration (MVP)
+    # Note: These are fallback values. Primary configuration is now in database (auth_configs table)
+    # Admin can configure via /admin/auth-config endpoint
+    AUTH0_DOMAIN: str = ""
+    AUTH0_AUDIENCE: str = ""
+    AUTH0_ISSUER: str = ""
+    BACKEND_API_URL: str = "http://localhost:8000"  # Backend API URL for MCP Server
+    
     # VizQL Agent
     VIZQL_AGENT_TYPE: str = "tool_use"  # "tool_use", "graph_based", "controlled", or "streamlined"
     VIZQL_MAX_BUILD_RETRIES: int = 3  # Maximum number of query build/refinement attempts (default: 3)

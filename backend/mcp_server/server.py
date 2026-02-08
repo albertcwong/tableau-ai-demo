@@ -1,9 +1,11 @@
 """MCP Server for Tableau AI Demo."""
 import asyncio
 import logging
+import os
 import sys
 from fastmcp import FastMCP
 from app.core.config import settings
+from app.core.auth import validate_auth0_token
 
 # Configure logging - use stderr for MCP stdio communication
 # stdout is used for MCP protocol, so logs go to stderr
@@ -20,6 +22,38 @@ mcp = FastMCP(
     name=getattr(settings, 'MCP_SERVER_NAME', 'tableau-analyst-agent'),
     version="1.0.0"
 )
+
+# Auth0 token validation and user context storage
+_auth0_token: str | None = None
+_auth0_user_id: str | None = None
+
+def get_auth0_token() -> str | None:
+    """Get the Auth0 access token from environment."""
+    return _auth0_token
+
+def get_auth0_user_id() -> str | None:
+    """Get the Auth0 user ID (sub claim) from validated token."""
+    return _auth0_user_id
+
+# Export functions for use in tools
+__all__ = ['mcp', 'get_auth0_token', 'get_auth0_user_id']
+
+# Validate Auth0 token on startup if provided
+auth0_token_env = os.getenv("AUTH0_ACCESS_TOKEN")
+if auth0_token_env:
+    logger.info("Auth0 token found in environment, validating...")
+    try:
+        claims = validate_auth0_token(auth0_token_env)
+        if claims:
+            _auth0_token = auth0_token_env
+            _auth0_user_id = claims.get("sub")
+            logger.info(f"Auth0 token validated successfully for user: {_auth0_user_id}")
+        else:
+            logger.warning("Auth0 token validation failed")
+    except Exception as e:
+        logger.error(f"Error validating Auth0 token: {e}", exc_info=True)
+else:
+    logger.info("No AUTH0_ACCESS_TOKEN found in environment (Auth0 auth disabled)")
 
 # Register mcp instance in package __init__ so tools can access it without circular import
 from mcp_server import set_mcp

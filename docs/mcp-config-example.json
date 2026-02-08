@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "tableau-analyst-agent": {
+      "command": "/path/to/backend/venv/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "PYTHONPATH": "/path/to/backend",
+        "MCP_TRANSPORT": "stdio",
+        "AUTH0_ACCESS_TOKEN": "${AUTH0_TOKEN}",
+        "AUTH0_DOMAIN": "your-tenant.auth0.com",
+        "AUTH0_AUDIENCE": "https://tableau-ai-demo-api",
+        "BACKEND_API_URL": "http://localhost:8000",
+        "DATABASE_URL": "postgresql://user:pass@host:5432/db"
+      }
+    }
+  }
+}
