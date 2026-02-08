@@ -25,6 +25,7 @@ export function AuthConfigManagement() {
     auth0_client_secret: '',
     auth0_audience: '',
     auth0_issuer: '',
+    auth0_tableau_metadata_field: '',
   });
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export function AuthConfigManagement() {
         auth0_client_secret: authConfig.auth0_client_secret || '',
         auth0_audience: authConfig.auth0_audience || '',
         auth0_issuer: authConfig.auth0_issuer || '',
+        auth0_tableau_metadata_field: authConfig.auth0_tableau_metadata_field || '',
       });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to load authentication configuration');
@@ -249,6 +251,32 @@ export function AuthConfigManagement() {
                 />
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   Auth0 issuer URL (defaults to https://your-domain.auth0.com/ if not provided)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="auth0_tableau_metadata_field">Auth0 Tableau Metadata Field (Optional)</Label>
+                <Input
+                  id="auth0_tableau_metadata_field"
+                  type="text"
+                  placeholder="app_metadata.tableau_username"
+                  value={formData.auth0_tableau_metadata_field || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, auth0_tableau_metadata_field: e.target.value })
+                  }
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Field path in Auth0 token to extract Tableau username. Examples:
+                  <br />
+                  • <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">app_metadata.tableau_username</code> - for app_metadata
+                  <br />
+                  • <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">user_metadata.tableau_username</code> - for user_metadata
+                  <br />
+                  • <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">tableau_username</code> - for top-level claim
+                  <br />
+                  • <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">https://tableau-ai-demo-api/tableau_username</code> - for namespaced claim
+                  <br />
+                  Leave empty to disable automatic Tableau username mapping.
                 </p>
               </div>
             </CardContent>

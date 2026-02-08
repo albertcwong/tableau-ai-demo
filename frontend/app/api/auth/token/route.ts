@@ -15,7 +15,10 @@ export async function GET() {
     
     // Read the custom session cookie that was set in the callback handler
     const cookieStore = await cookies();
+    const allCookies = cookieStore.getAll();
+    console.log('[Auth0 Token] All cookies:', allCookies.map(c => c.name));
     const sessionCookie = cookieStore.get('appSession');
+    console.log('[Auth0 Token] Session cookie exists:', !!sessionCookie?.value);
     
     if (!sessionCookie?.value) {
       // No Auth0 session - return 200 with null token (not an error)

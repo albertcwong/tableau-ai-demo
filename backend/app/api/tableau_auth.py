@@ -80,16 +80,27 @@ async def authenticate_tableau(
         )
     
     # Determine the username that will be used for authentication
-    # Check if user has a custom Tableau username mapping for this Connected App
-    # Site ID comes from the config, so we only need to match on user_id + config_id
+    # Priority: 1) Manual mapping, 2) Auth0 metadata, 3) App username
     mapping = db.query(UserTableauServerMapping).filter(
         UserTableauServerMapping.user_id == current_user.id,
         UserTableauServerMapping.tableau_server_config_id == config.id
     ).first()
     
-    # Use mapped username if available, otherwise use app username
-    tableau_username = mapping.tableau_username if mapping else current_user.username
-    username_source = "mapped username" if mapping else "app username"
+    logger.debug(f"Tableau auth for user {current_user.id} (username: {current_user.username}): "
+                 f"mapping exists: {mapping is not None}, tableau_username: {current_user.tableau_username}")
+    
+    if mapping:
+        tableau_username = mapping.tableau_username
+        username_source = "manual mapping"
+        logger.info(f"Using manual mapping Tableau username: {tableau_username}")
+    elif current_user.tableau_username:
+        tableau_username = current_user.tableau_username
+        username_source = "Auth0 metadata"
+        logger.info(f"Using Auth0 metadata Tableau username: {tableau_username}")
+    else:
+        tableau_username = current_user.username
+        username_source = "app username"
+        logger.info(f"Using app username as Tableau username: {tableau_username}")
     
     # Normalize config site_id for TableauClient (empty string = default site = None)
     if config.site_id and isinstance(config.site_id, str) and config.site_id.strip():

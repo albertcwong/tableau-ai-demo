@@ -52,6 +52,7 @@ class UserResponse(BaseModel):
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     preferred_agent_type: Optional[str] = None
+    tableau_username: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1053,6 +1054,7 @@ class AuthConfigResponse(BaseModel):
     auth0_client_secret: Optional[str] = None  # Note: Only returned to admins
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
+    auth0_tableau_metadata_field: Optional[str] = None
     updated_by: Optional[int] = None
     updated_at: str
     created_at: str
@@ -1067,6 +1069,7 @@ class AuthConfigUpdate(BaseModel):
     auth0_client_secret: Optional[str] = None
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
+    auth0_tableau_metadata_field: Optional[str] = None
 
 
 @router.get("/admin/auth-config", response_model=AuthConfigResponse)
@@ -1081,8 +1084,11 @@ async def get_auth_config_endpoint(
         enable_password_auth=config.enable_password_auth,
         enable_oauth_auth=config.enable_oauth_auth,
         auth0_domain=config.auth0_domain,
+        auth0_client_id=config.auth0_client_id,
+        auth0_client_secret=config.auth0_client_secret,
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
+        auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()
@@ -1137,6 +1143,7 @@ async def update_auth_config_endpoint(
         auth0_client_secret=config_data.auth0_client_secret,
         auth0_audience=config_data.auth0_audience,
         auth0_issuer=config_data.auth0_issuer,
+        auth0_tableau_metadata_field=config_data.auth0_tableau_metadata_field,
         updated_by=current_user.id
     )
     
@@ -1149,6 +1156,7 @@ async def update_auth_config_endpoint(
         auth0_client_secret=config.auth0_client_secret,
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
+        auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()

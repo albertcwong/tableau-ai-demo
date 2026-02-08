@@ -47,6 +47,7 @@ class UserResponse(BaseModel):
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     preferred_agent_type: Optional[str] = None
+    tableau_username: Optional[str] = None
 
 
 def get_current_user(
@@ -237,7 +238,8 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         is_active=current_user.is_active,
         preferred_provider=current_user.preferred_provider,
         preferred_model=current_user.preferred_model,
-        preferred_agent_type=current_user.preferred_agent_type
+        preferred_agent_type=current_user.preferred_agent_type,
+        tableau_username=current_user.tableau_username
     )
 
 

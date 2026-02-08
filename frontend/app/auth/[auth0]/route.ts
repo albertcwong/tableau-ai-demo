@@ -43,14 +43,20 @@ async function getAuth0Client(): Promise<Auth0Client> {
 }
 
 export async function GET(req: NextRequest) {
+  const pathname = req.nextUrl.pathname;
+  const route = pathname.split('/').pop(); // Get the [auth0] parameter
+  console.log('[Auth0 Dynamic Route] Request:', pathname, 'route:', route);
+  
   try {
     const config = await getAuth0Config();
-    const route = req.nextUrl.pathname.split('/').pop(); // Get the [auth0] parameter
+    console.log('[Auth0 Dynamic Route] Config enabled:', config.enabled, 'domain:', config.domain);
     
     // If Auth0 is not configured, return appropriate responses based on the route
     if (!config.enabled || !config.domain || !config.clientId) {
+      console.log('[Auth0 Dynamic Route] Auth0 not configured');
       // For profile endpoint, return 404 (Auth0 SDK expects this when not authenticated)
       if (route === 'profile') {
+        console.log('[Auth0 Dynamic Route] Profile route, Auth0 not configured, returning 404');
         return NextResponse.json({ error: 'Not authenticated' }, { status: 404 });
       }
       
@@ -307,28 +313,37 @@ export async function GET(req: NextRequest) {
       }
     } else if (route === 'profile') {
       // For profile, check if user is authenticated using our custom session format
+      console.log('[Auth0 Dynamic Route] Profile route handler executing');
       try {
         const cookieStore = await cookies();
         const sessionCookie = cookieStore.get('appSession');
         
+        console.log('[Auth0 Profile] Session cookie exists:', !!sessionCookie?.value);
+        
         if (!sessionCookie?.value) {
+          console.log('[Auth0 Profile] No session cookie, returning 404');
           return NextResponse.json({ error: 'Not authenticated' }, { status: 404 });
         }
         
         // Decode the session data
         const sessionData = JSON.parse(Buffer.from(sessionCookie.value, 'base64').toString());
         
+        console.log('[Auth0 Profile] Session data decoded, user exists:', !!sessionData.user);
+        
         // Check if token is expired
         if (sessionData.expiresAt && Date.now() > sessionData.expiresAt) {
+          console.log('[Auth0 Profile] Token expired');
           cookieStore.delete('appSession');
           return NextResponse.json({ error: 'Not authenticated' }, { status: 404 });
         }
         
         // Return the user data from the session
         if (sessionData.user) {
+          console.log('[Auth0 Profile] Returning user data');
           return NextResponse.json(sessionData.user);
         }
         
+        console.log('[Auth0 Profile] No user data in session');
         return NextResponse.json({ error: 'Not authenticated' }, { status: 404 });
       } catch (error) {
         console.error('[Auth0 Profile] Error reading session:', error);

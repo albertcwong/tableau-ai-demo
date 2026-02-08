@@ -140,6 +140,14 @@ apiClient.interceptors.response.use(
           // Tableau connection failures should be handled gracefully without logging out
           const isAuthEndpoint = url.includes('/auth/') && !url.includes('/tableau-auth/');
           const isTableauEndpoint = url.includes('/tableau/') || url.includes('/tableau-auth/');
+          const isTableauConfigsEndpoint = url.includes('/tableau-auth/configs');
+          
+          // Suppress 401 errors for tableau-auth/configs during logout (expected behavior)
+          const hasNoAuthToken = typeof window !== 'undefined' && !localStorage.getItem('auth_token');
+          if (isTableauConfigsEndpoint && hasNoAuthToken) {
+            // Expected during logout - silently ignore
+            break;
+          }
           
           if (isAuthEndpoint && typeof window !== 'undefined') {
             // App authentication failed - redirect to login
@@ -627,6 +635,7 @@ export interface UserResponse {
   preferred_provider?: string | null;
   preferred_model?: string | null;
   preferred_agent_type?: string | null;
+  tableau_username?: string | null;
 }
 
 export interface UserTableauMappingCreate {
@@ -869,6 +878,7 @@ export interface AuthConfigResponse {
   auth0_client_secret?: string | null;
   auth0_audience?: string | null;
   auth0_issuer?: string | null;
+  auth0_tableau_metadata_field?: string | null;
   updated_by?: number | null;
   updated_at: string;
   created_at: string;
@@ -882,6 +892,7 @@ export interface AuthConfigUpdate {
   auth0_client_secret?: string;
   auth0_audience?: string;
   auth0_issuer?: string;
+  auth0_tableau_metadata_field?: string;
 }
 
 // VizQL API functions

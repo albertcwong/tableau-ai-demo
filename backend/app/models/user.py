@@ -81,6 +81,7 @@ class User(Base):
     
     # Auth0 integration (MVP)
     auth0_user_id = Column(String(255), unique=True, nullable=True, index=True, comment="Auth0 user ID (sub claim)")
+    tableau_username = Column(String(255), nullable=True, comment="Tableau username extracted from Auth0 metadata")
     
     # User preferences for AI agent
     preferred_provider = Column(String(50), nullable=True, comment="Preferred AI provider (e.g., 'openai', 'anthropic')")
@@ -214,6 +215,7 @@ class AuthConfig(Base):
     auth0_client_secret = Column(String(512), nullable=True, comment="Auth0 client secret (for server-side token exchange, optional for SPAs)")
     auth0_audience = Column(String(255), nullable=True, comment="Auth0 API audience identifier")
     auth0_issuer = Column(String(255), nullable=True, comment="Auth0 issuer URL")
+    auth0_tableau_metadata_field = Column(String(255), nullable=True, comment="Auth0 metadata field name to extract Tableau username (e.g., 'app_metadata.tableau_username' or 'tableau_username')")
     
     # Metadata
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)

@@ -15,7 +15,7 @@ interface TableauConnectionStatusProps {
 }
 
 export function TableauConnectionStatus({ onConnectionChange }: TableauConnectionStatusProps) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isAuthenticated } = useAuth();
   const [configs, setConfigs] = useState<TableauConfigOption[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<{
@@ -28,14 +28,23 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
 
   // Load configs on mount
   useEffect(() => {
+    // Skip if user is not authenticated
+    if (!isAuthenticated) {
+      return;
+    }
     loadConfigs();
     // Don't automatically restore connection state - let user explicitly connect
     // This prevents automatic API calls on page load
     // The stored config ID can be restored for UI purposes (in loadConfigs),
     // but connection state should only be set when user explicitly clicks "Connect"
-  }, []);
+  }, [isAuthenticated]);
 
   const loadConfigs = async () => {
+    // Skip if user is not authenticated
+    if (!isAuthenticated) {
+      return;
+    }
+    
     try {
       const configsList = await authApi.listTableauConfigs();
       setConfigs(configsList);

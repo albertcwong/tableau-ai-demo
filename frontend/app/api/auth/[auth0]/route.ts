@@ -37,10 +37,39 @@ async function getAuth0Client(): Promise<Auth0Client> {
 export async function GET(req: NextRequest) {
   try {
     const client = await getAuth0Client();
+    const url = new URL(req.url);
     
-    // The middleware method internally calls authClient.handler which routes
-    // requests to the appropriate Auth0 endpoint (login, logout, callback, profile, etc.)
-    // based on the path. This works for the dynamic [auth0] route.
+    // Handle logout specially to ensure correct returnTo URL
+    if (url.pathname === '/auth/logout') {
+      // Get Auth0 config for logout URL
+      const config = await getAuth0Config();
+      
+      // Clear local session cookie
+      const response = NextResponse.redirect(new URL('/login', req.url));
+      response.cookies.delete('appSession');
+      
+      if (!config.enabled || !config.domain || !config.clientId) {
+        // Auth0 not configured, just redirect to login
+        return response;
+      }
+      
+      // Construct returnTo URL using the same origin as the request
+      // Extract origin from request URL
+      const requestUrl = new URL(req.url);
+      const returnTo = new URL('/login', `${requestUrl.protocol}//${requestUrl.host}`);
+      
+      // Build Auth0 logout URL with returnTo parameter
+      const auth0LogoutUrl = new URL(`https://${config.domain}/v2/logout`);
+      auth0LogoutUrl.searchParams.set('client_id', config.clientId);
+      auth0LogoutUrl.searchParams.set('returnTo', returnTo.toString());
+      
+      // Redirect to Auth0 logout
+      // If Auth0 rejects it (400 error), the user will see an error page
+      // But the session is already cleared locally, so they can navigate to /login manually
+      return NextResponse.redirect(auth0LogoutUrl.toString());
+    }
+    
+    // For all other routes, use the standard middleware
     return client.middleware(req);
   } catch (error: any) {
     console.error('Auth0 route handler error:', error);

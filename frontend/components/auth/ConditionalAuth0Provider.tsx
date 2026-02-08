@@ -28,11 +28,11 @@ export function ConditionalAuth0Provider({ children }: { children: ReactNode }) 
       });
   }, []);
 
-  // Always render Auth0Provider so useAuth0User hook works
-  // Route handlers will return proper responses (404) when Auth0 isn't configured
-  // This prevents errors while still allowing the hook to be called
+  // Always render Auth0Provider so useAuth0User hook works (React hooks rules)
+  // When OAuth is disabled, AuthProvider will ignore Auth0 results
+  // Configure basePath to match our route structure
   return (
-    <Auth0Provider>
+    <Auth0Provider basePath="/auth">
       <AuthProvider oauthEnabled={oauthEnabled && !loading}>
         {children}
       </AuthProvider>

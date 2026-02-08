@@ -72,6 +72,7 @@ def update_auth_config(
     auth0_client_secret: Optional[str] = None,
     auth0_audience: Optional[str] = None,
     auth0_issuer: Optional[str] = None,
+    auth0_tableau_metadata_field: Optional[str] = None,
     updated_by: Optional[int] = None
 ) -> AuthConfig:
     """
@@ -105,6 +106,8 @@ def update_auth_config(
         config.auth0_audience = auth0_audience
     if auth0_issuer is not None:
         config.auth0_issuer = auth0_issuer
+    if auth0_tableau_metadata_field is not None:
+        config.auth0_tableau_metadata_field = auth0_tableau_metadata_field
     if updated_by is not None:
         config.updated_by = updated_by
     

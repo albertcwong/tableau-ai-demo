@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { tableauExplorerApi, authApi } from '@/lib/api';
+import { useAuth } from '@/components/auth/AuthContext';
 import { BreadcrumbNav, type BreadcrumbItem } from './BreadcrumbNav';
 import { ObjectList } from './ObjectList';
 import { DatasourceDetail } from './DatasourceDetail';
@@ -31,6 +32,7 @@ interface ObjectExplorerProps {
 }
 
 export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectExplorerProps) {
+  const { isAuthenticated } = useAuth();
   const [projects, setProjects] = useState<TableauProject[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
   const [selectedObject, setSelectedObject] = useState<SelectedObject>(null);
@@ -41,6 +43,12 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
   // Check initial connection state - only restore if configs are available
   useEffect(() => {
     const checkAndRestoreConnection = async () => {
+      // Skip if user is not authenticated
+      if (!isAuthenticated) {
+        setLoading(false);
+        return;
+      }
+      
       try {
         // First check if there are any Tableau configs available
         const configsList = await authApi.listTableauConfigs();
@@ -87,7 +95,7 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
     };
     
     checkAndRestoreConnection();
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     // Only load projects if connected

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { tableauExplorerApi, authApi } from '@/lib/api';
+import { useAuth } from '@/components/auth/AuthContext';
 import { DatasourceDetail } from './DatasourceDetail';
 import { ViewDetail } from './ViewDetail';
 import { MultiViewPanel } from './MultiViewPanel';
@@ -46,6 +47,7 @@ const MAX_LEFT_PANEL_WIDTH = 600;
 const DEFAULT_LEFT_PANEL_WIDTH = 320;
 
 export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onDatasourceSelect, activeThreadId, onRenderedStateChange }: ThreePanelLayoutProps) {
+  const { isAuthenticated } = useAuth();
   const [allDatasources, setAllDatasources] = useState<TableauDatasource[]>([]);
   const [allWorkbooks, setAllWorkbooks] = useState<TableauWorkbook[]>([]);
   const [expandedWorkbooks, setExpandedWorkbooks] = useState<Set<string>>(new Set());
@@ -68,6 +70,11 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   // Check initial connection state - only restore if configs are available AND token is valid
   useEffect(() => {
     const checkAndRestoreConnection = async () => {
+      // Skip if user is not authenticated
+      if (!isAuthenticated) {
+        return;
+      }
+      
       try {
         // First check if there are any Tableau configs available
         const configsList = await authApi.listTableauConfigs();
@@ -128,7 +135,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     };
     
     checkAndRestoreConnection();
-  }, []);
+  }, [isAuthenticated]);
 
   // Load datasources and workbooks when connected
   // Only load when explicitly connected (not on initial mount)

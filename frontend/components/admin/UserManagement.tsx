@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { adminApi, UserResponse, UserTableauMappingResponse, UserTableauMappingCreate, UserTableauMappingUpdate, TableauConfigResponse, UserUpdate } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -322,8 +322,8 @@ export function UserManagement() {
               const isExpanded = expandedUsers.has(user.id);
               const mappings = userMappings.get(user.id) || [];
               return (
-                <>
-                  <tr key={user.id} className="border-t">
+                <React.Fragment key={user.id}>
+                  <tr className="border-t">
                     <td className="px-4 py-2">{user.id}</td>
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">
@@ -333,7 +333,14 @@ export function UserManagement() {
                         >
                           {isExpanded ? '▼' : '▶'}
                         </button>
-                        {user.username}
+                        <div>
+                          <div>{user.username}</div>
+                          {user.tableau_username && (
+                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                              Tableau: {user.tableau_username}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-2">{user.role}</td>
@@ -501,7 +508,7 @@ export function UserManagement() {
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               );
             })}
           </tbody>
