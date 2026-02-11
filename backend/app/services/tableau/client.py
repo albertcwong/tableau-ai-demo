@@ -2338,8 +2338,8 @@ class TableauClient:
                     # For dimensions: get sample values and cardinality
                     sample_values = []
                     
-                    # Get sample values from first few rows
-                    for row in result["data"][:10]:
+                    # Get sample values from sampled datapoints (up to 100 rows)
+                    for row in result["data"][:100]:
                         if isinstance(row, dict):
                             # Look for the field value - try common key patterns
                             for key, value in row.items():
@@ -2476,7 +2476,7 @@ class TableauClient:
         
         logger.debug(f"Statistics for {field_caption}: {stats}")
         return stats
-    
+
     async def list_supported_functions(self, datasource_id: str) -> List[Dict[str, Any]]:
         """
         List supported Tableau functions for a datasource.

@@ -1,4 +1,5 @@
 """Schema enrichment service using VizQL read-metadata endpoint."""
+import asyncio
 import json
 import logging
 from typing import Dict, Any, Optional, List
@@ -178,35 +179,11 @@ class SchemaEnrichmentService:
                 if field_meta.get("aliases"):
                     field_info["aliases"] = field_meta.get("aliases")
                 
-                # Get field statistics if requested
-                if include_statistics:
-                    try:
-                        stats = await self.tableau_client.get_field_statistics(
-                            datasource_id,
-                            field_caption,
-                            data_type,
-                            is_measure
-                        )
-                        field_info["cardinality"] = stats.get("cardinality")
-                        field_info["sample_values"] = stats.get("sample_values", [])
-                        field_info["min"] = stats.get("min")
-                        field_info["max"] = stats.get("max")
-                        field_info["null_percentage"] = stats.get("null_percentage")
-                    except Exception as e:
-                        logger.debug(f"Could not get statistics for {field_caption}: {e}")
-                        # Continue without statistics
-                        field_info["cardinality"] = None
-                        field_info["sample_values"] = []
-                        field_info["min"] = None
-                        field_info["max"] = None
-                        field_info["null_percentage"] = None
-                else:
-                    field_info["cardinality"] = None
-                    field_info["sample_values"] = []
-                    field_info["min"] = None
-                    field_info["max"] = None
-                    field_info["null_percentage"] = None
-                
+                field_info["cardinality"] = None
+                field_info["sample_values"] = []
+                field_info["min"] = None
+                field_info["max"] = None
+                field_info["null_percentage"] = None
                 enriched["fields"].append(field_info)
                 
                 # Create lowercase lookup map for case-insensitive matching
@@ -220,6 +197,36 @@ class SchemaEnrichmentService:
                     enriched["dimensions"].append(field_caption)
                 else:
                     logger.warning(f"Field {field_caption} could not be categorized (role={field_role})")
+
+            # Fetch field statistics concurrently (sample datapoints, cardinality, min/max)
+            if include_statistics and enriched["fields"]:
+                async def fetch_stats(fi: Dict[str, Any]) -> tuple:
+                    cap = fi["fieldCaption"]
+                    try:
+                        s = await self.tableau_client.get_field_statistics(
+                            datasource_id, cap, fi.get("dataType", ""), fi.get("fieldRole") == "MEASURE"
+                        )
+                        return (cap, s)
+                    except Exception as e:
+                        logger.debug(f"Stats for {cap}: {e}")
+                        return (cap, {})
+
+                tasks = [fetch_stats(f) for f in enriched["fields"]]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, Exception):
+                        continue
+                    cap, stats = r
+                    for fi in enriched["fields"]:
+                        if fi["fieldCaption"] == cap:
+                            fi["cardinality"] = stats.get("cardinality")
+                            fi["sample_values"] = stats.get("sample_values", [])
+                            fi["min"] = stats.get("min")
+                            fi["max"] = stats.get("max")
+                            fi["null_percentage"] = stats.get("null_percentage")
+                            break
+                stats_count = sum(1 for f in enriched["fields"] if f.get("cardinality") is not None or f.get("min") is not None)
+                logger.info(f"Fetched statistics for {stats_count} fields (cardinality, min/max, sample values)")
             
             # Cache enriched schema
             try:

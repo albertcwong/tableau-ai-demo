@@ -74,6 +74,27 @@ def build_compressed_schema_context(enriched_schema: Dict[str, Any]) -> str:
             desc_short = description[:50] + "..." if len(description) > 50 else description
             line += f" - {desc_short}"
         
+        # Add sample_values, cardinality, min/max when present (enriched schema)
+        sample_values = field.get("sample_values", [])
+        cardinality = field.get("cardinality")
+        if sample_values:
+            samples = sample_values[:8]
+            sample_str = ", ".join(str(v) for v in samples)
+            line += f" - sample_values: {sample_str}"
+            if cardinality is not None and cardinality > len(sample_values):
+                line += f" (INCOMPLETE - {cardinality} distinct values)"
+        if cardinality is not None and not sample_values:
+            line += f" - cardinality: {cardinality}"
+        min_val = field.get("min")
+        max_val = field.get("max")
+        if min_val is not None or max_val is not None:
+            if min_val is not None and max_val is not None:
+                line += f" - min: {min_val}, max: {max_val}"
+            elif min_val is not None:
+                line += f" - min: {min_val}"
+            else:
+                line += f" - max: {max_val}"
+        
         lines.append(line)
     
     if len(lines) == 1:  # Only header, no fields

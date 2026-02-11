@@ -244,6 +244,19 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
     return () => clearInterval(interval);
   }, [isReasoningActive, stepTimings, streamStartTime]);
 
+  // Track total elapsed time in real time when streaming
+  const [liveTotalMs, setLiveTotalMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isReasoningActive || !streamStartTime) {
+      setLiveTotalMs(null);
+      return;
+    }
+    const interval = setInterval(() => {
+      setLiveTotalMs(Date.now() - streamStartTime);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isReasoningActive, streamStartTime]);
+
   const organizedSteps = useMemo(() => {
     // If we have step timings with node names, use them directly (one step per node)
     // This aligns with LangGraph nodes and avoids text parsing issues
@@ -313,16 +326,16 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
     return null;
   }
 
-  // Calculate total time - use totalTimeMs from message if available (more accurate),
-  // otherwise sum step durations
+  // Calculate total time - when streaming use live elapsed; when done use totalTimeMs or sum of steps
   const totalTime = useMemo(() => {
+    if (isReasoningActive && liveTotalMs !== null) {
+      return liveTotalMs;
+    }
     if (totalTimeMs !== null && totalTimeMs !== undefined) {
-      // Use the actual total time from the message (includes all processing time)
       return totalTimeMs;
     }
-    // Fallback to summing step durations
     return organizedSteps.reduce((sum, step) => sum + (step.duration || 0), 0);
-  }, [organizedSteps, totalTimeMs]);
+  }, [organizedSteps, totalTimeMs, isReasoningActive, liveTotalMs]);
 
   return (
     <Card className={cn('border-gray-200 dark:border-gray-800', className)}>
@@ -336,7 +349,7 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Reasoning Steps ({organizedSteps.length})
           </span>
-          {stepTimings && stepTimings.length > 0 && totalTime > 0 && (
+          {((stepTimings && stepTimings.length > 0) || (isReasoningActive && liveTotalMs)) && totalTime > 0 && (
             <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
               • {formatDuration(totalTime)}
             </span>
@@ -366,7 +379,7 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
                   />
                 );
               })}
-              {stepTimings && stepTimings.length > 0 && totalTime > 0 && (
+              {(((stepTimings && stepTimings.length > 0) || (isReasoningActive && liveTotalMs)) && totalTime > 0) && (
                 <div className="pt-2 mt-2 border-t border-gray-200 dark:border-gray-700">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-medium text-gray-900 dark:text-gray-100">

@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.agents.vizql_streamlined.nodes import (
+    start_node,
     build_query_node,
     validate_query_node,
     execute_query_node,
@@ -36,16 +37,18 @@ def create_streamlined_vizql_graph() -> StateGraph:
     workflow = StateGraph(StreamlinedVizQLState)
     
     # Add nodes
+    workflow.add_node("start", start_node)
     workflow.add_node("build_query", build_query_node)
     workflow.add_node("validate_query", validate_query_node)
     workflow.add_node("execute_query", execute_query_node)
     workflow.add_node("format_results", format_results_node)
     workflow.add_node("error_handler", error_handler_node)
     
-    # Set entry point
-    workflow.set_entry_point("build_query")
+    # Set entry point (start returns immediately to kick off frontend timer)
+    workflow.set_entry_point("start")
     
     # Add edges
+    workflow.add_edge("start", "build_query")
     workflow.add_edge("build_query", "validate_query")
     
     # Conditional routing from validator

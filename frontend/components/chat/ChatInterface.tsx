@@ -226,6 +226,10 @@ export function ChatInterface({
         'start': 'Starting analysis',
         'get_data': 'Retrieving data',
         'summarize': 'Generating response',
+        // Streamlined VizQL agent nodes
+        'build_query': 'Building query',
+        'validate_query': 'Validating query',
+        'format_results': 'Formatting results',
       };
 
       // Add user message immediately

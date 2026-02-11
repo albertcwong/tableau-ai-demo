@@ -28,14 +28,18 @@ export function DatasourceEnrichButton({
     setError(null);
     
     try {
-      const data = await vizqlApi.enrichSchema(datasourceId, false);
+      const data = await vizqlApi.enrichSchema(datasourceId, false, true);
       setResult(data);
       
       if (onEnriched) {
         onEnriched(data);
       }
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to enrich schema';
+      const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
+      let errorMessage = err.response?.data?.detail || err.message || 'Failed to enrich schema';
+      if (isTimeout) {
+        errorMessage = 'Request timed out. The enrichment may have completed on the server. Try clicking the refresh button to load cached results.';
+      }
       setError(errorMessage);
       console.error('Enrichment failed:', err);
     } finally {
@@ -48,14 +52,18 @@ export function DatasourceEnrichButton({
     setError(null);
     
     try {
-      const data = await vizqlApi.enrichSchema(datasourceId, true);
+      const data = await vizqlApi.enrichSchema(datasourceId, true, true);
       setResult(data);
       
       if (onEnriched) {
         onEnriched(data);
       }
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to refresh schema';
+      const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
+      let errorMessage = err.response?.data?.detail || err.message || 'Failed to refresh schema';
+      if (isTimeout) {
+        errorMessage = 'Request timed out. The server may still be processing. Try again in a moment.';
+      }
       setError(errorMessage);
       console.error('Refresh failed:', err);
     } finally {

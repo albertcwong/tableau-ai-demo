@@ -1,6 +1,7 @@
 """Enhanced query builder node with tool integration."""
 import json
 import logging
+from difflib import get_close_matches
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 
@@ -438,6 +439,68 @@ def _remove_fieldcaption_from_calculated_filters(query_draft: Dict[str, Any]) ->
     if modified:
         logger.info("Removed fieldCaption from calculated filter fields")
     
+    return query_draft
+
+
+def _validate_and_correct_filter_values(query_draft: Dict[str, Any], enriched_schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Validate SET filter values against enriched schema sample_values. Correct when possible.
+    Skips when schema not enriched or sample is incomplete.
+    """
+    if not enriched_schema or not enriched_schema.get("fields"):
+        return query_draft
+    
+    field_map = enriched_schema.get("field_map") or {
+        f.get("fieldCaption", "").lower(): f for f in enriched_schema.get("fields", []) if f.get("fieldCaption")
+    }
+    filters = query_draft.get("query", {}).get("filters", [])
+    if not filters:
+        return query_draft
+    
+    modified = False
+    for f in filters:
+        if f.get("filterType") != "SET":
+            continue
+        field_obj = f.get("field")
+        if not isinstance(field_obj, dict):
+            continue
+        field_caption = field_obj.get("fieldCaption")
+        if not field_caption:
+            continue
+        field_info = field_map.get(field_caption.lower()) if field_caption else None
+        if not field_info:
+            continue
+        sample_values = field_info.get("sample_values", [])
+        cardinality = field_info.get("cardinality")
+        if not sample_values:
+            continue
+        if cardinality is not None and cardinality > len(sample_values):
+            continue  # Sample incomplete, skip validation
+        values = f.get("values", [])
+        if not values:
+            continue
+        valid_set = set(str(v) for v in sample_values)
+        corrected = []
+        filter_modified = False
+        for v in values:
+            v_str = str(v)
+            if v_str in valid_set:
+                corrected.append(v)
+                continue
+            sample_strs = [str(s) for s in sample_values]
+            matches = get_close_matches(v_str, sample_strs, n=1, cutoff=0.6)
+            if matches:
+                corrected.append(matches[0])
+                logger.warning(f"Corrected SET filter value '{v_str}' -> '{matches[0]}' for field '{field_caption}'")
+                filter_modified = True
+            else:
+                corrected.append(v)
+                logger.warning(f"SET filter value '{v_str}' not in sample_values for '{field_caption}'; no fuzzy match")
+        if filter_modified:
+            f["values"] = corrected
+            modified = True
+    if modified:
+        logger.info("Applied filter value corrections against enriched schema")
     return query_draft
 
 
@@ -1095,6 +1158,9 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             # CRITICAL: Apply automatic context filter detection
             # This ensures hierarchical filter dependencies are properly handled
             query_draft = _detect_and_apply_context_filters(query_draft, user_query)
+            
+            # CRITICAL: Validate and correct SET filter values against enriched schema sample_values
+            query_draft = _validate_and_correct_filter_values(query_draft, enriched_schema)
             
             # CRITICAL: Adjust calculated field names to avoid conflicts with existing fields
             # This ensures calculated fields have unique names even if LLM missed the instruction

@@ -27,6 +27,7 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_TIMEOUT = 30000; // 30 seconds
+const LONG_OPERATION_TIMEOUT = 180000; // 3 minutes for schema enrichment, etc.
 
 export const apiClient = axios.create({
   baseURL: API_URL,
@@ -1105,7 +1106,10 @@ export const vizqlApi = {
     const response = await apiClient.post<EnrichSchemaResponse>(
       `/api/v1/vizql/datasources/${datasourceId}/enrich-schema`,
       null,
-      { params: { force_refresh: forceRefresh, include_statistics: includeStatistics } }
+      {
+        params: { force_refresh: forceRefresh, include_statistics: includeStatistics },
+        timeout: LONG_OPERATION_TIMEOUT,
+      }
     );
     return response.data;
   },
