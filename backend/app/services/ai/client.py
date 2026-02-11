@@ -36,7 +36,6 @@ class UnifiedAIClient:
     def __init__(
         self,
         gateway_url: Optional[str] = None,
-        api_key: Optional[str] = None,
         timeout: int = 60,
         max_retries: int = MAX_RETRIES
     ):
@@ -44,12 +43,10 @@ class UnifiedAIClient:
         
         Args:
             gateway_url: Gateway base URL (defaults to settings.GATEWAY_BASE_URL)
-            api_key: API key for authentication (optional, for direct providers)
             timeout: Request timeout in seconds
             max_retries: Maximum number of retry attempts
         """
         self.gateway_url = (gateway_url or settings.GATEWAY_BASE_URL).rstrip('/')
-        self.api_key = api_key
         self.timeout = timeout
         self.max_retries = max_retries
         
@@ -59,27 +56,15 @@ class UnifiedAIClient:
             follow_redirects=True
         )
     
-    def _get_headers(self, api_key: Optional[str] = None) -> Dict[str, str]:
+    def _get_headers(self) -> Dict[str, str]:
         """Get request headers.
         
-        Args:
-            api_key: Optional API key (overrides instance key)
-            
         Returns:
-            Headers dict
+            Headers dict (gateway resolves credentials from ProviderConfig)
         """
-        headers = {
+        return {
             "Content-Type": "application/json"
         }
-        
-        # Add Authorization header if API key provided
-        key = api_key or self.api_key
-        if key and key.strip():  # Check for non-empty string
-            headers["Authorization"] = f"Bearer {key}"
-        else:
-            logger.warning("No API key provided - Authorization header will not be sent")
-        
-        return headers
     
     async def _request_with_retry(
         self,
@@ -176,11 +161,24 @@ class UnifiedAIClient:
         """
         choices = response_data.get("choices", [])
         if not choices:
-            raise AIGatewayError("No choices in response")
+            # Log raw response for debugging provider/gateway issues
+            err_detail = ""
+            if "error" in response_data:
+                err = response_data.get("error", {})
+                err_detail = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            elif "detail" in response_data:
+                err_detail = str(response_data["detail"])
+            logger.warning(
+                "No choices in gateway response: %s",
+                json.dumps({k: v for k, v in response_data.items() if k != "usage"})[:500]
+            )
+            raise AIGatewayError(
+                err_detail or "No choices in response (provider may have filtered or timed out)"
+            )
         
         choice = choices[0]
         message = choice.get("message", {})
-        content = message.get("content", "")
+        content = message.get("content", "") or message.get("text", "")
         
         # Parse function call if present (handle both old and new formats)
         function_call = None
@@ -221,13 +219,13 @@ class UnifiedAIClient:
     async def chat(
         self,
         model: str,
+        provider: str,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
         functions: Optional[List[Dict[str, Any]]] = None,
         function_call: Optional[str] = None,
-        api_key: Optional[str] = None,
         **kwargs
     ) -> ChatResponse:
         """
@@ -235,13 +233,13 @@ class UnifiedAIClient:
         
         Args:
             model: Model name (e.g., "gpt-4", "gemini-pro", "sfdc-xgen")
+            provider: Provider name (e.g., "openai", "apple", "vertex")
             messages: List of message dicts with "role" and "content"
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens to generate
             top_p: Nucleus sampling parameter
             functions: List of function definitions for function calling
             function_call: Function call mode ("auto", "none", or {"name": "function_name"})
-            api_key: Optional API key (for direct providers)
             **kwargs: Additional parameters passed to gateway
             
         Returns:
@@ -254,6 +252,7 @@ class UnifiedAIClient:
         # Build request payload
         payload = {
             "model": model,
+            "provider": provider,
             "messages": messages
         }
         
@@ -271,14 +270,10 @@ class UnifiedAIClient:
             payload["tools"] = kwargs.pop("tools")
         if "tool_choice" in kwargs:
             payload["tool_choice"] = kwargs.pop("tool_choice")
-        
-        # Add any additional kwargs
         payload.update(kwargs)
         
-        # Make request
-        # Gateway is mounted at /api/v1/gateway in the main app
         url = f"{self.gateway_url}/api/v1/gateway/v1/chat/completions"
-        headers = self._get_headers(api_key)
+        headers = self._get_headers()
         
         logger.debug(f"Sending chat request to gateway: model={model}, messages={len(messages)}")
         logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
@@ -295,7 +290,10 @@ class UnifiedAIClient:
             response_data = response.json()
             chat_response = self._parse_chat_response(response_data)
             
-            logger.info(f"Chat completion successful: model={model}, tokens={chat_response.tokens_used}")
+            logger.info(
+                f"Chat completion successful: model={model}, tokens={chat_response.tokens_used}, "
+                f"content_len={len(chat_response.content or '')}, finish_reason={chat_response.finish_reason}"
+            )
             return chat_response
             
         except (AIGatewayError, AINetworkError):
@@ -306,13 +304,13 @@ class UnifiedAIClient:
     async def stream_chat(
         self,
         model: str,
+        provider: str,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
         functions: Optional[List[Dict[str, Any]]] = None,
         function_call: Optional[str] = None,
-        api_key: Optional[str] = None,
         **kwargs
     ) -> AsyncIterator[StreamChunk]:
         """
@@ -320,13 +318,13 @@ class UnifiedAIClient:
         
         Args:
             model: Model name
+            provider: Provider name (e.g., "openai", "apple", "vertex")
             messages: List of message dicts
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             top_p: Nucleus sampling parameter
             functions: List of function definitions
             function_call: Function call mode
-            api_key: Optional API key
             **kwargs: Additional parameters
             
         Yields:
@@ -339,6 +337,7 @@ class UnifiedAIClient:
         # Build request payload
         payload = {
             "model": model,
+            "provider": provider,
             "messages": messages,
             "stream": True
         }
@@ -356,10 +355,8 @@ class UnifiedAIClient:
         
         payload.update(kwargs)
         
-        # Make streaming request
-        # Gateway is mounted at /api/v1/gateway, so use that path
         url = f"{self.gateway_url}/api/v1/gateway/v1/chat/completions"
-        headers = self._get_headers(api_key)
+        headers = self._get_headers()
         
         logger.debug(f"Sending streaming chat request to gateway: model={model}")
         logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")

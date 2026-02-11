@@ -1,5 +1,8 @@
 """State definition for controlled VizQL agent graph."""
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.tableau.client import TableauClient
 
 
 class VizQLGraphState(TypedDict, total=False):
@@ -19,9 +22,10 @@ class VizQLGraphState(TypedDict, total=False):
     user_query: str
     datasource_id: str
     site_id: str
+    tableau_client: Optional["TableauClient"]
     message_history: List[Dict[str, Any]]
-    api_key: str
     model: str
+    provider: Optional[str]
     
     # Schema
     schema: Optional[Dict[str, Any]]

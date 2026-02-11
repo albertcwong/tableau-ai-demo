@@ -49,11 +49,18 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         
         logger.info(f"Fetching data for {len(view_ids)} view(s): {view_ids}")
         
+        # Use state's tableau_client (user's selected config) or fallback to cached fetch
+        tableau_client = state.get("tableau_client")
+
         # Fetch data and metadata for all views in parallel
         tasks = []
         for view_id in view_ids:
-            tasks.append(_fetch_view_data_cached(view_id, max_rows=1000))
-            tasks.append(_fetch_view_metadata_cached(view_id))
+            if tableau_client:
+                tasks.append(tableau_client.get_view_data(view_id, max_rows=1000))
+                tasks.append(tableau_client.get_view(view_id))
+            else:
+                tasks.append(_fetch_view_data_cached(view_id, max_rows=1000))
+                tasks.append(_fetch_view_metadata_cached(view_id))
         
         # Execute all tasks in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -1,7 +1,9 @@
 """Executor node for executing VizQL queries."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
+
+from langchain_core.runnables.config import ensure_config
 
 from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.tableau.client import TableauClient, TableauAPIError
@@ -100,8 +102,9 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         }
     
     try:
-        # Initialize Tableau client
-        tableau_client = TableauClient()
+        # Tableau client from config (not in state - not serializable)
+        config = ensure_config()
+        tableau_client = config.get("configurable", {}).get("tableau_client") or TableauClient()
         
         # Execute using VizQL Data Service API
         datasource_id = query.get("datasource", {}).get("datasourceLuid")

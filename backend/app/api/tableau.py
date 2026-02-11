@@ -1,7 +1,13 @@
 """Tableau API endpoints."""
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+
+from app.services.tableau.token_cache import with_lock as token_cache_lock
+from app.services.tableau.token_store_factory import get_token_store
+from app.services.tableau.token_store import TokenEntry
+from app.services.pat_encryption import decrypt_pat
 from sqlalchemy.orm import Session
 
 from app.api.models import (
@@ -28,7 +34,7 @@ from app.services.tableau.client import (
 )
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.user import User, TableauServerConfig, UserTableauServerMapping
+from app.models.user import User, TableauServerConfig, UserTableauServerMapping, UserTableauPAT
 from sqlalchemy import or_
 
 logger = logging.getLogger(__name__)
@@ -36,8 +42,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tableau", tags=["tableau"])
 
 
-def get_tableau_client(
+async def get_tableau_client(
     x_tableau_config_id: Optional[str] = Header(None, alias="X-Tableau-Config-Id"),
+    x_tableau_auth_type: Optional[str] = Header(None, alias="X-Tableau-Auth-Type"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TableauClient:
@@ -91,16 +98,142 @@ def get_tableau_client(
                 site_id_for_client = config.site_id.strip() or None
             else:
                 site_id_for_client = None  # Default site
+
+            auth_type = (x_tableau_auth_type or "connected_app").lower()
+            if auth_type == "connected_app" and not (config.client_id and config.client_secret):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Connected App credentials are not configured for this server. Use PAT authentication or contact your admin."
+                )
             
-            return TableauClient(
-                server_url=config.server_url,
-                site_id=site_id_for_client,
-                api_version=config.api_version or "3.15",
-                client_id=config.client_id,
-                client_secret=config.client_secret,
-                username=tableau_username,
-                secret_id=config.secret_id or config.client_id
-            )
+            token_store = get_token_store(auth_type)
+            invalidate_cb = lambda: token_store.invalidate(current_user.id, config.id, auth_type)
+
+            # Check token store first
+            token_entry = token_store.get(current_user.id, config.id, auth_type)
+            if token_entry:
+                client = TableauClient(
+                    server_url=config.server_url,
+                    site_id=token_entry.site_id or site_id_for_client,
+                    api_version=config.api_version or "3.15",
+                    client_id="pat-placeholder" if auth_type == "pat" else config.client_id,
+                    client_secret="pat-placeholder" if auth_type == "pat" else config.client_secret,
+                    username=tableau_username,
+                    secret_id=config.secret_id or config.client_id,
+                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                    initial_token=token_entry.token,
+                    initial_site_id=token_entry.site_id,
+                    initial_site_content_url=token_entry.site_content_url,
+                    on_401_invalidate=invalidate_cb,
+                )
+                # Ensure _pat_auth flag is set for PAT tokens
+                if auth_type == "pat":
+                    client._pat_auth = True
+                return client
+
+            # For PAT: if no token in cache, try to restore session from stored credentials
+            if auth_type == "pat":
+                if not getattr(config, 'allow_pat_auth', False):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="PAT authentication is not enabled for this server"
+                    )
+                pat_record = db.query(UserTableauPAT).filter(
+                    UserTableauPAT.user_id == current_user.id,
+                    UserTableauPAT.tableau_server_config_id == config.id,
+                ).first()
+                if not pat_record:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="No PAT configured. Please add one in Settings and connect.",
+                        headers={"X-Error-Code": "TABLEAU_PAT_NOT_CONFIGURED"},
+                    )
+                try:
+                    pat_secret = decrypt_pat(pat_record.pat_secret)
+                except Exception as e:
+                    logger.error(f"Failed to decrypt stored PAT: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to access stored credentials.",
+                        headers={"X-Error-Code": "TABLEAU_CREDENTIAL_ERROR"},
+                    )
+                client = TableauClient(
+                    server_url=config.server_url,
+                    site_id=site_id_for_client,
+                    api_version=config.api_version or "3.15",
+                    client_id="pat-placeholder",
+                    client_secret="pat-placeholder",
+                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                )
+                try:
+                    await client.sign_in_with_pat(pat_record.pat_name, pat_secret)
+                except TableauAuthenticationError as e:
+                    logger.warning(f"PAT restore failed (session expired/invalid): {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Tableau session expired. Please reconnect using the Connect button.",
+                        headers={"X-Error-Code": "TABLEAU_SESSION_EXPIRED"},
+                    )
+                expires_at = client.token_expires_at or datetime.now(timezone.utc) + timedelta(minutes=8)
+                token_entry = TokenEntry(
+                    token=client.auth_token,
+                    expires_at=expires_at,
+                    site_id=client.site_id,
+                    site_content_url=client.site_content_url,
+                )
+                token_store.set(current_user.id, config.id, auth_type, token_entry)
+                client._pat_auth = True
+                logger.info(f"Restored PAT session for user={current_user.id} config={config.id}")
+                return client
+
+            # For Connected App: sign in with lock to prevent parallel sign-ins
+            async with token_cache_lock(current_user.id, config.id, auth_type):
+                # Re-check token store after acquiring lock
+                token_entry = token_store.get(current_user.id, config.id, auth_type)
+                if token_entry:
+                    client = TableauClient(
+                        server_url=config.server_url,
+                        site_id=token_entry.site_id or site_id_for_client,
+                        api_version=config.api_version or "3.15",
+                        client_id="pat-placeholder" if auth_type == "pat" else config.client_id,
+                        client_secret="pat-placeholder" if auth_type == "pat" else config.client_secret,
+                        username=tableau_username,
+                        secret_id=config.secret_id or config.client_id,
+                        verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                        initial_token=token_entry.token,
+                        initial_site_id=token_entry.site_id,
+                        initial_site_content_url=token_entry.site_content_url,
+                        on_401_invalidate=invalidate_cb,
+                    )
+                    # Ensure _pat_auth flag is set for PAT tokens
+                    if auth_type == "pat":
+                        client._pat_auth = True
+                    return client
+
+                # Sign in for Connected App
+                client = TableauClient(
+                    server_url=config.server_url,
+                    site_id=site_id_for_client,
+                    api_version=config.api_version or "3.15",
+                    client_id=config.client_id,
+                    client_secret=config.client_secret,
+                    username=tableau_username,
+                    secret_id=config.secret_id or config.client_id,
+                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                    on_401_invalidate=invalidate_cb,
+                )
+                await client.sign_in()
+                
+                # Cache the token
+                expires_at = client.token_expires_at or datetime.now(timezone.utc) + timedelta(minutes=10)
+                token_entry = TokenEntry(
+                    token=client.auth_token,
+                    expires_at=expires_at,
+                    site_id=client.site_id,
+                    site_content_url=client.site_content_url,
+                )
+                token_store.set(current_user.id, config.id, auth_type, token_entry)
+                return client
         else:
             # Fallback to environment variables (legacy behavior)
             return TableauClient()
@@ -345,6 +478,7 @@ async def query_datasource(
     description="Get the embedding URL and authentication token for a Tableau view.",
     responses={
         200: {"description": "Embed URL and token"},
+        400: {"model": ErrorResponse, "description": "Embedding not supported for PAT authentication"},
         401: {"model": ErrorResponse, "description": "Authentication failed"},
         404: {"model": ErrorResponse, "description": "View not found"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
@@ -353,6 +487,7 @@ async def query_datasource(
 async def get_view_embed_url(
     view_id: str,
     filters: Optional[str] = Query(None, description="Optional filters as JSON string (e.g., '{\"Region\":\"West\"}')"),
+    x_tableau_auth_type: Optional[str] = Header(None, alias="X-Tableau-Auth-Type"),
     client: TableauClient = Depends(get_tableau_client),
 ) -> EmbedUrlResponse:
     """
@@ -363,7 +498,25 @@ async def get_view_embed_url(
     
     Filters can be provided as a JSON string in the query parameter.
     Example: ?filters={"Region":"West","Year":"2024"}
+    
+    Note: View embedding is not supported when using Personal Access Token authentication.
+    Users must connect with Connected App to embed views.
     """
+    # Check if PAT auth is being used
+    auth_type = (x_tableau_auth_type or "connected_app").lower()
+    if auth_type == "pat":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="View embedding is not supported when using Personal Access Token authentication. Connect with Connected App to embed views."
+        )
+    
+    # Also check client's internal PAT flag as a fallback
+    if hasattr(client, '_pat_auth') and client._pat_auth:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="View embedding is not supported when using Personal Access Token authentication. Connect with Connected App to embed views."
+        )
+    
     try:
         # Parse filters if provided as query param
         parsed_filters = None

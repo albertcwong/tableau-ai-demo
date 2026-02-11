@@ -10,18 +10,17 @@ logger = logging.getLogger(__name__)
 class MetaAgentSelector:
     """Intelligent agent selector using AI to choose the best agent."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4"):
+    def __init__(self, model: str = "gpt-4", provider: str = "openai"):
         """Initialize meta-agent selector.
         
         Args:
-            api_key: API key for AI client
             model: Model to use for selection
+            provider: Provider name (e.g., "openai", "apple", "vertex")
         """
-        self.api_key = api_key
         self.model = model
+        self.provider = provider
         self.ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
     
     async def select_agent(
@@ -51,6 +50,7 @@ class MetaAgentSelector:
         
         response = await self.ai_client.chat(
             model=self.model,
+            provider=self.provider,
             messages=[
                 {"role": "system", "content": self._get_selection_system_prompt()},
                 {"role": "user", "content": selection_prompt}

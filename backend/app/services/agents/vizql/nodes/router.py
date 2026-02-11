@@ -82,22 +82,11 @@ async def route_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         )
         
         # Initialize AI client
-        api_key = state.get("api_key")
         model = state.get("model", "gpt-4")
-        
-        # Validate API key is present
-        if not api_key:
-            logger.error("API key missing from state - cannot make gateway request")
-            return {
-                **state,
-                "error": "Failed to route query: Authorization header required for direct authentication",
-                "query_type": "new_query",
-                "routing_reason": "Error: API key missing"
-            }
+        provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         # Call LLM to classify query
@@ -108,8 +97,8 @@ async def route_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         response = await ai_client.chat(
             model=model,
-            messages=messages,
-            api_key=api_key
+            provider=provider,
+            messages=messages
         )
         
         # Parse classification

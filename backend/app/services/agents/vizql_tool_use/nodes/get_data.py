@@ -34,14 +34,18 @@ async def get_data_node(state: VizQLToolUseState) -> Dict[str, Any]:
         logger.info(f"Get data node: user_query='{user_query}'")
         logger.info(f"Site ID: {site_id}, Datasource ID: {datasource_id}")
         
-        # Initialize Tableau client with site_id if available
+        # Use state's tableau_client (user's selected config) or fallback to env
         from app.services.tableau.client import TableauClient
-        if site_id:
+        tableau_client = state.get("tableau_client")
+        if tableau_client:
+            site_id = site_id or (tableau_client.site_id or "")
+            logger.info(f"Using TableauClient from state (site_id: {site_id})")
+        elif site_id:
             tableau_client = TableauClient(site_id=site_id)
             logger.info(f"Initialized TableauClient with site_id: {site_id}")
         else:
             tableau_client = TableauClient()
-            logger.warning("No site_id provided, using default from settings")
+            logger.warning("No tableau_client or site_id, using default from settings")
         
         # Ensure Tableau client is authenticated before using tools
         try:
@@ -55,10 +59,10 @@ async def get_data_node(state: VizQLToolUseState) -> Dict[str, Any]:
                 "raw_data": None
             }
         
-        # Get API key and model from state for tools (needed for LLM calls in build_query)
-        api_key = state.get("api_key")
+        # Get model and provider from state for tools (needed for LLM calls in build_query)
         model = state.get("model")
-        logger.info(f"Initializing tools with api_key={'present' if api_key else 'None'}, model={model}")
+        provider = state.get("provider", "openai")
+        logger.info(f"Initializing tools with model={model}, provider={provider}")
         
         # Initialize tools
         tools = VizQLTools(
@@ -66,8 +70,8 @@ async def get_data_node(state: VizQLToolUseState) -> Dict[str, Any]:
             datasource_id=datasource_id,
             tableau_client=tableau_client,
             message_history=message_history,
-            api_key=api_key,
-            model=model
+            model=model,
+            provider=provider
         )
         
         # Get prompt
@@ -133,51 +137,21 @@ User query: "show me sales for those cities"
 Your action: Use filter with ["Houston", "Philadelphia", "Seattle"]"""
         })
         
-        # Get API key and model from state or use defaults
-        api_key = state.get("api_key")
+        # Get model and provider from state
         model = state.get("model")
-        logger.info(f"get_data_node: model from state = {model}")
+        provider = state.get("provider", "openai")
+        logger.info(f"get_data_node: model from state = {model}, provider = {provider}")
         
         if not model:
-            logger.warning("No model in state, attempting to get default model")
-            # Try to get default model dynamically
-            try:
-                from app.services.gateway.model_utils import get_default_model
-                # Get provider from model if available, or use OpenAI as default
-                model = await get_default_model(provider="openai", authorization=api_key)
-                logger.info(f"Got default model: {model}")
-            except Exception as e:
-                logger.warning(f"Failed to get default model dynamically: {e}, using gpt-4")
-                model = "gpt-4"  # Last resort fallback
+            logger.warning("No model in state, using gpt-4 as default")
+            model = "gpt-4"
         
-        # If no API key in state, try to get from settings
-        if not api_key:
-            try:
-                # Try OpenAI first, then Anthropic
-                api_key = settings.OPENAI_API_KEY or settings.ANTHROPIC_API_KEY
-            except AttributeError:
-                pass
-        
-        # Validate API key is present
-        if not api_key or not api_key.strip():
-            error_msg = (
-                "API key is required for LLM calls. "
-                "Please provide an API key via Authorization header or configure OPENAI_API_KEY/ANTHROPIC_API_KEY in settings."
-            )
-            logger.error(error_msg)
-            return {
-                **state,
-                "error": error_msg,
-                "raw_data": None
-            }
-        
-        logger.info(f"Using model: {model}, API key: {'present' if api_key else 'missing'}")
+        logger.info(f"Using model: {model}, provider: {provider}")
         
         # Call LLM with tools
         # Use longer timeout (5 minutes) for processing large data to avoid timeouts
         ai_client = UnifiedAIClient(
             gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key,
             timeout=300  # 5 minutes for large data processing
         )
         tool_calls_made = []
@@ -223,16 +197,20 @@ Your action: Use filter with ["Houston", "Philadelphia", "Seattle"]"""
                     # Convert functions to tools format: wrap each function in {"type": "function", "function": {...}}
                     tools_format = [{"type": "function", "function": f} for f in functions]
                     tool_choice = "auto" if function_call_mode == "auto" else None
+                    provider = state.get("provider", "openai")  # Default to openai for backward compatibility
                     response = await ai_client.chat(
                         model=model,
+                        provider=provider,
                         messages=messages,
                         tools=tools_format,
                         tool_choice=tool_choice
                     )
                 else:
                     # Use old functions format
+                    provider = state.get("provider", "openai")  # Default to openai for backward compatibility
                     response = await ai_client.chat(
                         model=model,
+                        provider=provider,
                         messages=messages,
                         functions=functions if functions else None,
                         function_call=function_call_mode

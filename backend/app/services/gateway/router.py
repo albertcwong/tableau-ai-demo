@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class ProviderContext:
     """Context information for a provider."""
     provider: str  # "openai", "anthropic", "salesforce", "vertex", "apple"
-    auth_type: str  # "direct", "jwt_oauth", "service_account"
+    auth_type: str  # "direct", "jwt_oauth", "service_account", "endor_a3", "endor_a3"
     model_name: str  # Original model name
     requires_trust_header: bool = False  # For Salesforce Trust Layer
     credentials_path: Optional[str] = None  # Path to credentials file
@@ -22,6 +22,7 @@ class ProviderContext:
     project_id: Optional[str] = None  # For Vertex AI
     location: Optional[str] = None  # For Vertex AI
     endpoint: Optional[str] = None  # For Apple Endor or custom endpoints
+    config_id: Optional[int] = None  # ProviderConfig ID for database lookups
 
 
 # Default model-to-provider mapping
@@ -92,7 +93,7 @@ DEFAULT_MODEL_MAPPING: Dict[str, Dict[str, Any]] = {
     # Apple Endor models (if configured)
     "endor": {
         "provider": "apple",
-        "auth": "direct"
+        "auth": "endor_a3"
     }
 }
 
@@ -132,99 +133,92 @@ def get_model_mapping() -> Dict[str, Dict[str, Any]]:
     return _model_mapping_cache
 
 
-def resolve_context(model_name: str) -> ProviderContext:
+def resolve_context(model_name: str, provider: str) -> ProviderContext:
     """
-    Resolve provider context from model name.
+    Resolve provider context from provider name.
     
     Args:
-        model_name: The model identifier (e.g., "gpt-4", "gemini-pro", "chatgpt-4o-latest")
+        model_name: The model identifier (e.g., "gpt-4", "gemini-1.5-pro")
+        provider: The provider name (e.g., "openai", "apple", "vertex")
         
     Returns:
         ProviderContext with provider, auth type, and credentials info
         
     Raises:
-        ValueError: If model name is not recognized and cannot be inferred
+        ValueError: If provider is not recognized
     """
     if not model_name:
         raise ValueError("Model name is required")
+    if not provider:
+        raise ValueError("Provider is required")
     
-    mapping = get_model_mapping()
+    # Map provider to auth type (endor is alias for apple)
+    provider_lower = provider.lower().strip()
+    if provider_lower == "endor":
+        provider_lower = "apple"
     
-    # First, check static mapping
-    if model_name in mapping:
-        model_config = mapping[model_name]
-        provider = model_config["provider"]
-        auth_type = model_config["auth"]
+    if provider_lower == "openai":
+        auth_type = "direct"
+    elif provider_lower == "anthropic":
+        auth_type = "direct"
+    elif provider_lower == "vertex":
+        auth_type = "service_account"
+    elif provider_lower == "salesforce":
+        auth_type = "jwt_oauth"
+    elif provider_lower == "apple":
+        auth_type = "endor_a3"
     else:
-        # Try to infer provider from model name pattern
-        model_lower = model_name.lower()
-        
-        # OpenAI patterns: gpt-*, chatgpt-*, o1, o3, o4-*, text-embedding-*, etc.
-        if (model_lower.startswith("gpt-") or 
-            model_lower.startswith("chatgpt-") or 
-            model_lower.startswith("o1") or 
-            model_lower.startswith("o3") or 
-            model_lower.startswith("o4-") or 
-            model_lower.startswith("text-embedding-") or
-            model_lower.startswith("codex-") or
-            model_lower.startswith("computer-use-") or
-            model_lower.startswith("omni-moderation-") or
-            model_lower.startswith("sora-") or
-            model_lower.startswith("gpt4o-") or
-            model_lower.startswith("nectarine-")):
-            provider = "openai"
-            auth_type = "direct"
-        # Anthropic patterns: claude-*
-        elif model_lower.startswith("claude-"):
-            provider = "anthropic"
-            auth_type = "direct"
-        # Vertex AI (Gemini) patterns: gemini-*
-        elif model_lower.startswith("gemini-"):
-            provider = "vertex"
-            auth_type = "service_account"
-        # Salesforce patterns: sfdc-*, einstein-*
-        elif model_lower.startswith("sfdc-") or model_lower.startswith("einstein-"):
-            provider = "salesforce"
-            auth_type = "jwt_oauth"
-        # Apple Endor patterns: endor
-        elif model_lower == "endor":
-            provider = "apple"
-            auth_type = "direct"
-        else:
-            # Unknown model - raise error with available models
-            available_models = ", ".join(sorted(mapping.keys()))
-            raise ValueError(
-                f"Unknown model: '{model_name}'. "
-                f"Available models: {available_models}"
-            )
+        raise ValueError(f"Unknown provider: '{provider}'. Supported providers: openai, anthropic, vertex, salesforce, apple")
     
     # Build context based on provider and auth type
+    mapping = get_model_mapping()
     requires_trust_header = False
     if model_name in mapping:
         requires_trust_header = mapping[model_name].get("requires_trust_header", False)
     
     context = ProviderContext(
-        provider=provider,
+        provider=provider_lower,
         auth_type=auth_type,
         model_name=model_name,
         requires_trust_header=requires_trust_header
     )
     
     # Add provider-specific configuration
-    if provider == "salesforce" and auth_type == "jwt_oauth":
+    if provider_lower == "salesforce" and auth_type == "jwt_oauth":
         context.client_id = settings.SALESFORCE_CLIENT_ID
         context.private_key_path = settings.SALESFORCE_PRIVATE_KEY_PATH
         context.username = settings.SALESFORCE_USERNAME
         context.endpoint = settings.SALESFORCE_MODELS_API_URL
         
-    elif provider == "vertex" and auth_type == "service_account":
+    elif provider_lower == "vertex" and auth_type == "service_account":
         context.project_id = settings.VERTEX_PROJECT_ID
         context.location = settings.VERTEX_LOCATION
         context.credentials_path = settings.VERTEX_SERVICE_ACCOUNT_PATH
         
-    elif provider == "apple":
-        context.endpoint = settings.APPLE_ENDOR_ENDPOINT
-        # Apple Endor uses direct auth but may have custom endpoint
+    elif provider_lower == "apple":
+        # Load Endor config from database if available
+        try:
+            from app.core.database import SessionLocal
+            from app.models.user import ProviderConfig
+            
+            db = SessionLocal()
+            try:
+                endor_config = db.query(ProviderConfig).filter(
+                    ProviderConfig.provider_type == "apple_endor",
+                    ProviderConfig.is_active == True
+                ).first()
+                
+                if endor_config:
+                    context.endpoint = endor_config.apple_endor_endpoint or settings.APPLE_ENDOR_ENDPOINT
+                    # Store config_id for authenticator to use
+                    context.config_id = endor_config.id
+                else:
+                    context.endpoint = settings.APPLE_ENDOR_ENDPOINT
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Failed to load Endor config from database: {e}, using settings")
+            context.endpoint = settings.APPLE_ENDOR_ENDPOINT
     
     return context
 

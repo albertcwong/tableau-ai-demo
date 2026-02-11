@@ -22,7 +22,9 @@ export function TableauConfigManagement() {
     api_version: '3.15',
     client_id: '',
     client_secret: '',
-    secret_id: ''
+    secret_id: '',
+    allow_pat_auth: false,
+    skip_ssl_verify: false,
   });
 
   useEffect(() => {
@@ -50,7 +52,9 @@ export function TableauConfigManagement() {
       api_version: '3.15',
       client_id: '',
       client_secret: '',
-      secret_id: ''
+      secret_id: '',
+      allow_pat_auth: false,
+      skip_ssl_verify: false,
     });
     setEditingConfigId(null);
     setShowCreateForm(false);
@@ -62,9 +66,11 @@ export function TableauConfigManagement() {
       server_url: config.server_url,
       site_id: config.site_id || '',
       api_version: config.api_version || '3.15',
-      client_id: config.client_id,
+      client_id: config.client_id ?? '',
       client_secret: '', // Don't pre-populate secret for security
-      secret_id: config.secret_id || ''
+      secret_id: config.secret_id || '',
+      allow_pat_auth: config.allow_pat_auth || false,
+      skip_ssl_verify: config.skip_ssl_verify || false,
     });
     setEditingConfigId(config.id);
     setShowCreateForm(true);
@@ -98,14 +104,15 @@ export function TableauConfigManagement() {
           site_id: formData.site_id || undefined,
           api_version: formData.api_version || undefined,
           client_id: formData.client_id,
-          // Only include client_secret if it's been changed (not empty)
           ...(formData.client_secret ? { client_secret: formData.client_secret } : {}),
           secret_id: formData.secret_id || undefined,
+          allow_pat_auth: formData.allow_pat_auth,
+          skip_ssl_verify: formData.skip_ssl_verify,
         };
         await adminApi.updateTableauConfig(editingConfigId, updateData);
       } else {
         // Create new config
-        await adminApi.createTableauConfig(formData);
+        await adminApi.createTableauConfig({ ...formData, allow_pat_auth: formData.allow_pat_auth || false, skip_ssl_verify: formData.skip_ssl_verify || false });
       }
       resetForm();
       loadConfigs();
@@ -200,23 +207,22 @@ export function TableauConfigManagement() {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="client_id">Connected App Client ID</Label>
+                <Label htmlFor="client_id">Connected App Client ID (optional)</Label>
                 <Input
                   id="client_id"
-                  value={formData.client_id}
+                  value={formData.client_id ?? ''}
                   onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
-                  required
+                  placeholder="Required for Connected App auth, or enable PAT auth below"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="client_secret">Connected App Secret</Label>
+                <Label htmlFor="client_secret">Connected App Secret (optional)</Label>
                 <Input
                   id="client_secret"
                   type="password"
-                  value={formData.client_secret}
+                  value={formData.client_secret ?? ''}
                   onChange={(e) => setFormData({ ...formData, client_secret: e.target.value })}
-                  placeholder={editingConfigId ? "Leave empty to keep existing secret" : ""}
-                  required={!editingConfigId}
+                  placeholder={editingConfigId ? "Leave empty to keep existing secret" : "Required for Connected App auth, or enable PAT auth below"}
                 />
                 {editingConfigId && (
                   <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -232,6 +238,40 @@ export function TableauConfigManagement() {
                   onChange={(e) => setFormData({ ...formData, secret_id: e.target.value })}
                   placeholder="Defaults to Client ID if not provided"
                 />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    id="allow_pat_auth"
+                    type="checkbox"
+                    checked={formData.allow_pat_auth || false}
+                    onChange={(e) => setFormData({ ...formData, allow_pat_auth: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="allow_pat_auth" className="cursor-pointer">
+                    Allow Personal Access Token Authentication
+                  </Label>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  If enabled, users can authenticate with their own PAT instead of using the Connected App
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    id="skip_ssl_verify"
+                    type="checkbox"
+                    checked={formData.skip_ssl_verify || false}
+                    onChange={(e) => setFormData({ ...formData, skip_ssl_verify: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="skip_ssl_verify" className="cursor-pointer">
+                    Skip SSL certificate verification
+                  </Label>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Use for self-signed certs or internal servers. Not recommended for production.
+                </p>
               </div>
               <div className="flex gap-2">
                 <Button 

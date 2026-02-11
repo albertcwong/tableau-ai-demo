@@ -1,5 +1,8 @@
 """State definition for tool-use VizQL agent."""
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.tableau.client import TableauClient
 
 
 class VizQLToolUseState(TypedDict, total=False):
@@ -29,7 +32,8 @@ class VizQLToolUseState(TypedDict, total=False):
     # Context (optional)
     datasource_id: Optional[str]
     site_id: Optional[str]
+    tableau_client: Optional["TableauClient"]
     
     # AI client configuration (REQUIRED - must be in state)
-    api_key: Optional[str]
     model: Optional[str]
+    provider: Optional[str]

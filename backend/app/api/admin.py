@@ -65,9 +65,11 @@ class TableauConfigCreate(BaseModel):
     server_url: str
     site_id: Optional[str] = None
     api_version: Optional[str] = "3.15"
-    client_id: str
-    client_secret: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
     secret_id: Optional[str] = None
+    allow_pat_auth: Optional[bool] = False
+    skip_ssl_verify: Optional[bool] = False
 
 
 class TableauConfigUpdate(BaseModel):
@@ -79,6 +81,8 @@ class TableauConfigUpdate(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     secret_id: Optional[str] = None
+    allow_pat_auth: Optional[bool] = None
+    skip_ssl_verify: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -89,9 +93,11 @@ class TableauConfigResponse(BaseModel):
     server_url: str
     site_id: Optional[str]
     api_version: Optional[str]
-    client_id: str
-    client_secret: str  # Note: In production, consider masking this
+    client_id: Optional[str]
+    client_secret: Optional[str]  # Note: In production, consider masking this
     secret_id: Optional[str]
+    allow_pat_auth: Optional[bool] = False
+    skip_ssl_verify: Optional[bool] = False
     is_active: bool
     created_by: Optional[int]
     created_at: str
@@ -114,6 +120,11 @@ class ProviderConfigCreate(BaseModel):
     vertex_location: Optional[str] = None
     vertex_service_account_path: Optional[str] = None
     apple_endor_endpoint: Optional[str] = None
+    apple_endor_app_id: Optional[str] = None
+    apple_endor_app_password: Optional[str] = None
+    apple_endor_other_app: Optional[int] = None
+    apple_endor_context: Optional[str] = None
+    apple_endor_one_time_token: Optional[bool] = None
 
 
 class ProviderConfigUpdate(BaseModel):
@@ -129,6 +140,11 @@ class ProviderConfigUpdate(BaseModel):
     vertex_location: Optional[str] = None
     vertex_service_account_path: Optional[str] = None
     apple_endor_endpoint: Optional[str] = None
+    apple_endor_app_id: Optional[str] = None
+    apple_endor_app_password: Optional[str] = None
+    apple_endor_other_app: Optional[int] = None
+    apple_endor_context: Optional[str] = None
+    apple_endor_one_time_token: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -149,6 +165,11 @@ class ProviderConfigResponse(BaseModel):
     vertex_location: Optional[str] = None
     vertex_service_account_path: Optional[str] = None
     apple_endor_endpoint: Optional[str] = None
+    apple_endor_app_id: Optional[str] = None
+    apple_endor_app_password: Optional[str] = None  # Note: In production, consider masking this
+    apple_endor_other_app: Optional[int] = None
+    apple_endor_context: Optional[str] = None
+    apple_endor_one_time_token: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -356,6 +377,8 @@ async def list_tableau_configs(
         client_id=c.client_id,
         client_secret=c.client_secret,
         secret_id=c.secret_id,
+        allow_pat_auth=getattr(c, 'allow_pat_auth', False),
+        skip_ssl_verify=getattr(c, 'skip_ssl_verify', False),
         is_active=c.is_active,
         created_by=c.created_by,
         created_at=c.created_at.isoformat()
@@ -369,14 +392,23 @@ async def create_tableau_config(
     current_user: User = Depends(get_current_admin_user)
 ):
     """Create a new Tableau server configuration."""
+    allow_pat = config_data.allow_pat_auth or False
+    has_connected_app = bool((config_data.client_id or "").strip() and (config_data.client_secret or "").strip())
+    if not allow_pat and not has_connected_app:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either Connected App credentials (client_id and client_secret) or allow_pat_auth must be provided"
+        )
     new_config = TableauServerConfig(
         name=config_data.name,
         server_url=config_data.server_url.rstrip('/'),
         site_id=config_data.site_id or "",
         api_version=config_data.api_version or "3.15",
-        client_id=config_data.client_id,
-        client_secret=config_data.client_secret,  # TODO: Encrypt this
-        secret_id=config_data.secret_id or config_data.client_id,
+        client_id=(config_data.client_id or "").strip() or None,
+        client_secret=(config_data.client_secret or "").strip() or None,  # TODO: Encrypt this
+        secret_id=(config_data.secret_id or config_data.client_id or "").strip() or None,
+        allow_pat_auth=config_data.allow_pat_auth or False,
+        skip_ssl_verify=config_data.skip_ssl_verify or False,
         is_active=True,
         created_by=current_user.id
     )
@@ -393,6 +425,8 @@ async def create_tableau_config(
         client_id=new_config.client_id,
         client_secret=new_config.client_secret,
         secret_id=new_config.secret_id,
+        allow_pat_auth=getattr(new_config, 'allow_pat_auth', False),
+        skip_ssl_verify=getattr(new_config, 'skip_ssl_verify', False),
         is_active=new_config.is_active,
         created_by=new_config.created_by,
         created_at=new_config.created_at.isoformat()
@@ -421,6 +455,8 @@ async def get_tableau_config(
         client_id=config.client_id,
         client_secret=config.client_secret,
         secret_id=config.secret_id,
+        allow_pat_auth=getattr(config, 'allow_pat_auth', False),
+        skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat()
@@ -451,14 +487,26 @@ async def update_tableau_config(
     if config_data.api_version is not None:
         config.api_version = config_data.api_version
     if config_data.client_id is not None:
-        config.client_id = config_data.client_id
+        config.client_id = (config_data.client_id or "").strip() or None
     if config_data.client_secret is not None:
-        config.client_secret = config_data.client_secret  # TODO: Encrypt this
+        config.client_secret = (config_data.client_secret or "").strip() or None  # TODO: Encrypt this
     if config_data.secret_id is not None:
-        config.secret_id = config_data.secret_id
+        config.secret_id = (config_data.secret_id or "").strip() or None
+    if config_data.allow_pat_auth is not None:
+        config.allow_pat_auth = config_data.allow_pat_auth
+    if config_data.skip_ssl_verify is not None:
+        config.skip_ssl_verify = config_data.skip_ssl_verify
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
-    
+
+    allow_pat = getattr(config, 'allow_pat_auth', False)
+    has_connected_app = bool((config.client_id or "").strip() and (config.client_secret or "").strip())
+    if not allow_pat and not has_connected_app:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either Connected App credentials (client_id and client_secret) or allow_pat_auth must be provided"
+        )
+
     db.commit()
     db.refresh(config)
     
@@ -471,6 +519,8 @@ async def update_tableau_config(
         client_id=config.client_id,
         client_secret=config.client_secret,
         secret_id=config.secret_id,
+        allow_pat_auth=getattr(config, 'allow_pat_auth', False),
+        skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat()
@@ -519,6 +569,11 @@ async def list_provider_configs(
         vertex_location=c.vertex_location,
         vertex_service_account_path=c.vertex_service_account_path,
         apple_endor_endpoint=c.apple_endor_endpoint,
+        apple_endor_app_id=c.apple_endor_app_id,
+        apple_endor_app_password=c.apple_endor_app_password,
+        apple_endor_other_app=c.apple_endor_other_app,
+        apple_endor_context=c.apple_endor_context,
+        apple_endor_one_time_token=c.apple_endor_one_time_token,
     ) for c in configs]
 
 
@@ -539,10 +594,12 @@ async def create_provider_config(
             detail=f"Invalid provider type: {config_data.provider_type}"
         )
     
+    # Apple Endor uses A3 token (App ID + App Password), not API key
+    api_key_val = None if provider_type_value == "apple_endor" else config_data.api_key
     new_config = ProviderConfig(
         name=config_data.name,
         provider_type=provider_type_value,  # Pass lowercase string directly - TypeDecorator will handle it
-        api_key=config_data.api_key,
+        api_key=api_key_val,
         salesforce_client_id=config_data.salesforce_client_id,
         salesforce_private_key_path=config_data.salesforce_private_key_path,
         salesforce_username=config_data.salesforce_username,
@@ -551,6 +608,11 @@ async def create_provider_config(
         vertex_location=config_data.vertex_location,
         vertex_service_account_path=config_data.vertex_service_account_path,
         apple_endor_endpoint=config_data.apple_endor_endpoint,
+        apple_endor_app_id=config_data.apple_endor_app_id,
+        apple_endor_app_password=config_data.apple_endor_app_password,
+        apple_endor_other_app=config_data.apple_endor_other_app,
+        apple_endor_context=config_data.apple_endor_context,
+        apple_endor_one_time_token=config_data.apple_endor_one_time_token,
         is_active=True,
         created_by=current_user.id
     )
@@ -574,6 +636,11 @@ async def create_provider_config(
         vertex_location=new_config.vertex_location,
         vertex_service_account_path=new_config.vertex_service_account_path,
         apple_endor_endpoint=new_config.apple_endor_endpoint,
+        apple_endor_app_id=new_config.apple_endor_app_id,
+        apple_endor_app_password=new_config.apple_endor_app_password,
+        apple_endor_other_app=new_config.apple_endor_other_app,
+        apple_endor_context=new_config.apple_endor_context,
+        apple_endor_one_time_token=new_config.apple_endor_one_time_token,
     )
 
 
@@ -606,6 +673,11 @@ async def get_provider_config(
         vertex_location=config.vertex_location,
         vertex_service_account_path=config.vertex_service_account_path,
         apple_endor_endpoint=config.apple_endor_endpoint,
+        apple_endor_app_id=config.apple_endor_app_id,
+        apple_endor_app_password=config.apple_endor_app_password,
+        apple_endor_other_app=config.apple_endor_other_app,
+        apple_endor_context=config.apple_endor_context,
+        apple_endor_one_time_token=config.apple_endor_one_time_token,
     )
 
 
@@ -635,7 +707,8 @@ async def update_provider_config(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid provider type: {config_data.provider_type}"
             )
-    if config_data.api_key is not None:
+    # Apple Endor uses A3 token, not API key - ignore api_key for this provider
+    if config_data.api_key is not None and config.provider_type.value != "apple_endor":
         config.api_key = config_data.api_key
     if config_data.salesforce_client_id is not None:
         config.salesforce_client_id = config_data.salesforce_client_id
@@ -653,6 +726,16 @@ async def update_provider_config(
         config.vertex_service_account_path = config_data.vertex_service_account_path
     if config_data.apple_endor_endpoint is not None:
         config.apple_endor_endpoint = config_data.apple_endor_endpoint
+    if config_data.apple_endor_app_id is not None:
+        config.apple_endor_app_id = config_data.apple_endor_app_id
+    if config_data.apple_endor_app_password is not None:
+        config.apple_endor_app_password = config_data.apple_endor_app_password
+    if config_data.apple_endor_other_app is not None:
+        config.apple_endor_other_app = config_data.apple_endor_other_app
+    if config_data.apple_endor_context is not None:
+        config.apple_endor_context = config_data.apple_endor_context
+    if config_data.apple_endor_one_time_token is not None:
+        config.apple_endor_one_time_token = config_data.apple_endor_one_time_token
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
     
@@ -675,6 +758,11 @@ async def update_provider_config(
         vertex_location=config.vertex_location,
         vertex_service_account_path=config.vertex_service_account_path,
         apple_endor_endpoint=config.apple_endor_endpoint,
+        apple_endor_app_id=config.apple_endor_app_id,
+        apple_endor_app_password=config.apple_endor_app_password,
+        apple_endor_other_app=config.apple_endor_other_app,
+        apple_endor_context=config.apple_endor_context,
+        apple_endor_one_time_token=config.apple_endor_one_time_token,
     )
 
 

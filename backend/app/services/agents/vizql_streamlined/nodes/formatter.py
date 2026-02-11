@@ -79,12 +79,8 @@ async def format_results_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
     
     try:
         # Get AI client configuration from state
-        api_key = state.get("api_key")
         model = state.get("model") or "gpt-4"
-        
-        if not api_key:
-            logger.warning("No API key in state, falling back to basic formatting")
-            return await _format_basic_response(state, results, reasoning_steps)
+        provider = state.get("provider", "openai")
         
         # Prepare data for AI formatting
         columns = results.get("columns", [])
@@ -127,8 +123,7 @@ async def format_results_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         logger.info(f"Generating natural language answer for query results ({row_count} rows)")
         from app.core.config import settings
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         messages = [
@@ -138,8 +133,8 @@ async def format_results_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         
         ai_response = await ai_client.chat(
             model=model,
-            messages=messages,
-            api_key=api_key
+            provider=provider,
+            messages=messages
         )
         
         # Track token usage

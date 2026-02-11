@@ -1,13 +1,17 @@
 """Tool for fetching datasource metadata via REST API."""
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.tableau.client import TableauClient
 
 logger = logging.getLogger(__name__)
 
 
 async def get_datasource_metadata(
     datasource_id: str,
-    site_id: Optional[str] = None
+    site_id: Optional[str] = None,
+    tableau_client: Optional["TableauClient"] = None
 ) -> Dict[str, Any]:
     """
     Fetch datasource metadata via Tableau REST API.
@@ -30,7 +34,7 @@ async def get_datasource_metadata(
     try:
         from app.services.tableau.client import TableauClient
         
-        tableau_client = TableauClient()
+        tableau_client = tableau_client or TableauClient()
         
         # Get all datasources and find the one matching datasource_id
         # Note: Tableau REST API doesn't have a direct "get datasource by ID" endpoint

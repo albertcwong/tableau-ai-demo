@@ -4,6 +4,8 @@ import logging
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 
+from langchain_core.runnables.config import ensure_config
+
 from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.agents.vizql_streamlined.tools import (
     get_datasource_schema,
@@ -501,7 +503,7 @@ def _create_tool_functions(datasource_id: str, site_id: Optional[str], message_h
     ]
 
 
-async def _execute_tool_call(tool_name: str, args: Dict[str, Any], state: StreamlinedVizQLState) -> Dict[str, Any]:
+async def _execute_tool_call(tool_name: str, args: Dict[str, Any], state: StreamlinedVizQLState, tableau_client=None) -> Dict[str, Any]:
     """Execute a tool call."""
     datasource_id = state.get("context_datasources", [None])[0]
     site_id = state.get("site_id")
@@ -512,14 +514,16 @@ async def _execute_tool_call(tool_name: str, args: Dict[str, Any], state: Stream
             schema_result = await get_datasource_schema(
                 datasource_id=args.get("datasource_id", datasource_id),
                 site_id=args.get("site_id", site_id),
-                use_enriched=args.get("use_enriched", True)
+                use_enriched=args.get("use_enriched", True),
+                tableau_client=tableau_client
             )
             return {"success": True, "result": schema_result}
         
         elif tool_name == "get_datasource_metadata":
             metadata_result = await get_datasource_metadata(
                 datasource_id=args.get("datasource_id", datasource_id),
-                site_id=args.get("site_id", site_id)
+                site_id=args.get("site_id", site_id),
+                tableau_client=tableau_client
             )
             return {"success": True, "result": metadata_result}
         
@@ -609,25 +613,9 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             "build_attempt": build_attempt
         })
         
-        # Get API key and model
-        api_key = state.get("api_key")
+        # Get model and provider
         model = state.get("model", "gpt-4")
-        
-        if not api_key:
-            logger.error("API key missing from state")
-            return {
-                **state,
-                "error": "Failed to build query: Authorization header required",
-                "query_draft": None,
-                "build_attempt": build_attempt,
-                "execution_attempt": execution_attempt,
-                "reasoning_steps": reasoning_steps,
-                "current_thought": f"Build attempt {build_attempt} failed: Authorization header required",
-                "step_metadata": {
-                    "build_attempt": build_attempt,
-                    "query_draft": None
-                }
-            }
+        provider = state.get("provider", "openai")
         
         # Step 1: Extract context from conversation history
         prior_query_result = None
@@ -682,10 +670,13 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         if needs_schema:
             logger.info("Schema not available - fetching before building query")
             try:
+                config = ensure_config()
+                tableau_client = config.get("configurable", {}).get("tableau_client")
                 schema_result = await get_datasource_schema(
                     datasource_id=datasource_id,
                     site_id=state.get("site_id"),
-                    use_enriched=True
+                    use_enriched=True,
+                    tableau_client=tableau_client
                 )
                 if schema_result and not schema_result.get("error"):
                     schema = {
@@ -956,14 +947,13 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         
         # Call LLM to build query
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         response = await ai_client.chat(
             model=model,
-            messages=messages,
-            api_key=api_key
+            provider=provider,
+            messages=messages
         )
         
         # Track token usage
@@ -973,9 +963,21 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             "total": response.tokens_used
         }
         
+        # Debug: log response structure
+        content_len = len(response.content) if response.content else 0
+        logger.info(f"build_query response: content_len={content_len}, finish_reason={getattr(response, 'finish_reason', '')}, function_call={response.function_call is not None}")
+        if content_len == 0 and response.raw_response:
+            raw_keys = list(response.raw_response.keys()) if response.raw_response else []
+            choice0 = response.raw_response.get("choices", [{}])[0] if response.raw_response.get("choices") else {}
+            msg_keys = list(choice0.get("message", {}).keys()) if choice0.get("message") else []
+            logger.warning(f"build_query empty content: raw_keys={raw_keys}, choice0.message keys={msg_keys}")
+        elif content_len > 0:
+            preview = repr(response.content[:300]) if response.content else ""
+            logger.debug(f"build_query content preview: {preview}")
+        
         # Parse query JSON
         try:
-            content = response.content.strip()
+            content = (response.content or "").strip()
             # Remove markdown code blocks if present
             if content.startswith("```"):
                 lines = content.split("\n")
@@ -1049,7 +1051,10 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             
             if query_draft is None:
                 # Log the problematic content for debugging
-                logger.error(f"Could not extract JSON from response. Content preview: {content[:500]}")
+                content_preview = repr(content[:800]) if content else "(empty)"
+                logger.error(f"Could not extract JSON from response. content_len={len(content)}, content_preview={content_preview}")
+                if response.function_call:
+                    logger.error(f"Response had function_call (unused): name={response.function_call.name}, args_len={len(response.function_call.arguments or '')}")
                 raise json.JSONDecodeError("Could not extract valid JSON from response", content, 0)
             
             # Ensure query has required structure
@@ -1173,7 +1178,13 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         except (json.JSONDecodeError, ValueError) as e:
             # Handle JSON parsing errors and validation errors
             error_msg = str(e)
-            response_preview = response.content[:1000] if response.content else "No content"
+            response_preview = response.content[:1000] if response.content else "(empty)"
+            logger.error(
+                f"build_query parse/validation failed: {type(e).__name__}: {error_msg}. "
+                f"content_len={len(response.content or '')}, preview={repr(response_preview[:200])}"
+            )
+            if response.raw_response and not response.content:
+                logger.error(f"raw_response choices[0].message: {list(response.raw_response.get('choices', [{}])[0].get('message', {}).keys())}")
             
             # Check if it's a fields validation error
             if "fields" in error_msg.lower() or "field" in error_msg.lower() or isinstance(e, ValueError):

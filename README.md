@@ -108,6 +108,10 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Run database migrations
+# If using Docker for Postgres (docker compose up postgres), ensure .env has
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tableau_demo
+# so local alembic targets the same DB. Or run from inside Docker:
+#   docker compose run --rm backend alembic upgrade head
 alembic upgrade head
 
 # Start backend server

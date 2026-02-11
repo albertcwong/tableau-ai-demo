@@ -145,7 +145,7 @@ async def handle_schema_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                     # If cached schema doesn't have statistics, fetch fresh with statistics
                     if stats_count == 0:
                         logger.info("Cached schema lacks statistics, fetching fresh schema with statistics...")
-                        tableau_client = TableauClient()
+                        tableau_client = state.get("tableau_client") or TableauClient()
                         enrichment_service = SchemaEnrichmentService(tableau_client)
                         enriched_schema = await enrichment_service.enrich_datasource_schema(
                             datasource_id,
@@ -157,7 +157,7 @@ async def handle_schema_query_node(state: VizQLAgentState) -> Dict[str, Any]:
                 else:
                     # Fetch enriched schema (WITH statistics for schema queries)
                     logger.info("Fetching enriched schema with statistics for schema query...")
-                    tableau_client = TableauClient()
+                    tableau_client = state.get("tableau_client") or TableauClient()
                     enrichment_service = SchemaEnrichmentService(tableau_client)
                     enriched_schema = await enrichment_service.enrich_datasource_schema(
                         datasource_id,
@@ -221,21 +221,11 @@ async def handle_schema_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         )
         
         # Initialize AI client
-        api_key = state.get("api_key")
         model = state.get("model", "gpt-4")
-        
-        # Validate API key is present
-        if not api_key:
-            logger.error("API key missing from state - cannot make gateway request")
-            return {
-                **state,
-                "error": "Failed to handle schema query: Authorization header required for direct authentication",
-                "schema_answer": None
-            }
+        provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         # Call LLM to generate answer
@@ -246,8 +236,8 @@ async def handle_schema_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         response = await ai_client.chat(
             model=model,
-            messages=messages,
-            api_key=api_key
+            provider=provider,
+            messages=messages
         )
         
         answer = response.content if response.content else "I couldn't generate an answer from the schema metadata."

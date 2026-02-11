@@ -42,7 +42,7 @@ async def get_schema_node(state: VizQLGraphState) -> Dict[str, Any]:
     logger.info(f"Fetching schema for datasource: {datasource_id}")
     
     try:
-        tableau_client = TableauClient()
+        tableau_client = state.get("tableau_client") or TableauClient()
         schema_service = SchemaEnrichmentService(tableau_client)
         
         # Fetch enriched schema with statistics

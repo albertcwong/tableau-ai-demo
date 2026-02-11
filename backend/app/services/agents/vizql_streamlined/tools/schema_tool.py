@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 async def get_datasource_schema(
     datasource_id: str,
     site_id: Optional[str] = None,
-    use_enriched: bool = True
+    use_enriched: bool = True,
+    tableau_client: Optional[TableauClient] = None
 ) -> Dict[str, Any]:
     """
     Fetch schema for datasource.
@@ -71,7 +72,7 @@ async def get_datasource_schema(
         # Try to fetch enriched schema
         if use_enriched:
             try:
-                tableau_client = TableauClient()
+                tableau_client = tableau_client or TableauClient()
                 enrichment_service = SchemaEnrichmentService(tableau_client)
                 enriched_schema = await enrichment_service.enrich_datasource_schema(
                     datasource_id,
@@ -106,7 +107,7 @@ async def get_datasource_schema(
                 logger.warning(f"Schema enrichment failed, falling back to basic schema: {e}")
         
         # Fallback to basic schema
-        tableau_client = TableauClient()
+        tableau_client = tableau_client or TableauClient()
         schema_response = await tableau_client.get_datasource_schema(datasource_id)
         
         return {

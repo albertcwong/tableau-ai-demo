@@ -65,51 +65,24 @@ Raw Data:
 Please format this data into a clear, natural language response that answers the user's question."""}
         ]
         
-        # Get API key and model from state or use defaults
-        api_key = state.get("api_key")
+        # Get model and provider from state
         model = state.get("model")
+        provider = state.get("provider", "openai")
         if not model:
             try:
                 model = settings.DEFAULT_LLM_MODEL
             except AttributeError:
-                # Fallback: try to get default model dynamically
-                try:
-                    from app.services.gateway.model_utils import get_default_model
-                    model = await get_default_model(provider="openai", authorization=api_key)
-                except Exception as e:
-                    logger.warning(f"Failed to get default model dynamically: {e}, using gpt-4")
-                    model = "gpt-4"  # Last resort fallback
+                model = "gpt-4"  # Default fallback
         
-        # If no API key in state, try to get from settings
-        if not api_key:
-            try:
-                api_key = settings.OPENAI_API_KEY or settings.ANTHROPIC_API_KEY
-            except AttributeError:
-                pass
-        
-        # Validate API key is present
-        if not api_key or not api_key.strip():
-            error_msg = (
-                "API key is required for LLM calls. "
-                "Please provide an API key via Authorization header or configure OPENAI_API_KEY/ANTHROPIC_API_KEY in settings."
-            )
-            logger.error(error_msg)
-            return {
-                **state,
-                "current_thought": "Error: Missing API key",
-                "error": error_msg,
-                "final_answer": error_msg
-            }
-        
-        logger.info(f"Summarize using model: {model}, API key: {'present' if api_key else 'missing'}")
+        logger.info(f"Summarize using model: {model}, provider: {provider}")
         
         # Call LLM
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         response = await ai_client.chat(
             model=model,
+            provider=provider,
             messages=messages
         )
         

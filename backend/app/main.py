@@ -3,13 +3,15 @@ import logging
 import logging.handlers
 import time
 from pathlib import Path
-from fastapi import FastAPI, Request, status, Query
+from fastapi import FastAPI, Request, status, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings, PROJECT_ROOT
 from app.core.database import check_database_health
 from app.core.cache import check_cache_health
-from app.services.gateway.router import get_available_providers, get_available_models
+from app.services.gateway.router import get_available_models
+from app.services.gateway.api import get_configured_providers
+from app.core.database import get_db
 
 # Create logs directory if it doesn't exist
 LOG_DIR = PROJECT_ROOT / "logs"
@@ -180,24 +182,26 @@ async def all_health_checks():
 
 @api_router.get("/gateway/health", tags=["health", "gateway"])
 async def gateway_health_check(
-    include_models: bool = Query(False, description="Include list of available models")
+    include_models: bool = Query(False, description="Include list of available models"),
+    db=Depends(get_db),
 ):
     """Gateway health check endpoint."""
     try:
-        providers = get_available_providers()
-        models = get_available_models()
+        provider_configs = get_configured_providers(db)
+        models = []
+        for p_config in provider_configs:
+            models.extend(get_available_models(p_config["provider"]))
         
         response = {
             "status": "healthy",
             "service": "gateway",
-            "providers": providers,
+            "providers": [p["provider"] for p in provider_configs],  # Backward compatibility
             "model_count": len(models),
             "enabled": settings.GATEWAY_ENABLED,
         }
         
-        # Optionally include models list (for frontend fallback)
         if include_models:
-            response["models"] = models
+            response["models"] = sorted(set(models))
         
         return response
     except Exception as e:
@@ -263,6 +267,9 @@ app.include_router(feedback_router, prefix="/api/v1")
 
 from app.api.vizql import router as vizql_router
 app.include_router(vizql_router, prefix="/api/v1")
+
+from app.api.user_settings import router as user_settings_router
+app.include_router(user_settings_router, prefix="/api/v1")
 
 # Include MCP SSE endpoint and debug endpoints for web integration
 try:

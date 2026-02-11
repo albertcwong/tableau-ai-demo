@@ -14,7 +14,9 @@ from app.models.user import User
 from app.services.ai.client import UnifiedAIClient, AIClientError
 from app.services.ai.tools import get_tools, execute_tool, format_tool_result
 from app.services.tableau.client import TableauClient
+from app.api.tableau import get_tableau_client
 from app.core.config import settings
+from fastapi import Request
 from app.services.memory import get_conversation_memory
 from app.services.metrics import get_metrics
 from app.services.debug import get_debugger
@@ -56,6 +58,7 @@ class MessageRequest(BaseModel):
     conversation_id: int = Field(..., description="Conversation ID")
     content: str = Field(..., min_length=1, description="Message content")
     model: str = Field(default="gpt-4", description="AI model to use")
+    provider: str = Field(..., description="Provider name (e.g., 'openai', 'apple', 'vertex')")
     agent_type: Optional[str] = Field(None, description="Agent type: 'summary', 'vizql', 'multi_agent', or 'general'")
     stream: bool = Field(default=False, description="Whether to stream the response")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
@@ -333,6 +336,8 @@ async def build_agent_messages(
             
             for view_id in view_ids:
                 try:
+                    if not tableau_client:
+                        raise ValueError("Tableau client not available")
                     # Get view data using Tableau Data API
                     view_data = await tableau_client.get_view_data(view_id, max_rows=100)
                     system_prompt += f"\nView {view_id}:\n"
@@ -362,6 +367,8 @@ async def build_agent_messages(
             
             for datasource_id in datasource_ids:
                 try:
+                    if not tableau_client:
+                        raise ValueError("Tableau client not available")
                     schema = await tableau_client.get_datasource_schema(datasource_id)
                     system_prompt += f"\nDatasource {datasource_id}:\n"
                     columns = schema.get('columns', [])
@@ -402,11 +409,33 @@ async def build_agent_messages(
     return messages
 
 
+async def get_tableau_client_optional(
+    request: Request,
+    x_tableau_config_id: Optional[str] = Header(None, alias="X-Tableau-Config-Id"),
+    x_tableau_auth_type: Optional[str] = Header(None, alias="X-Tableau-Auth-Type"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+) -> Optional[TableauClient]:
+    """Optional Tableau client - returns None if no config provided or user not authenticated.
+    Propagates HTTPException (401/400) for Tableau auth failures so frontend can handle gracefully."""
+    if not x_tableau_config_id or not current_user:
+        return None
+    # Let HTTPException propagate (session expired, PAT not configured, etc.)
+    return await get_tableau_client(
+        x_tableau_config_id=x_tableau_config_id,
+        x_tableau_auth_type=x_tableau_auth_type,
+        db=db,
+        current_user=current_user
+    )
+
+
 @router.post("/message", response_model=ChatResponse)
 async def send_message(
     request: MessageRequest,
     db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(None, alias="Authorization")
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    current_user: User = Depends(get_current_user),
+    tableau_client: Optional[TableauClient] = Depends(get_tableau_client_optional)
 ):
     """
     Send a message and get AI response.
@@ -473,43 +502,43 @@ async def send_message(
             "content": f"Conversation context: {context_summary}"
         })
     
-    # Extract API key from Authorization header if provided, otherwise use default from settings
-    api_key = None
-    if authorization and authorization.startswith("Bearer "):
-        api_key = authorization[7:]
-        logger.debug("Using API key from Authorization header")
-    else:
-        # Determine which API key to use based on model provider
-        # This is a simple heuristic - in production, you might want to resolve the provider first
-        model_lower = request.model.lower()
-        if "gpt" in model_lower or "openai" in model_lower:
-            api_key = settings.OPENAI_API_KEY
-            logger.debug(f"Using OpenAI API key from settings (key present: {bool(api_key)})")
-        elif "claude" in model_lower or "anthropic" in model_lower:
-            api_key = settings.ANTHROPIC_API_KEY
-            logger.debug(f"Using Anthropic API key from settings (key present: {bool(api_key)})")
-        elif "endor" in model_lower or "apple" in model_lower:
-            api_key = settings.APPLE_ENDOR_API_KEY
-            logger.debug(f"Using Apple Endor API key from settings (key present: {bool(api_key)})")
-        else:
-            # Default to OpenAI API key if model is unknown
-            api_key = settings.OPENAI_API_KEY
-            logger.debug(f"Using default OpenAI API key from settings (key present: {bool(api_key)})")
-        
-        # Check if API key is configured
-        if not api_key:
-            raise HTTPException(
-                status_code=400,
-                detail=f"API key not configured for model '{request.model}'. Please set the appropriate API key in settings or provide an Authorization header."
-            )
+    # Provider is required and validated by MessageRequest. Gateway resolves credentials from ProviderConfig.
+    provider = request.provider.strip()
+    provider_for_state = provider
     
-    # Initialize Tableau client for context retrieval
-    tableau_client = TableauClient()
+    # Tableau client is provided via dependency (uses user's selected config from X-Tableau-Config-Id header)
+    # Require connection for Tableau-dependent agents
+    resolved_agent_type = request.agent_type or 'general'
+    if resolved_agent_type in ('vizql', 'summary', 'multi_agent') and (datasource_ids or view_ids):
+        if not tableau_client:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Please connect to Tableau first using the Connect button.",
+                headers={"X-Error-Code": "TABLEAU_NOT_CONNECTED"},
+            )
+    # Fallback for general agent only (backward compatibility)
+    elif not tableau_client:
+        try:
+            tableau_client = TableauClient()
+        except Exception as e:
+            logger.warning(f"Could not create fallback Tableau client: {e}")
+            tableau_client = None
     
     # Initialize feedback manager for query refinement
     from app.services.agents.feedback import FeedbackManager
-    feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+    feedback_manager = FeedbackManager(db=db, model=request.model, provider=provider)
     
+    defer_tableau_close = False  # True when returning stream; stream wrapper closes client
+
+    async def _stream_with_tableau_cleanup(agen):
+        """Wrap stream to close tableau_client when done (avoids closing before stream consumes)."""
+        try:
+            async for chunk in agen:
+                yield chunk
+        finally:
+            if tableau_client:
+                await tableau_client.close()
+
     try:
         # Route to agent graphs if agent_type is specified and context is available
         agent_type = request.agent_type or 'general'
@@ -521,7 +550,7 @@ async def send_message(
         elif agent_type == 'general' or not agent_type:
             # Use meta-agent to determine if multi-agent is needed
             from app.services.agents.meta_agent import MetaAgentSelector
-            meta_selector = MetaAgentSelector(api_key=api_key, model=request.model)
+            meta_selector = MetaAgentSelector(model=request.model, provider=provider)
             selection = await meta_selector.select_agent(
                 user_query=request.content,
                 context={
@@ -558,7 +587,10 @@ async def send_message(
             conversation_memory = get_conversation_memory(request.conversation_id)
             debugger = get_debugger()
             
-            orchestrator = MultiAgentOrchestrator(api_key=api_key, model=request.model)
+            orchestrator = MultiAgentOrchestrator(
+                model=request.model,
+                provider=provider_for_state
+            )
             
             if request.stream:
                 # For streaming, we'll execute and stream the final answer
@@ -570,7 +602,8 @@ async def send_message(
                             context={
                                 "datasources": datasource_ids,
                                 "views": view_ids
-                            }
+                            },
+                            tableau_client=tableau_client
                         )
                         
                         # Stream the final answer
@@ -613,8 +646,9 @@ async def send_message(
                         yield f"data: Error: {str(e)}\n\n"
                         yield "data: [DONE]\n\n"
                 
+                defer_tableau_close = True
                 return StreamingResponse(
-                    generate_multi_agent_stream(),
+                    _stream_with_tableau_cleanup(generate_multi_agent_stream()),
                     media_type="text/event-stream"
                 )
             else:
@@ -624,7 +658,8 @@ async def send_message(
                     context={
                         "datasources": datasource_ids,
                         "views": view_ids
-                    }
+                    },
+                    tableau_client=tableau_client
                 )
                 
                 final_answer = result.get("final_answer", "Workflow completed")
@@ -682,7 +717,7 @@ async def send_message(
             
             # Apply feedback-based refinement to query
             from app.services.agents.feedback import FeedbackManager
-            feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+            feedback_manager = FeedbackManager(db=db, model=request.model, provider=provider)
             refined_query_result = await feedback_manager.apply_feedback_to_query(
                 query=request.content,
                 conversation_id=request.conversation_id,
@@ -727,10 +762,11 @@ async def send_message(
                 initial_state = {
                     "user_query": refined_query,
                     "datasource_id": datasource_ids[0] if datasource_ids else None,
-                    "site_id": settings.TABLEAU_SITE_ID,
+                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                    "tableau_client": tableau_client,
                     "message_history": message_history,
-                    "api_key": api_key,
                     "model": request.model,
+                    "provider": provider_for_state,
                     "attempt": 1,  # Controlled agent still uses attempt
                     "current_thought": None,
                 }
@@ -763,8 +799,9 @@ async def send_message(
                     "error": None,
                     "confidence": None,
                     "processing_time": None,
-                    "api_key": api_key,
                     "model": request.model,
+                    "provider": provider_for_state,
+                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
                     "build_attempt": 1,
                     "execution_attempt": 1,
                     "query_version": 0,
@@ -813,14 +850,15 @@ async def send_message(
                 initial_state = {
                     "user_query": refined_query,
                     "message_history": tool_use_message_history,
-                    "site_id": settings.TABLEAU_SITE_ID,
+                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
                     "datasource_id": datasource_ids[0] if datasource_ids else None,
+                    "tableau_client": tableau_client,
                     "raw_data": None,
                     "tool_calls": [],
                     "final_answer": None,
                     "error": None,
-                    "api_key": api_key,
                     "model": request.model,  # Use the model from the request
+                    "provider": provider_for_state,
                 }
                 logger.info(f"Initial state model field: {initial_state.get('model')}")
             else:
@@ -839,8 +877,8 @@ async def send_message(
                     "confidence": None,
                     "processing_time": None,
                     # AI client configuration
-                    "api_key": api_key,
                     "model": request.model,
+                    "provider": provider_for_state,
                     # VizQL-specific fields
                     "schema": None,
                     "required_measures": [],
@@ -870,8 +908,8 @@ async def send_message(
                         pre_graph_time = time.time()
                         logger.info(f"About to start graph execution. Time since stream_start: {(pre_graph_time - stream_start_time) * 1000:.2f}ms")
                         
-                        # Provide config with thread_id for checkpointer
-                        config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}"}}
+                        # Provide config with thread_id + tableau_client (not in state - not serializable)
+                        config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}", "tableau_client": tableau_client}}
                         
                         # Log timing right before astream
                         pre_astream_time = time.time()
@@ -1240,8 +1278,9 @@ async def send_message(
                         )
                         yield done_chunk.to_sse_format()
                 
+                defer_tableau_close = True
                 return StreamingResponse(
-                    stream_graph(),
+                    _stream_with_tableau_cleanup(stream_graph()),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -1251,8 +1290,8 @@ async def send_message(
                 )
             else:
                 # Non-streaming: execute graph and return result
-                # Provide config with thread_id for checkpointer
-                config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}"}}
+                # Provide config with thread_id + tableau_client (not in state - not serializable)
+                config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}", "tableau_client": tableau_client}}
                 
                 try:
                     logger.info(f"Executing VizQL graph for conversation {request.conversation_id} (execution_id: {execution_id})")
@@ -1464,7 +1503,7 @@ async def send_message(
             
             # Apply feedback-based refinement to query
             from app.services.agents.feedback import FeedbackManager
-            feedback_manager = FeedbackManager(db=db, api_key=api_key, model=request.model)
+            feedback_manager = FeedbackManager(db=db, model=request.model, provider=provider)
             refined_query_result = await feedback_manager.apply_feedback_to_query(
                 query=request.content,
                 conversation_id=request.conversation_id,
@@ -1497,8 +1536,9 @@ async def send_message(
                 "confidence": None,
                 "processing_time": None,
                 # AI client configuration
-                "api_key": api_key,
                 "model": request.model,
+                "provider": provider_for_state,
+                "tableau_client": tableau_client,
             }
             
             if request.stream:
@@ -1714,8 +1754,9 @@ async def send_message(
                         )
                         yield done_chunk.to_sse_format()
                 
+                defer_tableau_close = True
                 return StreamingResponse(
-                    stream_graph(),
+                    _stream_with_tableau_cleanup(stream_graph()),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -1793,8 +1834,7 @@ async def send_message(
         
         # Initialize AI client
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         try:
@@ -1808,6 +1848,7 @@ async def send_message(
                             chunk_count = 0
                             async for chunk in ai_client.stream_chat(
                                 model=request.model,
+                                provider=provider_for_state,
                                 messages=messages,
                                 temperature=request.temperature,
                                 max_tokens=request.max_tokens
@@ -1861,8 +1902,9 @@ async def send_message(
                         )
                         yield done_chunk.to_sse_format()
                 
+                defer_tableau_close = True
                 return StreamingResponse(
-                    generate_stream(),
+                    _stream_with_tableau_cleanup(generate_stream()),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -1880,6 +1922,7 @@ async def send_message(
                     # First call: let LLM decide which tools to use
                     response = await ai_client.chat(
                         model=request.model,
+                        provider=provider_for_state,
                         messages=messages,
                         temperature=request.temperature,
                         max_tokens=request.max_tokens,
@@ -1926,6 +1969,7 @@ async def send_message(
                         # Second call: let LLM generate final response with tool results
                         final_response = await ai_client.chat(
                             model=request.model,
+                            provider=provider_for_state,
                             messages=messages,
                             temperature=request.temperature,
                             max_tokens=request.max_tokens
@@ -1995,8 +2039,8 @@ async def send_message(
                 detail=f"Internal server error: {str(e)}"
             )
     finally:
-        # Ensure tableau_client is closed even if AI client fails
-        if tableau_client:
+        # Close tableau_client only for non-streaming; streaming paths close in _stream_with_tableau_cleanup
+        if not defer_tableau_close and tableau_client:
             await tableau_client.close()
 
 

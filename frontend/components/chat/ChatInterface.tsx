@@ -49,6 +49,7 @@ export function ChatInterface({
   );
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
@@ -237,13 +238,30 @@ export function ChatInterface({
       setMessages((prev) => [...prev, userMessage]);
 
       try {
-        console.log('Starting stream for conversation:', conversationId, 'model:', selectedModel);
+        console.log('Starting stream for conversation:', conversationId, 'model:', selectedModel, 'provider:', selectedProvider);
         // Stream the response with structured message handling
+        // Infer provider from model when not set (e.g. from preferences before ModelSelector finishes)
+        let providerToUse = selectedProvider;
+        if (!providerToUse && selectedModel) {
+          if (selectedModel.startsWith('gemini-')) providerToUse = 'apple';
+          else if (selectedModel.startsWith('gpt-')) providerToUse = 'openai';
+          else if (selectedModel.startsWith('claude-')) providerToUse = 'anthropic';
+        }
+        if (!providerToUse) {
+          const errorMsg = `Provider not set. Please select a provider from the dropdown. Selected model: ${selectedModel}`;
+          console.error(errorMsg);
+          setError(new Error(errorMsg));
+          setIsLoading(false);
+          setIsStreaming(false);
+          return;
+        }
+        
         await chatApi.sendMessageStream(
           {
             conversation_id: conversationId,
             content,
             model: selectedModel,
+            provider: providerToUse,
             agent_type: agentType,
             stream: true,
           },
@@ -681,6 +699,7 @@ export function ChatInterface({
             <ModelSelector
               selected={selectedModel}
               onSelect={setSelectedModel}
+              onProviderChange={setSelectedProvider}
               showProvider={true}
             />
           </div>

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { authApi, type TableauConfigOption, type TableauAuthResponse } from '@/lib/api';
+import Link from 'next/link';
+import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -18,6 +19,8 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   const { isAdmin, isAuthenticated } = useAuth();
   const [configs, setConfigs] = useState<TableauConfigOption[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
+  const [authType, setAuthType] = useState<'connected_app' | 'pat'>('connected_app');
+  const [userPatConfigIds, setUserPatConfigIds] = useState<number[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<{
     connected: boolean;
     config?: TableauConfigOption;
@@ -40,18 +43,21 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   }, [isAuthenticated]);
 
   const loadConfigs = async () => {
-    // Skip if user is not authenticated
-    if (!isAuthenticated) {
-      return;
-    }
-    
+    if (!isAuthenticated) return;
     try {
-      const configsList = await authApi.listTableauConfigs();
+      const [configsList, pats] = await Promise.all([
+        authApi.listTableauConfigs(),
+        userSettingsApi.listTableauPATs().catch(() => []),
+      ]);
       setConfigs(configsList);
-      // If there's a stored config ID, select it
+      setUserPatConfigIds(pats.map((p) => p.tableau_server_config_id));
       const storedConfigId = localStorage.getItem('tableau_config_id');
-      if (storedConfigId && configsList.find(c => c.id === Number(storedConfigId))) {
+      const storedAuthType = localStorage.getItem('tableau_auth_type');
+      if (storedConfigId && configsList.find((c) => c.id === Number(storedConfigId))) {
         setSelectedConfigId(Number(storedConfigId));
+      }
+      if (storedAuthType === 'pat' || storedAuthType === 'connected_app') {
+        setAuthType(storedAuthType);
       }
     } catch (err) {
       console.error('Failed to load Tableau configs:', err);
@@ -69,9 +75,13 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
     setError(null);
 
     try {
-      const authResponse = await authApi.authenticateTableau({ config_id: selectedConfigId });
-      const config = configs.find(c => c.id === selectedConfigId);
-      
+      const config = configs.find((c) => c.id === selectedConfigId);
+      const hasCA = config?.has_connected_app ?? false;
+      const effectiveAuthType = hasCA ? authType : 'pat';
+      const authResponse = await authApi.authenticateTableau({
+        config_id: selectedConfigId,
+        auth_type: effectiveAuthType,
+      });
       setConnectionStatus({
         connected: true,
         config,
@@ -80,6 +90,7 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
 
       // Store connection state
       localStorage.setItem('tableau_config_id', String(selectedConfigId));
+      localStorage.setItem('tableau_auth_type', effectiveAuthType);
       localStorage.setItem('tableau_connected', 'true');
       if (authResponse.expires_at) {
         localStorage.setItem('tableau_token_expires_at', authResponse.expires_at);
@@ -113,10 +124,16 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
     setConnectionStatus({ connected: false });
     setSelectedConfigId(null);
     localStorage.removeItem('tableau_config_id');
+    localStorage.removeItem('tableau_auth_type');
     localStorage.removeItem('tableau_connected');
     localStorage.removeItem('tableau_token_expires_at');
     onConnectionChange?.(false);
   };
+
+  const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : null;
+  const hasConnectedApp = selectedConfig?.has_connected_app ?? false;
+  const showAuthTypeSelect = selectedConfig?.allow_pat_auth || !hasConnectedApp;
+  const canUsePat = !!selectedConfig?.allow_pat_auth && userPatConfigIds.includes(selectedConfigId!);
 
   if (configs.length === 0 && !isAdmin) {
     return (
@@ -132,13 +149,17 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   return (
     <div className="space-y-3">
       {configs.length > 0 && (
-        <div className="flex items-center gap-2">
+        <>
+          <div className="flex items-center gap-2">
           <Select
             value={selectedConfigId?.toString() || ''}
             onValueChange={(value) => {
               setSelectedConfigId(Number(value));
               setError(null);
-              // If currently connected, disconnect when changing config
+              const newConfig = configs.find((c) => c.id === Number(value));
+              const hasCA = newConfig?.has_connected_app ?? false;
+              if (!newConfig?.allow_pat_auth) setAuthType('connected_app');
+              else if (!hasCA) setAuthType('pat');
               if (connectionStatus.connected) {
                 handleDisconnect();
               }
@@ -198,6 +219,34 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
             </Button>
           )}
         </div>
+        {showAuthTypeSelect && (
+          <div className="flex items-center gap-2">
+            <Select
+              value={hasConnectedApp ? authType : 'pat'}
+              onValueChange={(v) => {
+                setAuthType(v as 'connected_app' | 'pat');
+                setError(null);
+              }}
+              disabled={connectionStatus.connected || loading}
+            >
+              <SelectTrigger className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {hasConnectedApp && <SelectItem value="connected_app">Connected App</SelectItem>}
+                <SelectItem value="pat" disabled={!canUsePat}>
+                  Personal Access Token {!canUsePat && '(configure in Settings)'}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            {(authType === 'pat' || !hasConnectedApp) && !canUsePat && (
+              <Link href="/settings">
+                <Button variant="outline" size="sm">Add PAT in Settings</Button>
+              </Link>
+            )}
+          </div>
+        )}
+        </>
       )}
 
       {connectionStatus.connected && connectionStatus.config && (

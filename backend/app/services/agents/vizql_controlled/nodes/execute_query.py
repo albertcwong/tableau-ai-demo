@@ -46,7 +46,7 @@ async def execute_query_node(state: VizQLGraphState) -> Dict[str, Any]:
     logger.info(f"Executing query for datasource: {datasource_id} (attempt {attempt})")
     
     try:
-        tableau_client = TableauClient()
+        tableau_client = state.get("tableau_client") or TableauClient()
         
         # Execute query with retry
         retry_config = RetryConfig(

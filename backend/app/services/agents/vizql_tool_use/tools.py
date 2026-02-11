@@ -18,16 +18,16 @@ class VizQLTools:
         datasource_id: str,
         tableau_client: Optional[TableauClient] = None,
         message_history: Optional[List[Dict]] = None,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        provider: Optional[str] = None
     ):
         self.site_id = site_id
         self.datasource_id = datasource_id
         self.message_history = message_history or []
         self.tableau_client = tableau_client or TableauClient()
         self.schema_service = SchemaEnrichmentService(self.tableau_client)
-        self.api_key = api_key  # Store API key for LLM calls in build_query
         self.model = model  # Store model for LLM calls
+        self.provider = provider or "openai"  # Store provider for LLM calls
     
     async def get_datasource_metadata(
         self,
@@ -203,10 +203,10 @@ class VizQLTools:
                 "sorting": sorting or [],
                 "calculations": calculations or [],
                 "bins": bins or [],
-                "api_key": self.api_key,  # Pass API key from tool-use state
-                "model": self.model or "gpt-4"  # Use model from tool-use state or default
+                "model": self.model or "gpt-4",  # Use model from tool-use state or default
+                "provider": self.provider  # Pass provider from tool-use state
             }
-            logger.info(f"build_query: Passing api_key={'present' if self.api_key else 'None'} and model={self.model or 'gpt-4'} to query builder")
+            logger.info(f"build_query: Passing model={self.model or 'gpt-4'} and provider={self.provider} to query builder")
             
             # Use existing query builder node
             from app.services.agents.vizql.nodes.query_builder import build_query_node

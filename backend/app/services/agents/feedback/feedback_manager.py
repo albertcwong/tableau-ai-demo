@@ -13,20 +13,19 @@ logger = logging.getLogger(__name__)
 class FeedbackManager:
     """Manages user feedback and learning for agents."""
     
-    def __init__(self, db: Session, api_key: Optional[str] = None, model: str = "gpt-4"):
+    def __init__(self, db: Session, model: str = "gpt-4", provider: str = "openai"):
         """Initialize feedback manager.
         
         Args:
             db: Database session
-            api_key: API key for AI client
             model: Model to use for learning
+            provider: Provider name (e.g., "openai", "apple", "vertex")
         """
         self.db = db
-        self.api_key = api_key
         self.model = model
+        self.provider = provider
         self.ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
     
     async def record_correction(
@@ -109,6 +108,7 @@ class FeedbackManager:
         
         response = await self.ai_client.chat(
             model=self.model,
+            provider=self.provider,
             messages=[
                 {"role": "system", "content": self._get_refinement_system_prompt(agent_type)},
                 {"role": "user", "content": refinement_prompt}
@@ -225,6 +225,7 @@ Return structured learning points."""
 
         response = await self.ai_client.chat(
             model=self.model,
+            provider=self.provider,
             messages=[
                 {"role": "system", "content": "You extract learning points from user corrections."},
                 {"role": "user", "content": learning_prompt}

@@ -5,7 +5,7 @@ import uuid
 import logging
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any
+from typing import Callable, Dict, List, Optional, Any
 from urllib.parse import urljoin
 
 import httpx
@@ -48,6 +48,11 @@ class TableauClient:
         api_version: Optional[str] = None,
         timeout: int = 30,
         max_retries: int = 3,
+        verify_ssl: Optional[bool] = None,
+        initial_token: Optional[str] = None,
+        initial_site_id: Optional[str] = None,
+        initial_site_content_url: Optional[str] = None,
+        on_401_invalidate: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize Tableau client.
@@ -79,10 +84,7 @@ class TableauClient:
         
         if not self.server_url:
             raise ValueError("Tableau server URL is required")
-        if not self.client_id:
-            raise ValueError("Tableau client ID is required")
-        if not self.client_secret:
-            raise ValueError("Tableau client secret is required")
+        # client_id and client_secret required only for Connected App auth; PAT auth does not need them
         
         # Ensure server URL doesn't end with /
         self.server_url = self.server_url.rstrip('/')
@@ -94,22 +96,33 @@ class TableauClient:
         self.auth_token: Optional[str] = None
         self.token_expires_at: Optional[datetime] = None
         self.site_content_url: Optional[str] = None
+        self._pat_auth: bool = False  # True when authenticated via PAT (no refresh)
+        self._on_401_invalidate: Optional[Callable[[], None]] = on_401_invalidate
+        # Pre-seeded from cache (avoids sign-in when token reuse)
+        if initial_token:
+            self.auth_token = initial_token
+            self.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=8)
+            if initial_site_id:
+                self.site_id = initial_site_id
+            if initial_site_content_url:
+                self.site_content_url = initial_site_content_url
+            # Detect PAT auth from client_id placeholder
+            if client_id == "pat-placeholder":
+                self._pat_auth = True
         
         # SSL verification setting
-        # If certificate path is provided, create custom SSL context that verifies cert but allows hostname mismatch
-        if settings.TABLEAU_SSL_CERT_PATH:
+        # If verify_ssl=False (from config skip_ssl_verify), skip verification
+        if verify_ssl is False:
+            self.verify_ssl = False
+        elif settings.TABLEAU_SSL_CERT_PATH:
             cert_path = Path(settings.TABLEAU_SSL_CERT_PATH).expanduser()
-            # If relative path, resolve relative to project root
             if not cert_path.is_absolute():
                 cert_path = PROJECT_ROOT / cert_path
             cert_path = cert_path.resolve()
-            
             if cert_path.exists():
-                # Create SSL context that verifies the certificate but allows hostname mismatch
-                # This is common with self-signed certificates or internal servers
                 ssl_context = ssl.create_default_context(cafile=str(cert_path))
-                ssl_context.check_hostname = False  # Allow hostname mismatch
-                ssl_context.verify_mode = ssl.CERT_REQUIRED  # Still verify the certificate
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
                 self.verify_ssl = ssl_context
             else:
                 raise ValueError(
@@ -117,7 +130,7 @@ class TableauClient:
                     f"(resolved from: {settings.TABLEAU_SSL_CERT_PATH})"
                 )
         else:
-            self.verify_ssl = settings.TABLEAU_VERIFY_SSL
+            self.verify_ssl = settings.TABLEAU_VERIFY_SSL if verify_ssl is None else verify_ssl
         
         # HTTP client with SSL configuration
         self._client = httpx.AsyncClient(
@@ -200,6 +213,8 @@ class TableauClient:
         Raises:
             TableauAuthenticationError: If authentication fails
         """
+        if not self.client_id or not self.client_secret:
+            raise ValueError("Tableau client ID and client secret are required for Connected App authentication")
         logger.info("=" * 80)
         logger.info("STARTING TABLEAU SIGN-IN PROCESS")
         logger.info(f"Server URL: {self.server_url}")
@@ -553,14 +568,69 @@ class TableauClient:
             ) from e
         except httpx.RequestError as e:
             raise TableauAuthenticationError(f"Network error during authentication: {str(e)}") from e
-    
+
+    async def sign_in_with_pat(self, pat_name: str, pat_secret: str) -> Dict[str, Any]:
+        """
+        Authenticate with Tableau using Personal Access Token.
+
+        Args:
+            pat_name: PAT name
+            pat_secret: PAT secret value
+
+        Returns:
+            Dictionary with authentication details including token and site info
+        """
+        sign_in_url = urljoin(self.api_base, 'auth/signin')
+        credentials = {
+            "personalAccessTokenName": pat_name,
+            "personalAccessTokenSecret": pat_secret,
+            "site": {"contentUrl": self.site_id or ""}
+        }
+        payload = {"credentials": credentials}
+        try:
+            response = await self._client.post(
+                sign_in_url,
+                json=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            creds = data.get("credentials", {})
+            self.auth_token = creds.get("token")
+            site_info = creds.get("site", {})
+            self.site_content_url = site_info.get("contentUrl") or site_info.get("contenturl")
+            if site_info.get("id"):
+                self.site_id = site_info["id"]
+            self.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=8)
+            if not self.auth_token:
+                raise TableauAuthenticationError("No token received from PAT sign-in")
+            self._pat_auth = True
+            return {
+                "token": self.auth_token,
+                "site_content_url": self.site_content_url,
+                "expires_at": self.token_expires_at.isoformat(),
+                "site": site_info,
+                "user": creds.get("user", {}),
+                "credentials": creds,
+            }
+        except httpx.HTTPStatusError as e:
+            raise TableauAuthenticationError(
+                f"PAT authentication failed: {e.response.status_code} - {e.response.text}"
+            ) from e
+        except httpx.RequestError as e:
+            raise TableauAuthenticationError(f"Network error during PAT authentication: {str(e)}") from e
+
     async def _ensure_authenticated(self) -> None:
         """Ensure client is authenticated, signing in if necessary."""
         if not self.auth_token or not self.token_expires_at:
+            if self._pat_auth:
+                raise TableauAuthenticationError("PAT session expired. Please reconnect.")
             logger.info("No auth token found, calling sign_in()...")
             await self.sign_in()
             return
-        
+        # PAT auth cannot refresh; user must reconnect when token expires
+        if self._pat_auth:
+            return
         # Refresh if token expires within 1 minute
         if datetime.now(timezone.utc) >= (self.token_expires_at - timedelta(minutes=1)):
             logger.info("Auth token expiring soon, refreshing via sign_in()...")
@@ -611,6 +681,8 @@ class TableauClient:
         
         # Debug logging
         logger.debug(f"Making {method} request to: {url}, Site ID: '{self.site_id}'")
+        auth_retries = 0
+        max_auth_retries = 2  # Re-auth up to 2 times on 401 (Tableau invalidates token on new sign-in)
         
         for attempt in range(self.max_retries):
             try:
@@ -622,12 +694,16 @@ class TableauClient:
                     json=json_data,
                 )
                 
-                # Handle 401 Unauthorized - try re-authenticating
-                if response.status_code == 401 and retry_on_auth_error and attempt < self.max_retries - 1:
+                # Handle 401 - token invalidated (e.g. new sign-in). Re-auth and retry.
+                if response.status_code == 401 and retry_on_auth_error and auth_retries < max_auth_retries:
+                    logger.info("Tableau returned 401 (token likely invalidated), re-authenticating...")
+                    if self._on_401_invalidate:
+                        self._on_401_invalidate()
                     self.auth_token = None
                     self.token_expires_at = None
                     await self._ensure_authenticated()
                     headers = self._get_auth_headers()
+                    auth_retries += 1
                     continue
                 
                 response.raise_for_status()

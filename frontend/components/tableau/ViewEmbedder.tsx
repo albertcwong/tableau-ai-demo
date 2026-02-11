@@ -75,9 +75,23 @@ export function ViewEmbedder({
         }
 
         setEmbedInfo(embedData);
-      } catch (err) {
+      } catch (err: any) {
         if (!mounted) return;
+        
+        // Check if this is a PAT authentication error
         const errorMessage = err instanceof Error ? err.message : 'Failed to load embed URL';
+        const isPATError = errorMessage.includes('Personal Access Token') || 
+                          errorMessage.includes('PAT') ||
+                          (err?.response?.status === 400 && errorMessage.includes('embedding'));
+        
+        if (isPATError) {
+          const patErrorMsg = 'View embedding is not supported when using Personal Access Token authentication. Please connect with Connected App to embed views.';
+          setError(patErrorMsg);
+          setLoading(false);
+          onError?.(new Error(patErrorMsg));
+          return;
+        }
+        
         setError(errorMessage);
         setLoading(false);
         onError?.(err instanceof Error ? err : new Error(errorMessage));

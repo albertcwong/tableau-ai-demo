@@ -89,11 +89,19 @@ apiClient.interceptors.request.use(
       }
     }
     
-    // Add Tableau config ID header for tableau and vizql API endpoints
-    if (typeof window !== 'undefined' && (config.url?.startsWith('/api/v1/tableau/') || config.url?.startsWith('/api/v1/vizql/'))) {
+    // Add Tableau config ID and auth type headers for tableau, vizql, and chat API endpoints
+    if (typeof window !== 'undefined' && (
+      config.url?.startsWith('/api/v1/tableau/') || 
+      config.url?.startsWith('/api/v1/vizql/') ||
+      config.url?.startsWith('/api/v1/chat/')
+    )) {
       const configId = localStorage.getItem('tableau_config_id');
       if (configId) {
         config.headers['X-Tableau-Config-Id'] = configId;
+      }
+      const authType = localStorage.getItem('tableau_auth_type');
+      if (authType) {
+        config.headers['X-Tableau-Auth-Type'] = authType;
       }
     }
     
@@ -154,8 +162,19 @@ apiClient.interceptors.response.use(
             localStorage.removeItem('auth_token');
             window.location.href = '/login';
           } else if (isTableauEndpoint) {
-            // Tableau endpoint error - don't redirect, just log
-            console.warn('Tableau connection error:', message);
+            const isTableauAuthError = typeof message === 'string' && message.toLowerCase().includes('tableau');
+            if (isTableauAuthError && typeof window !== 'undefined') {
+              // Tableau token invalidated (e.g. new sign-in). Clear connection so user reconnects.
+              localStorage.removeItem('tableau_connected');
+              localStorage.removeItem('tableau_token_expires_at');
+            }
+            if (!isTableauAuthError && typeof window !== 'undefined') {
+              // App auth failed on Tableau endpoint - redirect to login
+              localStorage.removeItem('auth_token');
+              window.location.href = '/login';
+            } else {
+              console.warn('Tableau connection error (token may be invalidated):', message);
+            }
           } else if (typeof window !== 'undefined') {
             // Other 401 errors - check if it's a general auth issue
             // Only redirect if it's clearly an auth problem, not a Tableau connectivity issue
@@ -221,6 +240,7 @@ export interface MessageRequest {
   conversation_id: number;
   content: string;
   model?: string;
+  provider: string;
   agent_type?: 'summary' | 'vizql' | 'general';
   stream?: boolean;
   temperature?: number;
@@ -297,18 +317,91 @@ export const chatApi = {
     abortSignal?: AbortSignal
   ): Promise<void> => {
     try {
+      // Build headers with Tableau config if available
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      // Add auth token if available (same logic as axios interceptor)
+      if (typeof window !== 'undefined') {
+        let token: string | null = null;
+        
+        // Try to get token from Auth0 session cookies via API route first
+        try {
+          const response = await fetch('/api/auth/token', { 
+            credentials: 'include',
+            cache: 'no-store'
+          });
+          if (response.ok) {
+            const data = await response.json();
+            token = data.token;
+          }
+        } catch (error) {
+          // Fallback to localStorage for backward compatibility
+        }
+        
+        // Fallback to localStorage if Auth0 token not available
+        if (!token) {
+          token = localStorage.getItem('auth_token');
+        }
+        
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        // Add Tableau config headers
+        const configId = localStorage.getItem('tableau_config_id');
+        if (configId) {
+          headers['X-Tableau-Config-Id'] = configId;
+        }
+        const authType = localStorage.getItem('tableau_auth_type');
+        if (authType) {
+          headers['X-Tableau-Auth-Type'] = authType;
+        }
+        // Endor A3 token when provider is apple
+        if (request.provider?.toLowerCase() === 'apple') {
+          try {
+            const tokenHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) tokenHeaders['Authorization'] = `Bearer ${token}`;
+            const tokenRes = await fetch(`${API_URL}/api/v1/gateway/endor-token`, {
+              credentials: 'include',
+              headers: tokenHeaders,
+            });
+            if (tokenRes.ok) {
+              const { token: a3Token } = await tokenRes.json();
+              if (a3Token) headers['X-Apple-IDMS-A3-Token'] = a3Token;
+            }
+          } catch {
+            // continue without token; gateway will generate
+          }
+        }
+      }
+      
       const response = await fetch(`${API_URL}/api/v1/chat/message`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ ...request, stream: true }),
         signal: abortSignal,
+        credentials: 'include', // Include cookies for Auth0
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`);
+        let message = `Request failed (${response.status})`;
+        try {
+          const body = JSON.parse(errorText);
+          if (typeof body?.detail === 'string') {
+            message = body.detail;
+          } else if (body?.detail?.message) {
+            message = body.detail.message;
+          }
+        } catch {
+          if (errorText.length < 200) message = errorText;
+        }
+        const err = new Error(message) as Error & { status?: number; errorCode?: string };
+        err.status = response.status;
+        err.errorCode = response.headers.get('X-Error-Code') || undefined;
+        throw err;
       }
 
       const reader = response.body?.getReader();
@@ -450,9 +543,9 @@ export const chatApi = {
 
 // Gateway API functions
 export const gatewayApi = {
-  // Get available providers
-  getProviders: async (): Promise<string[]> => {
-    const response = await apiClient.get<{ providers: string[] }>('/api/v1/gateway/providers');
+  // Get available providers with display names
+  getProviders: async (): Promise<Array<{ provider: string; name: string }>> => {
+    const response = await apiClient.get<{ providers: Array<{ provider: string; name: string }> }>('/api/v1/gateway/providers');
     return response.data.providers;
   },
 
@@ -463,6 +556,12 @@ export const gatewayApi = {
       params,
     });
     return response.data.models;
+  },
+
+  // Get Endor A3 token (required when provider=apple)
+  getEndorToken: async (): Promise<string> => {
+    const response = await apiClient.get<{ token: string }>('/api/v1/gateway/endor-token');
+    return response.data.token;
   },
 
   // Get gateway health (includes models if requested)
@@ -663,10 +762,13 @@ export interface TableauConfigOption {
   name: string;
   server_url: string;
   site_id?: string | null;
+  allow_pat_auth?: boolean;
+  has_connected_app?: boolean;
 }
 
 export interface TableauAuthRequest {
   config_id: number;
+  auth_type?: 'connected_app' | 'pat';
 }
 
 export interface TableauAuthResponse {
@@ -733,6 +835,40 @@ export const authApi = {
   },
 };
 
+// User settings API (PAT management)
+export interface UserTableauPAT {
+  id: number;
+  tableau_server_config_id: number;
+  pat_name: string;
+  server_name: string;
+  server_url: string;
+  created_at: string;
+}
+
+export interface CreateTableauPAT {
+  tableau_server_config_id: number;
+  pat_name: string;
+  pat_secret: string;
+}
+
+export const userSettingsApi = {
+  getSettings: async (): Promise<{ username: string; role: string; has_tableau_pats: boolean }> => {
+    const response = await apiClient.get('/api/v1/user/settings');
+    return response.data;
+  },
+  listTableauPATs: async (): Promise<UserTableauPAT[]> => {
+    const response = await apiClient.get<UserTableauPAT[]>('/api/v1/user/tableau-pats');
+    return response.data;
+  },
+  createTableauPAT: async (data: CreateTableauPAT): Promise<UserTableauPAT> => {
+    const response = await apiClient.post<UserTableauPAT>('/api/v1/user/tableau-pats', data);
+    return response.data;
+  },
+  deleteTableauPAT: async (configId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/user/tableau-pats/${configId}`);
+  },
+};
+
 // Admin API functions
 export interface UserCreate {
   username: string;
@@ -752,9 +888,11 @@ export interface TableauConfigCreate {
   server_url: string;
   site_id?: string;
   api_version?: string;
-  client_id: string;
-  client_secret: string;
+  client_id?: string;
+  client_secret?: string;
   secret_id?: string;
+  allow_pat_auth?: boolean;
+  skip_ssl_verify?: boolean;
 }
 
 export interface TableauConfigUpdate {
@@ -765,6 +903,8 @@ export interface TableauConfigUpdate {
   client_id?: string;
   client_secret?: string;
   secret_id?: string;
+  allow_pat_auth?: boolean;
+  skip_ssl_verify?: boolean;
   is_active?: boolean;
 }
 
@@ -774,9 +914,11 @@ export interface TableauConfigResponse {
   server_url: string;
   site_id?: string | null;
   api_version?: string | null;
-  client_id: string;
-  client_secret: string;
+  client_id?: string | null;
+  client_secret?: string | null;
   secret_id?: string | null;
+  allow_pat_auth?: boolean;
+  skip_ssl_verify?: boolean;
   is_active: boolean;
   created_by?: number | null;
   created_at: string;
@@ -794,6 +936,11 @@ export interface ProviderConfigCreate {
   vertex_location?: string;
   vertex_service_account_path?: string;
   apple_endor_endpoint?: string;
+  apple_endor_app_id?: string;
+  apple_endor_app_password?: string;
+  apple_endor_other_app?: number;
+  apple_endor_context?: string;
+  apple_endor_one_time_token?: boolean;
 }
 
 export interface ProviderConfigUpdate {
@@ -808,6 +955,11 @@ export interface ProviderConfigUpdate {
   vertex_location?: string;
   vertex_service_account_path?: string;
   apple_endor_endpoint?: string;
+  apple_endor_app_id?: string;
+  apple_endor_app_password?: string;
+  apple_endor_other_app?: number;
+  apple_endor_context?: string;
+  apple_endor_one_time_token?: boolean;
   is_active?: boolean;
 }
 
@@ -827,6 +979,11 @@ export interface ProviderConfigResponse {
   vertex_location?: string | null;
   vertex_service_account_path?: string | null;
   apple_endor_endpoint?: string | null;
+  apple_endor_app_id?: string | null;
+  apple_endor_app_password?: string | null;
+  apple_endor_other_app?: number | null;
+  apple_endor_context?: string | null;
+  apple_endor_one_time_token?: boolean | null;
 }
 
 export interface ContextObjectResponse {

@@ -66,27 +66,20 @@ After your response, include:
         {"role": "user", "content": f"Format the data for: {user_query}"}
     ]
     
-    # Get API key and model from state
-    api_key = state.get("api_key")
+    # Get model and provider from state
     model = state.get("model") or settings.DEFAULT_LLM_MODEL
+    provider = state.get("provider", "openai")
     
-    if not api_key:
-        return {
-            **state,
-            "final_answer": "API key required for LLM calls",
-            "current_thought": "Error: Missing API key"
-        }
-    
-    logger.info(f"Summarizing results using model: {model}")
+    logger.info(f"Summarizing results using model: {model}, provider: {provider}")
     
     try:
         # Call LLM
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         response = await ai_client.chat(
             model=model,
+            provider=provider,
             messages=messages
         )
         

@@ -72,7 +72,7 @@ async def fetch_schema_node(state: VizQLAgentState) -> Dict[str, Any]:
             # If not in cache, fetch enriched schema (without statistics for speed)
             if not enriched_schema:
                 logger.info(f"Enriched schema not in cache, fetching from API (without statistics)...")
-                tableau_client = TableauClient()
+                tableau_client = state.get("tableau_client") or TableauClient()
                 enrichment_service = SchemaEnrichmentService(tableau_client)
                 enriched_schema = await enrichment_service.enrich_datasource_schema(
                     datasource_id,
@@ -94,7 +94,8 @@ async def fetch_schema_node(state: VizQLAgentState) -> Dict[str, Any]:
         # If enrichment failed, use basic schema
         if not enriched_schema:
             logger.info("Using basic schema (enrichment unavailable)")
-            schema_response = await _fetch_schema_cached(datasource_id)
+            tableau_client = state.get("tableau_client") or TableauClient()
+            schema_response = await tableau_client.get_datasource_schema(datasource_id)
             
             return {
                 **state,

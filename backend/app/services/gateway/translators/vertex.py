@@ -208,9 +208,12 @@ class VertexTranslator(BaseTranslator):
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
                 
-                # Extract text from parts
+                # Extract text from parts (Gemini may return function_call in parts instead of text)
                 text_parts = [part.get("text", "") for part in parts if "text" in part]
                 content_text = "".join(text_parts)
+                if not content_text and parts:
+                    part_keys = [list(p.keys()) for p in parts[:3]]
+                    logger.warning(f"Vertex: empty text from {len(parts)} parts, part_keys={part_keys}")
                 
                 # Convert finish reason
                 finish_reason = candidate.get("finishReason", "STOP").lower()

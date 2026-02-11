@@ -1,7 +1,7 @@
 """User and authentication models."""
 from datetime import datetime, timezone
 import enum
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Index, Enum as SQLEnum, ForeignKey, Text, TypeDecorator
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Index, Enum as SQLEnum, ForeignKey, Text, TypeDecorator, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -36,6 +36,9 @@ class ProviderTypeType(TypeDecorator):
         if isinstance(value, str):
             # Normalize to lowercase and validate
             lower_value = value.lower()
+            # Backward compatibility: 'apple' -> 'apple_endor'
+            if lower_value == 'apple':
+                lower_value = 'apple_endor'
             # Validate it's a valid provider type
             valid_values = [p.value for p in ProviderType]
             if lower_value not in valid_values:
@@ -57,6 +60,9 @@ class ProviderTypeType(TypeDecorator):
         # Convert string to enum - handle both uppercase and lowercase
         if isinstance(value, str):
             lower_value = value.lower()
+            # Backward compatibility: 'apple' -> 'apple_endor'
+            if lower_value == 'apple':
+                lower_value = 'apple_endor'
             try:
                 return ProviderType(lower_value)
             except ValueError:
@@ -92,6 +98,7 @@ class User(Base):
     tableau_configs = relationship("TableauServerConfig", back_populates="created_by_user", cascade="all, delete-orphan")
     provider_configs = relationship("ProviderConfig", back_populates="created_by_user", cascade="all, delete-orphan")
     tableau_server_mappings = relationship("UserTableauServerMapping", back_populates="user", cascade="all, delete-orphan")
+    tableau_pats = relationship("UserTableauPAT", back_populates="user", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -111,9 +118,11 @@ class TableauServerConfig(Base):
     server_url = Column(String(500), nullable=False)
     site_id = Column(String(100), nullable=True, comment="Site content URL (empty string for default site)")
     api_version = Column(String(20), nullable=True, default="3.15", comment="Tableau REST API version (e.g., 3.15, 3.22)")
-    client_id = Column(String(255), nullable=False, comment="Connected App client ID")
-    client_secret = Column(String(500), nullable=False, comment="Connected App secret (encrypted)")
+    client_id = Column(String(255), nullable=True, comment="Connected App client ID (optional when allow_pat_auth)")
+    client_secret = Column(String(500), nullable=True, comment="Connected App secret (optional when allow_pat_auth)")
     secret_id = Column(String(255), nullable=True, comment="Secret ID for JWT 'kid' header (defaults to client_id)")
+    allow_pat_auth = Column(Boolean, default=False, nullable=False, comment="Allow users to authenticate with Personal Access Token")
+    skip_ssl_verify = Column(Boolean, default=False, nullable=False, comment="Skip SSL certificate verification for Tableau API calls")
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
@@ -122,6 +131,7 @@ class TableauServerConfig(Base):
     # Relationships
     created_by_user = relationship("User", back_populates="tableau_configs")
     user_mappings = relationship("UserTableauServerMapping", back_populates="tableau_server_config", cascade="all, delete-orphan")
+    user_pats = relationship("UserTableauPAT", back_populates="tableau_config", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -158,6 +168,30 @@ class UserTableauServerMapping(Base):
         return f"<UserTableauServerMapping(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, tableau_username={self.tableau_username})>"
 
 
+class UserTableauPAT(Base):
+    """User's Personal Access Token for Tableau Server."""
+    __tablename__ = "user_tableau_pats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tableau_server_config_id = Column(Integer, ForeignKey("tableau_server_configs.id"), nullable=False, index=True)
+    pat_name = Column(String(255), nullable=False, comment="PAT name for identification")
+    pat_secret = Column(Text, nullable=False, comment="Encrypted PAT secret")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="tableau_pats")
+    tableau_config = relationship("TableauServerConfig", back_populates="user_pats")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'tableau_server_config_id', name='uq_user_tableau_pat'),
+    )
+
+    def __repr__(self):
+        return f"<UserTableauPAT(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, pat_name={self.pat_name})>"
+
+
 class ProviderConfig(Base):
     """AI provider configuration model."""
     __tablename__ = "provider_configs"
@@ -171,7 +205,7 @@ class ProviderConfig(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Common fields
-    api_key = Column(String(500), nullable=True, comment="API key (for OpenAI, Anthropic, Apple Endor)")
+    api_key = Column(String(500), nullable=True, comment="API key (for OpenAI, Anthropic; not used by Apple Endor)")
     
     # Salesforce specific
     salesforce_client_id = Column(String(255), nullable=True, comment="Salesforce Connected App client ID")
@@ -186,6 +220,11 @@ class ProviderConfig(Base):
     
     # Apple Endor specific
     apple_endor_endpoint = Column(String(500), nullable=True, comment="Apple Endor API endpoint URL")
+    apple_endor_app_id = Column(String(255), nullable=True, comment="Apple Endor App ID for A3 token generation")
+    apple_endor_app_password = Column(String(500), nullable=True, comment="Apple Endor App Password for A3 token generation")
+    apple_endor_other_app = Column(Integer, nullable=True, comment="Apple Endor otherApp parameter (default: 199323)")
+    apple_endor_context = Column(String(100), nullable=True, comment="Apple Endor context parameter (default: 'endor')")
+    apple_endor_one_time_token = Column(Boolean, nullable=True, default=False, comment="Apple Endor oneTimeToken flag")
     
     # Relationships
     created_by_user = relationship("User", back_populates="provider_configs")

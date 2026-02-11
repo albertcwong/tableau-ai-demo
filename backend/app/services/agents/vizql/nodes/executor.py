@@ -97,8 +97,8 @@ async def execute_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         }
     
     try:
-        # Initialize Tableau client
-        tableau_client = TableauClient()
+        # Use state's tableau_client (user's selected config) or fallback to env
+        tableau_client = state.get("tableau_client") or TableauClient()
         
         # Execute using VizQL Data Service API
         datasource_id = query.get("datasource", {}).get("datasourceLuid")

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     
     # Tableau
     TABLEAU_SERVER_URL: str = ""
+    TABLEAU_PAT_ENCRYPTION_KEY: Optional[str] = None  # Base64-encoded Fernet key for PAT storage
     TABLEAU_SITE_ID: str = ""
     TABLEAU_CLIENT_ID: str = ""
     TABLEAU_CLIENT_SECRET: str = ""

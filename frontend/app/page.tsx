@@ -9,7 +9,7 @@ import { useAuth } from '@/components/auth/AuthContext';
 import { AgentContext } from '@/components/agents/AgentContext';
 import { ThreePanelLayout } from '@/components/explorer';
 import { AgentPanel } from '@/components/agent-panel';
-import { MessageSquare, GripVertical, Home as HomeIcon, Settings } from 'lucide-react';
+import { MessageSquare, GripVertical, Home as HomeIcon, Settings, User } from 'lucide-react';
 import type { TableauDatasource, ChatContextObject } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -94,6 +94,16 @@ function HomeContent() {
                     >
                       <HomeIcon className="h-4 w-4" />
                       Home
+                    </Button>
+                  </Link>
+                  <Link href="/settings">
+                    <Button
+                      variant={pathname === '/settings' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="flex items-center gap-2"
+                    >
+                      <User className="h-4 w-4" />
+                      Settings
                     </Button>
                   </Link>
                   {isAdmin && (

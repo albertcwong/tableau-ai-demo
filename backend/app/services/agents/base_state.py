@@ -31,5 +31,5 @@ class BaseAgentState(TypedDict):
     processing_time: Optional[float]
     
     # AI client configuration
-    api_key: Optional[str]
     model: Optional[str]
+    provider: Optional[str]

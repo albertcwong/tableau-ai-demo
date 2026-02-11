@@ -24,7 +24,8 @@ export function ModelSettings({
   onProviderChange,
   onModelChange,
 }: ModelSettingsProps) {
-  const [providers, setProviders] = useState<string[]>([]);
+  const [providers, setProviders] = useState<Array<{ provider: string; name: string }>>([]);
+  const [providerMap, setProviderMap] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -34,6 +35,12 @@ export function ModelSettings({
     try {
       const providerList = await gatewayApi.getProviders();
       setProviders(providerList);
+      // Create a map of provider -> display name for quick lookup
+      const map: Record<string, string> = {};
+      providerList.forEach(p => {
+        map[p.provider] = p.name;
+      });
+      setProviderMap(map);
     } catch (err) {
       console.error('Failed to load providers:', err);
     } finally {
@@ -91,13 +98,13 @@ export function ModelSettings({
           >
             <SelectTrigger id="provider" className="w-full">
               <SelectValue placeholder="Select provider">
-                {provider}
+                {provider ? (providerMap[provider] || provider) : 'Select provider'}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {providers.map((p) => (
-                <SelectItem key={p} value={p}>
-                  {p}
+                <SelectItem key={p.provider} value={p.provider}>
+                  {p.name}
                 </SelectItem>
               ))}
             </SelectContent>

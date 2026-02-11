@@ -37,8 +37,8 @@ export default function LoginPage() {
       .then(setAuthConfig)
       .catch((err) => {
         console.error('Failed to load auth config:', err);
-        // Default to password auth if config fails
-        setAuthConfig({ enable_password_auth: true, enable_oauth_auth: false });
+        // Show both options when fetch fails (avoid hiding Auth0 due to transient errors)
+        setAuthConfig({ enable_password_auth: true, enable_oauth_auth: true });
       });
   }, []);
 

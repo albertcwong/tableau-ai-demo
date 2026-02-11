@@ -1,11 +1,14 @@
 """Multi-agent orchestration system for agent-to-agent communication."""
 import logging
-from typing import Dict, Any, List, Optional, TypedDict, Annotated, Sequence
+from typing import Dict, Any, List, Optional, TypedDict, Annotated, Sequence, TYPE_CHECKING
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.services.agents.graph_factory import AgentGraphFactory
 from app.services.agents.base_state import BaseAgentState
+
+if TYPE_CHECKING:
+    from app.services.tableau.client import TableauClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +45,22 @@ class MultiAgentState(TypedDict):
     context_datasources: List[str]
     context_views: List[str]
 
+    # Tableau client (user's selected config from Connect flow)
+    tableau_client: Optional["TableauClient"]
+
 
 class MultiAgentOrchestrator:
     """Orchestrates multi-agent workflows with agent-to-agent communication."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4"):
+    def __init__(self, model: str = "gpt-4", provider: str = "openai"):
         """Initialize orchestrator.
         
         Args:
-            api_key: API key for AI client
             model: Model to use for planning and coordination
+            provider: Provider name (e.g., openai, apple)
         """
-        self.api_key = api_key
         self.model = model
+        self.provider = provider
     
     async def plan_workflow(self, user_query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Plan multi-agent workflow from user query.
@@ -70,8 +76,7 @@ class MultiAgentOrchestrator:
         from app.core.config import settings
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=self.api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         planning_prompt = f"""Analyze this user query and determine if it requires multiple agents to complete.
@@ -119,6 +124,7 @@ Return ONLY the JSON array, no other text."""
         try:
             response = await ai_client.chat(
                 model=self.model,
+                provider=self.provider,
                 messages=[
                     {"role": "system", "content": "You are a workflow planner for multi-agent systems. Return only valid JSON."},
                     {"role": "user", "content": planning_prompt}
@@ -143,7 +149,8 @@ Return ONLY the JSON array, no other text."""
         agent_type: str,
         action: str,
         input_data: Optional[Dict[str, Any]],
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        tableau_client: Optional["TableauClient"] = None
     ) -> Dict[str, Any]:
         """Execute a single agent step.
         
@@ -152,6 +159,7 @@ Return ONLY the JSON array, no other text."""
             action: What the agent should do
             input_data: Data from previous steps
             context: Context (datasources, views)
+            tableau_client: User's Tableau client (from Connect flow)
             
         Returns:
             Result from agent execution
@@ -160,13 +168,18 @@ Return ONLY the JSON array, no other text."""
         
         # Prepare state for agent
         if agent_type == "vizql":
+            from app.core.config import settings
             graph = AgentGraphFactory.create_vizql_graph()
+            message_history = []
+            if input_data:
+                message_history = [{"role": "system", "content": f"Previous step results: {input_data}"}]
             state = {
                 "user_query": action,
                 "agent_type": "vizql",
                 "context_datasources": context.get("datasources", []),
                 "context_views": context.get("views", []),
-                "messages": [],
+                "messages": message_history,
+                "message_history": message_history,
                 "tool_calls": [],
                 "tool_results": [],
                 "current_thought": None,
@@ -174,15 +187,12 @@ Return ONLY the JSON array, no other text."""
                 "error": None,
                 "confidence": None,
                 "processing_time": None,
-                "api_key": self.api_key,
-                "model": self.model
+                "model": self.model,
+                "provider": self.provider,
+                "tableau_client": tableau_client,
+                "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                "datasource_id": context.get("datasources", [None])[0] if context.get("datasources") else None,
             }
-            
-            # If we have input data from previous step, incorporate it
-            if input_data:
-                state["messages"] = [
-                    {"role": "system", "content": f"Previous step results: {input_data}"}
-                ]
             
             result = await graph.ainvoke(state)
             return {
@@ -207,8 +217,9 @@ Return ONLY the JSON array, no other text."""
                 "error": None,
                 "confidence": None,
                 "processing_time": None,
-                "api_key": self.api_key,
-                "model": self.model
+                "model": self.model,
+                "provider": self.provider,
+                "tableau_client": tableau_client,
             }
             
             # If we have query results from VizQL agent, use them
@@ -229,8 +240,7 @@ Return ONLY the JSON array, no other text."""
             from app.core.config import settings
             
             ai_client = UnifiedAIClient(
-                gateway_url=settings.GATEWAY_BASE_URL,
-                api_key=self.api_key
+                gateway_url=settings.GATEWAY_BASE_URL
             )
             
             messages = [{"role": "user", "content": action}]
@@ -242,6 +252,7 @@ Return ONLY the JSON array, no other text."""
             
             response = await ai_client.chat(
                 model=self.model,
+                provider=self.provider,
                 messages=messages
             )
             
@@ -254,13 +265,15 @@ Return ONLY the JSON array, no other text."""
     async def execute_workflow(
         self,
         user_query: str,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        tableau_client: Optional["TableauClient"] = None
     ) -> Dict[str, Any]:
         """Execute a multi-agent workflow with support for parallel execution.
         
         Args:
             user_query: User's query
             context: Context (datasources, views)
+            tableau_client: User's Tableau client (from Connect flow)
             
         Returns:
             Final result from workflow execution
@@ -308,7 +321,8 @@ Return ONLY the JSON array, no other text."""
                     agent_type=step["agent_type"],
                     action=step["action"],
                     input_data=input_data,
-                    context=context
+                    context=context,
+                    tableau_client=tableau_client
                 )
                 step_tasks.append((step_idx, task))
             
@@ -468,7 +482,8 @@ def create_multi_agent_graph() -> StateGraph:
                 context={
                     "datasources": state.get("context_datasources", []),
                     "views": state.get("context_views", [])
-                }
+                },
+                tableau_client=state.get("tableau_client")
             )
             step_tasks.append((step_idx, task))
         

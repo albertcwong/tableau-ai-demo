@@ -29,24 +29,12 @@ async def plan_query_node(state: VizQLAgentState) -> Dict[str, Any]:
             }
         )
         
-        # Initialize AI client with API key from state
-        api_key = state.get("api_key")
+        # Initialize AI client
         model = state.get("model", "gpt-4")
-        
-        # Validate API key is present
-        if not api_key:
-            logger.error("API key missing from state - cannot make gateway request")
-            return {
-                **state,
-                "error": "Failed to plan query: Authorization header required for direct authentication",
-                "required_measures": [],
-                "required_dimensions": [],
-                "required_filters": {}
-            }
+        provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         # Call LLM to parse intent
@@ -57,8 +45,8 @@ async def plan_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         
         response = await ai_client.chat(
             model=model,
-            messages=messages,
-            api_key=api_key
+            provider=provider,
+            messages=messages
         )
         
         # Parse response (expects JSON with measures, dimensions, filters)

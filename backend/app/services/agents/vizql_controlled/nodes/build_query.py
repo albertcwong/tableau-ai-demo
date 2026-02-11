@@ -86,27 +86,20 @@ Output JSON:
         {"role": "user", "content": f"Build a VizQL query for: {user_query}"}
     ]
     
-    # Get API key and model from state
-    api_key = state.get("api_key")
+    # Get model and provider from state
     model = state.get("model") or settings.DEFAULT_LLM_MODEL
+    provider = state.get("provider", "openai")
     
-    if not api_key:
-        return {
-            **state,
-            "build_error": "API key required for LLM calls",
-            "current_thought": "Error: Missing API key"
-        }
-    
-    logger.info(f"Building query (attempt {attempt}) using model: {model}")
+    logger.info(f"Building query (attempt {attempt}) using model: {model}, provider: {provider}")
     
     try:
         # Call LLM
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         response = await ai_client.chat(
             model=model,
+            provider=provider,
             messages=messages
         )
         

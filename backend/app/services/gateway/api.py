@@ -6,10 +6,11 @@ from fastapi import APIRouter, HTTPException, Header, Query, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from app.services.gateway.router import resolve_context, get_available_providers, get_available_models
+from app.services.gateway.router import resolve_context, get_available_models
 from app.services.gateway.auth.direct import DirectAuthenticator
 from app.services.gateway.auth.salesforce import SalesforceAuthenticator
 from app.services.gateway.auth.vertex import VertexAuthenticator
+from app.services.gateway.auth.endor import EndorAuthenticator
 from app.services.gateway.translators import get_translator, normalize_response, normalize_stream_chunk
 from app.core.cache import check_cache_health
 from app.core.config import settings
@@ -19,14 +20,47 @@ from app.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(tags=["gateway"])
+
+
+def get_configured_providers(db: Session) -> list[dict[str, str]]:
+    """Return providers that have an active ProviderConfig with display names.
+    
+    Returns:
+        List of dicts with 'provider' (normalized name) and 'name' (display name from config)
+    """
+    configs = db.query(ProviderConfig).filter(
+        ProviderConfig.is_active == True
+    ).all()
+    
+    # Group by provider_type, use the first config's name for each provider
+    provider_map: dict[str, str] = {}
+    for config in configs:
+        provider_type_val = getattr(config.provider_type, "value", config.provider_type) if config.provider_type else ""
+        # Normalize apple_endor -> apple
+        normalized = "apple" if provider_type_val == "apple_endor" else provider_type_val
+        if normalized and normalized not in provider_map:
+            # Use the config's display name, or fallback to normalized provider name
+            provider_map[normalized] = config.name or normalized
+    
+    # Convert to list of dicts sorted by provider name
+    result = [{"provider": p, "name": provider_map[p]} for p in sorted(provider_map.keys())]
+    return result
+
+
+def _format_fetch_error(e: Exception) -> str:
+    """Format exception for API response, including HTTP status and body when available."""
+    if isinstance(e, httpx.HTTPStatusError):
+        r = e.response
+        body = (r.text[:500] + "..." if len(r.text) > 500 else r.text) if r.text else ""
+        return f"{r.status_code} {r.reason_phrase or ''}: {body}".strip()
+    return f"{type(e).__name__}: {e}"
 
 
 class ChatCompletionRequest(BaseModel):
     """Chat completion request model."""
     model: str = Field(..., description="Model identifier")
+    provider: str = Field(..., description="Provider name (e.g., 'openai', 'apple', 'vertex')")
     messages: list[Dict[str, Any]] = Field(..., description="List of messages")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
@@ -45,10 +79,36 @@ class HealthResponse(BaseModel):
     redis_connected: bool
 
 
+@router.get("/endor-token")
+async def get_endor_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Return a fresh A3 token for Endor. Frontend sends this with chat requests when provider=apple."""
+    config = db.query(ProviderConfig).filter(
+        ProviderConfig.provider_type == "apple_endor",
+        ProviderConfig.is_active == True
+    ).first()
+    if not config or not config.apple_endor_app_id or not config.apple_endor_app_password:
+        raise HTTPException(status_code=400, detail="Endor not configured")
+    auth = EndorAuthenticator(
+        app_id=config.apple_endor_app_id,
+        app_password=config.apple_endor_app_password,
+        other_app=config.apple_endor_other_app,
+        context=config.apple_endor_context,
+        one_time_token=config.apple_endor_one_time_token or False,
+        db=db
+    )
+    token = await auth.get_token()
+    return {"token": token}
+
+
 @router.get("/health", response_model=HealthResponse)
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
     """Gateway health check endpoint."""
-    providers = get_available_providers()
+    provider_configs = get_configured_providers(db)
+    # Extract provider names for backward compatibility
+    providers = [p["provider"] for p in provider_configs]
     redis_connected = check_cache_health()
     
     return HealthResponse(
@@ -61,7 +121,9 @@ async def health_check():
 @router.post("/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
-    authorization: Optional[str] = Header(None, alias="Authorization")
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_apple_idms_a3_token: Optional[str] = Header(None, alias="X-Apple-IDMS-A3-Token"),
+    db: Session = Depends(get_db)
 ):
     """
     OpenAI-compatible chat completions endpoint.
@@ -69,15 +131,16 @@ async def chat_completions(
     Routes requests to appropriate provider based on model name.
     """
     try:
-        logger.info(f"Gateway received chat completion request: model={request.model}, messages={len(request.messages)}, stream={request.stream}, has_functions={bool(request.functions)}")
+        logger.info(f"Gateway received chat completion request: provider={request.provider}, model={request.model}, messages={len(request.messages)}, stream={request.stream}, has_functions={bool(request.functions)}")
         # Resolve provider context
-        context = resolve_context(request.model)
-        logger.debug(f"Resolved context: provider={context.provider}, auth_type={context.auth_type}, model_name={context.model_name}")
+        context = resolve_context(request.model, request.provider)
+        logger.info(f"Resolved context: provider={context.provider}, auth_type={context.auth_type}, model_name={context.model_name}, endpoint={context.endpoint}")
         
-        # Get authenticator
+        # Get authenticator and token
+        app_id = None  # For Endor
         if context.auth_type == "direct":
             authenticator = DirectAuthenticator()
-            token = await authenticator.get_token(authorization, context)
+            token = await authenticator.get_token(authorization, context, db=db)
         elif context.auth_type == "jwt_oauth":
             authenticator = SalesforceAuthenticator(
                 client_id=context.client_id,
@@ -92,6 +155,29 @@ async def chat_completions(
                 service_account_path=context.credentials_path
             )
             token = await authenticator.get_token(authorization, context)
+        elif context.auth_type == "endor_a3":
+            endor_config = db.query(ProviderConfig).filter(
+                ProviderConfig.provider_type == "apple_endor",
+                ProviderConfig.is_active == True
+            ).first()
+            
+            if not endor_config:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Endor provider configuration not found"
+                )
+            
+            authenticator = EndorAuthenticator(
+                app_id=endor_config.apple_endor_app_id,
+                app_password=endor_config.apple_endor_app_password,
+                other_app=endor_config.apple_endor_other_app,
+                context=endor_config.apple_endor_context,
+                one_time_token=endor_config.apple_endor_one_time_token or False,
+                db=db
+            )
+            # Use optional frontend-passed A3 token, or generate from app_id+app_password
+            token = await authenticator.get_token(authorization, context, optional_a3_token=x_apple_idms_a3_token)
+            app_id = authenticator.get_app_id()
         else:
             raise HTTPException(
                 status_code=400,
@@ -106,7 +192,19 @@ async def chat_completions(
         url, payload, headers = translator.transform_request(request_dict, context)
         
         # Add authorization header
-        if context.auth_type == "direct":
+        if context.auth_type == "endor_a3":
+            # Endor uses custom headers - ensure we have valid values
+            app_id_str = str(app_id).strip() if app_id else ""
+            token_str = str(token).strip() if token else ""
+            if not app_id_str or not token_str:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Endor auth failed: missing token or app_id (app_id={'present' if app_id_str else 'missing'}, token={'present' if token_str else 'missing'})"
+                )
+            headers["X-Apple-Client-App-ID"] = app_id_str
+            headers["X-Apple-IDMS-A3-Token"] = token_str
+            logger.info(f"Endor request: app_id={app_id_str[:8]}..., token_len={len(token_str)}")
+        elif context.auth_type == "direct":
             headers["Authorization"] = f"Bearer {token}"
         else:
             headers["Authorization"] = f"Bearer {token}"
@@ -221,6 +319,8 @@ async def chat_completions(
             status_code=503,
             detail=f"Network error connecting to provider: {str(e)}"
         )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=f"Configuration error: {str(e)}")
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
         raise HTTPException(
@@ -230,18 +330,17 @@ async def chat_completions(
 
 
 @router.get("/providers")
-async def list_providers():
-    """List available providers."""
-    providers = get_available_providers()
-    return {
-        "providers": providers
-    }
+async def list_providers(db: Session = Depends(get_db)):
+    """List configured providers with display names (excludes providers without active config)."""
+    providers = get_configured_providers(db)
+    return {"providers": providers}
 
 
 @router.get("/models")
 async def list_models(
     provider: Optional[str] = Query(None, description="Filter by provider name"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_apple_idms_a3_token: Optional[str] = Header(None, alias="X-Apple-IDMS-A3-Token"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -253,11 +352,17 @@ async def list_models(
     If no provider is specified, fetches from all available providers.
     """
     api_fetch_success = False
+    fetch_error = None
     if provider:
+        # Normalize provider name for database lookup (apple -> apple_endor)
+        provider_db = provider.lower()
+        if provider_db == "apple":
+            provider_db = "apple_endor"
+        
         # Get global API key for this provider from database (admin-configured)
         global_api_key = None
         provider_config = db.query(ProviderConfig).filter(
-            ProviderConfig.provider_type == provider.lower(),
+            ProviderConfig.provider_type == provider_db,
             ProviderConfig.is_active == True
         ).first()
         
@@ -274,29 +379,33 @@ async def list_models(
         try:
             # Use global key, or fallback to authorization header
             api_key_to_use = global_api_key if global_api_key else authorization
-            models = await fetch_models_from_provider(provider, api_key_to_use)
+            models = await fetch_models_from_provider(provider, api_key_to_use, db, x_apple_a3_token=x_apple_idms_a3_token)
             logger.info(f"✓ SUCCESS: Fetched {len(models)} models from {provider} API")
             logger.info(f"  Sample models: {models[:10]}")
             api_fetch_success = True
         except Exception as e:
-            logger.error(f"✗ FAILED: Could not fetch models from {provider} API: {e}")
-            logger.error(f"  Error type: {type(e).__name__}")
-            # Fallback to static mapping
+            fetch_error = _format_fetch_error(e)
+            logger.error(f"✗ FAILED: Could not fetch models from {provider} API: {fetch_error}")
             models = get_available_models(provider)
             logger.warning(f"  Falling back to {len(models)} static models for {provider}")
-            logger.warning(f"  Static models: {models}")
     else:
         # Fetch models from all available providers
         all_models = set()
-        providers = get_available_providers()
-        logger.info(f"Fetching models from {len(providers)} providers: {providers}")
+        provider_configs = get_configured_providers(db)
+        logger.info(f"Fetching models from {len(provider_configs)} configured providers: {[p['provider'] for p in provider_configs]}")
         
         api_fetch_success = False
-        for prov in providers:
+        for prov_config in provider_configs:
+            prov = prov_config["provider"]
+            # Normalize provider name for database lookup (apple -> apple_endor)
+            prov_db = prov.lower()
+            if prov_db == "apple":
+                prov_db = "apple_endor"
+            
             # Get global API key for this provider from database (admin-configured)
             global_api_key = None
             provider_config = db.query(ProviderConfig).filter(
-                ProviderConfig.provider_type == prov.lower(),
+                ProviderConfig.provider_type == prov_db,
                 ProviderConfig.is_active == True
             ).first()
             
@@ -307,34 +416,36 @@ async def list_models(
             try:
                 # Use global key, or fallback to authorization header
                 api_key_to_use = global_api_key if global_api_key else authorization
-                provider_models = await fetch_models_from_provider(prov, api_key_to_use)
+                provider_models = await fetch_models_from_provider(prov, api_key_to_use, db, x_apple_a3_token=x_apple_idms_a3_token)
                 all_models.update(provider_models)
                 logger.info(f"✓ Fetched {len(provider_models)} models from {prov} API: {provider_models[:5]}...")
                 api_fetch_success = True
             except Exception as e:
-                logger.warning(f"✗ Failed to fetch models from {prov} API: {e}, using static mapping")
-                # Fallback to static mapping for this provider
+                fetch_error = f"[{prov}] {_format_fetch_error(e)}"
+                logger.warning(f"✗ Failed to fetch models from {prov} API: {fetch_error}, using static mapping")
                 static_models = get_available_models(prov)
                 all_models.update(static_models)
-                logger.info(f"  Using {len(static_models)} static models for {prov}: {static_models}")
         
-        # If we got no models from APIs, fall back to full static mapping
+        # If we got no models from APIs, fall back to static mapping
         if not all_models:
-            logger.warning("No models fetched from APIs, using full static mapping")
+            logger.warning("No models fetched from APIs, using static mapping")
             all_models = set(get_available_models())
         
         models = sorted(list(all_models))
         logger.info(f"Total models returned: {len(models)} (API fetch success: {api_fetch_success})")
     
-    return {
+    result = {
         "models": models,
         "provider": provider,
         "source": "api" if api_fetch_success else "static",
         "count": len(models)
     }
+    if fetch_error:
+        result["error"] = fetch_error
+    return result
 
 
-async def fetch_models_from_provider(provider: str, authorization: Optional[str] = None) -> list[str]:
+async def fetch_models_from_provider(provider: str, authorization: Optional[str] = None, db: Optional[Session] = None, x_apple_a3_token: Optional[str] = None) -> list[str]:
     """
     Fetch available models from a provider's API.
     
@@ -365,8 +476,15 @@ async def fetch_models_from_provider(provider: str, authorization: Optional[str]
         # Could potentially fetch from Salesforce API in the future
         return get_available_models("salesforce")
     elif provider == "apple":
-        # Apple Endor models are typically static, return from mapping
-        return get_available_models("apple")
+        # Fetch from Endor API - requires provider config in Admin Console
+        # Optional: use X-Apple-IDMS-A3-Token from frontend if provided; else generate from app_id+app_password
+        logger.info("Fetching models for Apple Endor provider")
+        models = await fetch_endor_models(authorization, db, optional_a3_token=x_apple_a3_token)
+        if models:
+            logger.info(f"Fetched {len(models)} Endor models from API")
+            return models
+        # Empty response - re-raise so caller uses static fallback and logs correctly
+        raise ValueError("Endor API returned no models")
     else:
         # Unknown provider, return from static mapping
         logger.warning(f"Unknown provider {provider}, using static mapping")
@@ -503,13 +621,7 @@ async def fetch_anthropic_models(authorization: Optional[str] = None) -> list[st
 async def fetch_vertex_models(authorization: Optional[str] = None) -> list[str]:
     """
     Fetch models from Vertex AI API.
-    
-    Note: Vertex AI models are typically static, but we could potentially
-    fetch from the Vertex AI Model Garden API if needed.
     """
-    # For now, return known Vertex AI (Gemini) models
-    # In the future, could fetch from:
-    # https://aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/models
     known_models = [
         "gemini-pro",
         "gemini-1.5-pro",
@@ -518,3 +630,137 @@ async def fetch_vertex_models(authorization: Optional[str] = None) -> list[str]:
         "gemini-1.5-flash-latest",
     ]
     return sorted(known_models)
+
+
+async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[Session] = None, optional_a3_token: Optional[str] = None) -> list[str]:
+    """
+    Fetch models from Endor API.
+    
+    Args:
+        authorization: Not used (Endor uses A3 token from config or optional_a3_token)
+        db: Optional database session
+        optional_a3_token: Optional A3 token from frontend; if missing, generate from app_id+app_password
+        
+    Returns:
+        List of model IDs
+        
+    Raises:
+        ValueError: If Endor config is missing
+        Exception: If API request fails
+    """
+    # Get database session if not provided
+    if not db:
+        from app.core.database import SessionLocal
+        db = SessionLocal()
+        should_close = True
+    else:
+        should_close = False
+    
+    try:
+        # Get Endor config from database (Admin Console)
+        provider_config = db.query(ProviderConfig).filter(
+            ProviderConfig.provider_type == "apple_endor",
+            ProviderConfig.is_active == True
+        ).first()
+        
+        if not provider_config:
+            all_endor = db.query(ProviderConfig).filter(
+                ProviderConfig.provider_type == "apple_endor"
+            ).all()
+            inactive = [c for c in all_endor if not c.is_active]
+            all_providers = db.query(ProviderConfig.provider_type).distinct().all()
+            provider_types = [getattr(p[0], "value", p[0]) for p in all_providers]
+            raise ValueError(
+                "No active Endor provider config found. "
+                f"apple_endor configs: {len(all_endor)} total ({len(inactive)} inactive). "
+                f"Provider types in DB: {provider_types or 'none'}. "
+                "Add an apple_endor config in Admin Console (Settings → Provider Configs)."
+            )
+        
+        if not provider_config.apple_endor_app_id:
+            raise ValueError("Endor App ID not configured")
+        
+        from app.services.gateway.auth.endor import EndorAuthenticator
+        authenticator = EndorAuthenticator(
+            app_id=provider_config.apple_endor_app_id,
+            app_password=provider_config.apple_endor_app_password,
+            other_app=provider_config.apple_endor_other_app,
+            context=provider_config.apple_endor_context,
+            one_time_token=provider_config.apple_endor_one_time_token or False,
+            db=db
+        )
+        
+        a3_token = await authenticator.get_token(optional_a3_token=optional_a3_token)
+        app_id = authenticator.get_app_id()
+        
+        # Validate token and app_id before request
+        app_id_str = str(app_id).strip() if app_id else ""
+        token_str = str(a3_token).strip() if a3_token else ""
+        if not app_id_str or not token_str:
+            raise ValueError(
+                f"Endor auth incomplete: app_id={'present' if app_id_str else 'missing'}, "
+                f"token={'present' if token_str else 'missing'}"
+            )
+        
+        base_url = provider_config.apple_endor_endpoint or "https://api.endor.apple.com"
+        url = f"{base_url.rstrip('/')}/v2/models"
+        
+        headers = {
+            "Accept": "application/json",
+            "X-Apple-Client-App-ID": app_id_str,
+            "X-Apple-IDMS-A3-Token": token_str
+        }
+        
+        logger.info(f"Fetching Endor models from {url} (app_id={app_id_str[:8]}..., token_len={len(token_str)})")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                logger.debug(f"Endor API response structure: {type(data)}, keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+                
+                # Parse models from response
+                # Endor completions API expects model_id in payload. Prefer model_id over id
+                # (id may be UUID; model_id is the actual completions identifier).
+                models = []
+                models_list = None
+                if isinstance(data, dict):
+                    if "models" in data:
+                        models_list = data["models"]
+                    elif "data" in data and isinstance(data["data"], list):
+                        models_list = data["data"]
+                    elif "model" in data:
+                        models_list = [data["model"]] if isinstance(data["model"], (dict, str)) else data["model"]
+                elif isinstance(data, list):
+                    models_list = data
+
+                if models_list:
+                    if models_list and isinstance(models_list[0], dict):
+                        logger.info(f"Endor first model payload keys: {list(models_list[0].keys())}")
+                    for model in models_list:
+                        if isinstance(model, dict):
+                            # Prefer model_id (completions field) over id (may be UUID)
+                            model_id = model.get("model_id") or model.get("id") or model.get("name")
+                            if model_id:
+                                models.append(model_id)
+                        elif isinstance(model, str):
+                            models.append(model)
+                
+                logger.info(f"Endor API returned {len(models)} models: {models}")
+                if not models:
+                    logger.warning(f"Endor API response parsed but no models found. Raw response: {data}")
+                return sorted(models) if models else []
+                
+            except httpx.HTTPStatusError as e:
+                error_text = e.response.text[:500] if hasattr(e.response, 'text') else str(e)
+                logger.error(f"Endor API returned error {e.response.status_code}: {error_text}")
+                logger.error(f"Request URL: {url}")
+                raise
+            except Exception as e:
+                logger.error(f"Failed to fetch Endor models: {type(e).__name__}: {e}", exc_info=True)
+                raise
+    finally:
+        if should_close:
+            db.close()

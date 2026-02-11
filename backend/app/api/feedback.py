@@ -53,15 +53,8 @@ async def record_correction(
     doesn't match their expectations. The system learns from these corrections
     to improve future responses.
     """
-    # Get API key from authorization header if provided
-    api_key = None
-    if authorization:
-        # Extract API key from "Bearer <key>" format
-        parts = authorization.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            api_key = parts[1]
-    
-    feedback_manager = FeedbackManager(db=db, api_key=api_key)
+    # Use default provider for feedback endpoints (gateway resolves credentials)
+    feedback_manager = FeedbackManager(db=db, model="gpt-4", provider="openai")
     
     try:
         result = await feedback_manager.record_correction(

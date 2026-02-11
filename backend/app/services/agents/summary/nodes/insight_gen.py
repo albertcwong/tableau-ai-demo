@@ -79,13 +79,12 @@ async def generate_insights_node(state: SummaryAgentState) -> Dict[str, Any]:
         if len(view_info_list) > 1:
             user_query = f"{user_query} (analyzing {view_count_text}: {view_names})"
         
-        # Initialize AI client with API key from state
-        api_key = state.get("api_key")
+        # Initialize AI client
         model = state.get("model", "gpt-4")
+        provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
-            api_key=api_key
+            gateway_url=settings.GATEWAY_BASE_URL
         )
         
         messages = [
@@ -95,6 +94,7 @@ async def generate_insights_node(state: SummaryAgentState) -> Dict[str, Any]:
         
         response = await ai_client.chat(
             model=model,
+            provider=provider,
             messages=messages
         )
         
