@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
 import Image from 'next/image';
+import { extractErrorMessage } from '@/lib/utils';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -74,8 +75,8 @@ export default function LoginPage() {
       // Token is stored in localStorage by authApi.login
       // Force a full page reload to ensure AuthContext picks up the new token
       window.location.href = '/';
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Login failed. Please check your credentials.'));
       setLoading(false);
     }
   };

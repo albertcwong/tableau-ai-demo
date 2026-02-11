@@ -696,10 +696,11 @@ export const tableauExplorerApi = {
     return response.data;
   },
 
-  // Get datasource sample data
+  // Get datasource sample data (schema + query can be slow; use longer timeout)
   getDatasourceSample: async (datasourceId: string, limit = 100): Promise<DatasourceSample> => {
     const response = await apiClient.get<DatasourceSample>(`/api/v1/tableau/datasources/${datasourceId}/sample`, {
       params: { limit },
+      timeout: LONG_OPERATION_TIMEOUT,
     });
     return response.data;
   },

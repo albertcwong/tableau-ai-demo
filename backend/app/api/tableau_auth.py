@@ -5,11 +5,16 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.user import User, TableauServerConfig, UserTableauServerMapping, UserTableauPAT, UserTableauPassword
+from app.models.user import User, TableauServerConfig, UserTableauPAT, UserTableauPassword
 from app.services.tableau.client import TableauClient, TableauAuthenticationError
+from app.api.tableau_client_factory import (
+    create_tableau_client_from_token,
+    create_tableau_client_for_credential_signin,
+    resolve_tableau_username,
+    site_id_from_config,
+)
 from app.services.pat_encryption import decrypt_pat
 from app.services.tableau.token_store_factory import get_token_store
 from app.services.tableau.token_store import TokenEntry
@@ -115,14 +120,8 @@ async def authenticate_tableau(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to decrypt stored PAT"
             )
-        site_id_for_client = config.site_id.strip() or None if config.site_id else None
-        client = TableauClient(
-            server_url=config.server_url,
-            site_id=site_id_for_client,
-            api_version=config.api_version or "3.15",
-            client_id="pat-placeholder",
-            client_secret="pat-placeholder",
-            verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+        client = create_tableau_client_for_credential_signin(
+            config, "pat", site_id_from_config(config)
         )
         try:
             auth_result = await client.sign_in_with_pat(pat_record.pat_name, pat_secret)
@@ -176,14 +175,8 @@ async def authenticate_tableau(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to decrypt stored credentials",
             )
-        site_id_for_client = config.site_id.strip() or None if config.site_id else None
-        client = TableauClient(
-            server_url=config.server_url,
-            site_id=site_id_for_client,
-            api_version=config.api_version or "3.15",
-            client_id="standard-placeholder",
-            client_secret="standard-placeholder",
-            verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+        client = create_tableau_client_for_credential_signin(
+            config, "standard", site_id_from_config(config)
         )
         try:
             auth_result = await client.sign_in_with_password(pw_record.tableau_username, password)
@@ -217,38 +210,10 @@ async def authenticate_tableau(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Connected App credentials are not configured for this server. Use PAT authentication or contact your admin."
         )
-    # Determine the username that will be used for authentication
-    # Priority: 1) Manual mapping, 2) Auth0 metadata, 3) App username
-    mapping = db.query(UserTableauServerMapping).filter(
-        UserTableauServerMapping.user_id == current_user.id,
-        UserTableauServerMapping.tableau_server_config_id == config.id
-    ).first()
-    
-    logger.debug(f"Tableau auth for user {current_user.id} (username: {current_user.username}): "
-                 f"mapping exists: {mapping is not None}, tableau_username: {current_user.tableau_username}")
-    
-    if mapping:
-        tableau_username = mapping.tableau_username
-        username_source = "manual mapping"
-        logger.info(f"Using manual mapping Tableau username: {tableau_username}")
-    elif current_user.tableau_username:
-        tableau_username = current_user.tableau_username
-        username_source = "Auth0 metadata"
-        logger.info(f"Using Auth0 metadata Tableau username: {tableau_username}")
-    else:
-        tableau_username = current_user.username
-        username_source = "app username"
-        logger.info(f"Using app username as Tableau username: {tableau_username}")
-    
-    # Normalize config site_id for TableauClient (empty string = default site = None)
-    if config.site_id and isinstance(config.site_id, str) and config.site_id.strip():
-        site_id_for_client = config.site_id.strip() or None
-    else:
-        site_id_for_client = None  # Default site
-    
+    tableau_username = resolve_tableau_username(db, config, current_user)
+    logger.debug(f"Tableau auth for user {current_user.id} (username: {current_user.username})")
+    site_id_for_client = site_id_from_config(config)
     try:
-        
-        # Create Tableau client with config and username (mapped or default)
         client = TableauClient(
             server_url=config.server_url,
             site_id=site_id_for_client,
@@ -294,19 +259,15 @@ async def authenticate_tableau(
         )
     except TableauAuthenticationError as e:
         logger.error(f"Tableau authentication error: {e}")
-        # Include the username that was actually used and whether it was mapped
-        error_detail = f"Tableau authentication failed using {username_source} '{tableau_username}': {str(e)}"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail
+            detail=f"Tableau authentication failed for '{tableau_username}': {e}",
         )
     except Exception as e:
         logger.error(f"Unexpected error during Tableau authentication: {e}")
-        # Include the username that was actually used and whether it was mapped
-        error_detail = f"Tableau authentication error using {username_source} '{tableau_username}': {str(e)}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_detail
+            detail=f"Tableau authentication error for '{tableau_username}': {e}",
         )
 
 
@@ -363,21 +324,7 @@ async def switch_site(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated. Please connect first.",
             )
-        client = TableauClient(
-            server_url=config.server_url,
-            site_id=token_entry.site_id,
-            api_version=config.api_version or "3.15",
-            client_id="pat-placeholder" if auth_type == "pat" else "standard-placeholder",
-            client_secret="pat-placeholder" if auth_type == "pat" else "standard-placeholder",
-            verify_ssl=not getattr(config, 'skip_ssl_verify', False),
-            initial_token=token_entry.token,
-            initial_site_id=token_entry.site_id,
-            initial_site_content_url=token_entry.site_content_url,
-        )
-        if auth_type == "pat":
-            client._pat_auth = True
-        else:
-            client._standard_auth = True
+        client = create_tableau_client_from_token(config, token_entry, auth_type)
         try:
             result = await client.switch_site(body.site_content_url or "")
         except TableauAuthenticationError as e:
@@ -437,21 +384,7 @@ async def list_sites(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please connect first.",
         )
-    client = TableauClient(
-        server_url=config.server_url,
-        site_id=token_entry.site_id,
-        api_version=config.api_version or "3.15",
-        client_id="pat-placeholder" if auth_type == "pat" else "standard-placeholder",
-        client_secret="pat-placeholder" if auth_type == "pat" else "standard-placeholder",
-        verify_ssl=not getattr(config, 'skip_ssl_verify', False),
-        initial_token=token_entry.token,
-        initial_site_id=token_entry.site_id,
-        initial_site_content_url=token_entry.site_content_url,
-    )
-    if auth_type == "pat":
-        client._pat_auth = True
-    else:
-        client._standard_auth = True
+    client = create_tableau_client_from_token(config, token_entry, auth_type)
     try:
         sites = await client.list_sites()
     except TableauAuthenticationError as e:

@@ -10,6 +10,7 @@ import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Trash2, Plus, X, Server, Edit2 } from 'lucide-react';
+import { extractErrorMessage } from '@/lib/utils';
 
 interface UserCreate {
   username: string;
@@ -90,8 +91,8 @@ export function UserManagement() {
       setShowMappingForm(null);
       setMappingFormData({ user_id: 0, tableau_server_config_id: 0, tableau_username: '' });
       loadUserMappings(userId);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to create mapping');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to create mapping'));
     }
   };
 
@@ -102,8 +103,8 @@ export function UserManagement() {
         tableau_username: tableauUsername
       });
       loadUserMappings(userId);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to update mapping');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to update mapping'));
     }
   };
 
@@ -113,8 +114,8 @@ export function UserManagement() {
       setError(null);
       await adminApi.deleteUserTableauMapping(userId, mappingId);
       loadUserMappings(userId);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to delete mapping');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to delete mapping'));
     }
   };
 
@@ -132,11 +133,9 @@ export function UserManagement() {
       
       const usersList = await adminApi.listUsers();
       setUsers(usersList);
-    } catch (err: any) {
-      const errorDetail = err.response?.data?.detail || err.message || 'Failed to load users';
+    } catch (err: unknown) {
       console.error('Error loading users:', err);
-      console.error('Error response:', err.response);
-      setError(errorDetail);
+      setError(extractErrorMessage(err, 'Failed to load users'));
     } finally {
       setLoading(false);
     }
@@ -150,8 +149,8 @@ export function UserManagement() {
       setShowCreateForm(false);
       setFormData({ username: '', password: '', role: 'USER' });
       loadUsers();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to create user');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to create user'));
     }
   };
 
@@ -161,8 +160,8 @@ export function UserManagement() {
       setError(null);
       await adminApi.deleteUser(userId);
       loadUsers();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to delete user');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to delete user'));
     }
   };
 
@@ -216,8 +215,8 @@ export function UserManagement() {
         is_active: true
       });
       loadUsers();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to update user');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to update user'));
     }
   };
 

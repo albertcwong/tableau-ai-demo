@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { ThumbsUp, ThumbsDown, Clock, ChevronDown, ChevronUp, User, Database, MessageSquare, Copy, Check } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { extractErrorMessage } from '@/lib/utils';
 
 export function FeedbackManagement() {
   const [feedback, setFeedback] = useState<FeedbackDetailResponse[]>([]);
@@ -27,8 +28,8 @@ export function FeedbackManagement() {
       const feedbackType = filterType === 'all' ? undefined : (filterType as 'thumbs_up' | 'thumbs_down');
       const feedbackList = await adminApi.listFeedback(feedbackType);
       setFeedback(feedbackList);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load feedback');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to load feedback'));
     } finally {
       setLoading(false);
     }

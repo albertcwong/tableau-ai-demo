@@ -9,6 +9,7 @@ import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Save, Loader2 } from 'lucide-react';
+import { extractErrorMessage } from '@/lib/utils';
 
 export function AuthConfigManagement() {
   const [config, setConfig] = useState<AuthConfigResponse | null>(null);
@@ -48,8 +49,8 @@ export function AuthConfigManagement() {
         auth0_issuer: authConfig.auth0_issuer || '',
         auth0_tableau_metadata_field: authConfig.auth0_tableau_metadata_field || '',
       });
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load authentication configuration');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to load authentication configuration'));
     } finally {
       setLoading(false);
     }
@@ -90,8 +91,8 @@ export function AuthConfigManagement() {
       
       // Clear success message after 5 seconds
       setTimeout(() => setSuccess(null), 5000);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to update authentication configuration');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to update authentication configuration'));
     } finally {
       setSaving(false);
     }

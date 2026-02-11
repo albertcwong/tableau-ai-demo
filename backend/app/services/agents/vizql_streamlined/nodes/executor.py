@@ -1,84 +1,18 @@
 """Executor node for executing VizQL queries."""
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 
 from langchain_core.runnables.config import ensure_config
 
 from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
+from app.services.agents.query_executor import execute_query_with_retry
 from app.services.tableau.client import TableauClient, TableauAPIError
-from app.services.retry import retry_with_backoff, RetryConfig
 from app.services.metrics import track_node_execution
 from app.services.cache import get_cache
 from app.services.query_optimizer import simplify_query_for_large_dataset
 
 logger = logging.getLogger(__name__)
-
-
-async def _execute_query_with_retry(tableau_client: TableauClient, query: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute query with retry logic and graceful degradation."""
-    # Check cache first
-    cache = get_cache()
-    import json
-    query_key = f"query_result:{json.dumps(query, sort_keys=True)}"
-    cached_result = cache.get(query_key)
-    
-    if cached_result:
-        logger.info("Using cached query result")
-        return cached_result
-    
-    # Retry configuration for API calls
-    retry_config = RetryConfig(
-        max_attempts=3,
-        initial_delay=1.0,
-        max_delay=10.0,
-        exponential_base=2.0
-    )
-    
-    # Execute with retry
-    try:
-        results = await retry_with_backoff(
-            tableau_client.execute_vds_query,
-            query,
-            config=retry_config,
-            retryable_exceptions=(TableauAPIError, TimeoutError, ConnectionError)
-        )
-        
-        # Cache successful results for 5 minutes
-        cache.set(query_key, results, ttl_seconds=300)
-        
-        return results
-    except Exception as e:
-        logger.error(f"Query execution failed after retries: {e}")
-        
-        # Graceful degradation: try simplified query
-        try:
-            logger.info("Attempting graceful degradation with simplified query")
-            simplified_query = simplify_query_for_large_dataset(query, estimated_rows=100000)
-            simplified_key = f"query_result:{json.dumps(simplified_query, sort_keys=True)}"
-            
-            # Check cache for simplified query
-            cached_simplified = cache.get(simplified_key)
-            if cached_simplified:
-                logger.info("Using cached simplified query result")
-                return cached_simplified
-            
-            # Try simplified query with single retry
-            simple_retry_config = RetryConfig(max_attempts=1, initial_delay=1.0)
-            results = await retry_with_backoff(
-                tableau_client.execute_vds_query,
-                simplified_query,
-                config=simple_retry_config,
-                retryable_exceptions=(TableauAPIError, TimeoutError, ConnectionError)
-            )
-            
-            logger.info("Simplified query executed successfully")
-            cache.set(simplified_key, results, ttl_seconds=300)
-            return results
-            
-        except Exception as degrade_error:
-            logger.error(f"Graceful degradation also failed: {degrade_error}")
-            raise e  # Raise original error
 
 
 @track_node_execution("vizql_streamlined", "executor")
@@ -145,7 +79,7 @@ async def execute_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         })
         
         # Execute query with retry and caching
-        results = await _execute_query_with_retry(tableau_client, optimized_query)
+        results = await execute_query_with_retry(tableau_client, optimized_query)
         
         row_count = results.get('row_count', 0)
         logger.info(f"Query executed successfully. Retrieved {row_count} rows")

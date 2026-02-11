@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown, GripVertical } from 'lucide-react';
 import { DatasourceEnrichButton } from './DatasourceEnrichButton';
 import type { EnrichSchemaResponse } from '@/lib/api';
+import { extractErrorMessage } from '@/lib/utils';
 
 interface DatasourceDetailProps {
   datasourceId: string;
@@ -319,39 +320,11 @@ export function DatasourceDetail({
       
       const results = await tableauExplorerApi.executeVDSQuery(datasourceId, parsedQuery);
       setQueryResults(results);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof SyntaxError) {
-        const errorMsg = err.message || 'Invalid JSON format';
-        setQueryError(`Failed to parse query JSON: ${errorMsg}`);
+        setQueryError(`Failed to parse query JSON: ${err.message || 'Invalid JSON format'}`);
       } else {
-        // Extract detailed error message from API response
-        // FastAPI returns errors in {detail: "..."} format
-        // Axios wraps errors with response.data containing the error
-        let errorMessage = 'Failed to execute query';
-        
-        if (err?.response?.data?.detail) {
-          // FastAPI error format: {detail: "error message"}
-          errorMessage = err.response.data.detail;
-        } else if (err?.response?.data?.message) {
-          // Alternative API error format: {message: "error message"}
-          errorMessage = err.response.data.message;
-        } else if (err?.response?.data) {
-          // If response.data is a string, use it directly
-          if (typeof err.response.data === 'string') {
-            errorMessage = err.response.data;
-          } else {
-            // Try to stringify if it's an object
-            errorMessage = JSON.stringify(err.response.data);
-          }
-        } else if (err?.message) {
-          // Standard Error object or AxiosError
-          errorMessage = err.message;
-        } else if (typeof err === 'string') {
-          // String error
-          errorMessage = err;
-        }
-        
-        setQueryError(errorMessage);
+        setQueryError(extractErrorMessage(err, 'Failed to execute query'));
       }
     } finally {
       setExecuting(false);

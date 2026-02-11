@@ -17,8 +17,8 @@ export function ContextManager({ objects, onRemove }: ContextManagerProps) {
 
   if (objects.length === 0) {
     return (
-      <div className="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
-        No context objects
+      <div className="text-xs text-muted-foreground text-center py-2 italic">
+        No object in context — add a datasource or view from the explorer to query data
       </div>
     );
   }

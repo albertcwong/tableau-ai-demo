@@ -9,6 +9,7 @@ import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Pencil, Trash2, Plus, X } from 'lucide-react';
+import { extractErrorMessage } from '@/lib/utils';
 
 const PROVIDER_TYPES = [
   { value: 'openai', label: 'OpenAI' },
@@ -53,8 +54,8 @@ export function ProviderConfigManagement() {
       setError(null);
       const configsList = await adminApi.listProviderConfigs();
       setConfigs(configsList);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load configurations');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to load configurations'));
     } finally {
       setLoading(false);
     }
@@ -161,8 +162,8 @@ export function ProviderConfigManagement() {
       }
       resetForm();
       loadConfigs();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || `Failed to ${editingConfigId ? 'update' : 'create'} configuration`);
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, `Failed to ${editingConfigId ? 'update' : 'create'} configuration`));
     }
   };
 
@@ -172,8 +173,8 @@ export function ProviderConfigManagement() {
       setError(null);
       await adminApi.deleteProviderConfig(configId);
       loadConfigs();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to delete configuration');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to delete configuration'));
     }
   };
 

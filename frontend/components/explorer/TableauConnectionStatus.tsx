@@ -10,6 +10,7 @@ import { Loader2, CheckCircle2, XCircle, Server, X } from 'lucide-react';
 import { HiOutlineLink } from 'react-icons/hi';
 import { FaUnlink } from 'react-icons/fa';
 import { useAuth } from '@/components/auth/AuthContext';
+import { extractErrorMessage } from '@/lib/utils';
 
 interface TableauConnectionStatusProps {
   onConnectionChange?: (connected: boolean, config?: TableauConfigOption) => void;
@@ -121,22 +122,8 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
       }
 
       onConnectionChange?.(true, config);
-    } catch (err: any) {
-      // Extract detailed error message from response
-      let errorMessage = 'Failed to connect to Tableau server';
-      if (err.response?.data) {
-        // FastAPI returns errors in 'detail' field
-        if (err.response.data.detail) {
-          errorMessage = err.response.data.detail;
-        } else if (typeof err.response.data === 'string') {
-          errorMessage = err.response.data;
-        } else if (err.response.data.message) {
-          errorMessage = err.response.data.message;
-        }
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      setError(errorMessage);
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, "Failed to connect to Tableau server"));
       setConnectionStatus({ connected: false });
       onConnectionChange?.(false);
     } finally {
@@ -182,11 +169,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
       onConnectionChange?.(true, connectionStatus.config);
       onSiteChange?.();
     } catch (err: unknown) {
-      const errMsg =
-        (err as { response?: { data?: { detail?: string } }; message?: string })?.response?.data?.detail ||
-        (err as { message?: string })?.message ||
-        'Failed to switch site';
-      setError(errMsg);
+      setError(extractErrorMessage(err, "Failed to switch site"));
     } finally {
       setSwitchingSite(false);
     }

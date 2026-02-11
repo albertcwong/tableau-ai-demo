@@ -19,6 +19,7 @@ from app.core.config import settings
 from fastapi import Request
 from app.services.memory import get_conversation_memory
 from app.services.metrics import get_metrics
+from app.api.chat_helpers import prepare_chat_context
 from app.services.debug import get_debugger
 from app.api.models import AgentMessageChunk, AgentMessageContent
 import time
@@ -443,64 +444,31 @@ async def send_message(
     If stream=True, returns a streaming response.
     Supports agent routing via agent_type parameter.
     """
-    # Verify conversation exists
     conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Get context objects for this conversation
-    context_objects = db.query(ChatContext).filter(
-        ChatContext.conversation_id == request.conversation_id
-    ).order_by(ChatContext.added_at).all()
-    
-    # Group by type
-    datasource_ids = [ctx.object_id for ctx in context_objects if ctx.object_type == 'datasource']
-    view_ids = [ctx.object_id for ctx in context_objects if ctx.object_type == 'view']
-    
-    # Save user message
-    # Pass enum object directly - SQLAlchemy will use the enum value for storage
+
     user_message = Message(
         conversation_id=request.conversation_id,
         role=MessageRole.USER,
         content=request.content,
-        model_used=request.model
+        model_used=request.model,
     )
     db.add(user_message)
-    
-    # Auto-generate conversation name from first message if not set
     if not conversation.name:
-        # Generate name from first message (truncate to 50 chars)
         name = request.content.strip()[:50]
         if len(request.content) > 50:
-            # Try to break at word boundary
-            truncated = name.rsplit(' ', 1)[0]
+            truncated = name.rsplit(" ", 1)[0]
             name = truncated if len(truncated) > 30 else name
         conversation.name = name
-    
     db.commit()
-    
-    # Get conversation history for context
-    history_messages = db.query(Message).filter(
-        Message.conversation_id == request.conversation_id
-    ).order_by(Message.created_at).all()
-    
-    # Get conversation memory for context summarization
-    conversation_memory = get_conversation_memory(request.conversation_id)
-    context_summary = conversation_memory.get_context_summary()
-    
-    # Convert to OpenAI format (OpenAI expects lowercase)
-    messages = [
-        {"role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(), "content": msg.content}
-        for msg in history_messages
-    ]
-    
-    # Add context summary if available and conversation is long
-    if len(history_messages) > 10 and context_summary:
-        # Insert context summary after system message (if any) or at the beginning
-        messages.insert(0, {
-            "role": "system",
-            "content": f"Conversation context: {context_summary}"
-        })
+
+    ctx = prepare_chat_context(db, request.conversation_id)
+    conversation = ctx["conversation"]
+    datasource_ids = ctx["datasource_ids"]
+    view_ids = ctx["view_ids"]
+    history_messages = ctx["history_messages"]
+    messages = ctx["messages"]
     
     # Provider is required and validated by MessageRequest. Gateway resolves credentials from ProviderConfig.
     provider = request.provider.strip()

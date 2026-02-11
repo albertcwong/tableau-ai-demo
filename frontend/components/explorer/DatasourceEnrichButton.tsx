@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card } from '@/components/ui/card';
 import { RefreshCw, CheckCircle2, XCircle, Sparkles, ChevronDown, ChevronUp, Hash, Type } from 'lucide-react';
 import { vizqlApi, type EnrichSchemaResponse } from '@/lib/api';
+import { extractErrorMessage } from '@/lib/utils';
 import { SchemaProfilingView } from './SchemaProfilingView';
 
 interface DatasourceEnrichButtonProps {
@@ -35,9 +36,10 @@ export function DatasourceEnrichButton({
       if (onEnriched) {
         onEnriched(data);
       }
-    } catch (err: any) {
-      const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
-      let errorMessage = err.response?.data?.detail || err.message || 'Failed to enrich schema';
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const isTimeout = e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '');
+      let errorMessage = extractErrorMessage(err, 'Failed to enrich schema');
       if (isTimeout) {
         errorMessage = 'Request timed out. The enrichment may have completed on the server. Try clicking the refresh button to load cached results.';
       }
@@ -59,9 +61,10 @@ export function DatasourceEnrichButton({
       if (onEnriched) {
         onEnriched(data);
       }
-    } catch (err: any) {
-      const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
-      let errorMessage = err.response?.data?.detail || err.message || 'Failed to refresh schema';
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      const isTimeout = e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '');
+      let errorMessage = extractErrorMessage(err, 'Failed to refresh schema');
       if (isTimeout) {
         errorMessage = 'Request timed out. The server may still be processing. Try again in a moment.';
       }

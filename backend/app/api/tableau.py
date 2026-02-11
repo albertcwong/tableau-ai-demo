@@ -36,6 +36,12 @@ from app.services.tableau.client import (
     TableauAuthenticationError,
     TableauAPIError,
 )
+from app.api.tableau_client_factory import (
+    create_tableau_client_from_token,
+    create_tableau_client_for_credential_signin,
+    resolve_tableau_username,
+    site_id_from_config,
+)
 from app.services.agents.vizql.schema_enrichment import SchemaEnrichmentService
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -45,6 +51,16 @@ from sqlalchemy import or_
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tableau", tags=["tableau"])
+
+_DATASOURCE_PERMISSION_MSG = (
+    "You don't have permission to query this datasource. API permissions on the datasource "
+    "are required to use the VizQL Data Service. Contact the datasource owner or your Tableau administrator to grant access."
+)
+
+
+def _is_permission_error(error_msg: str) -> bool:
+    m = error_msg.lower()
+    return "403" in error_msg or "permission" in m or "forbidden" in m or "access denied" in m
 
 
 async def get_tableau_client(
@@ -84,26 +100,8 @@ async def get_tableau_client(
                     detail=f"Tableau server configuration {x_tableau_config_id} not found or inactive"
                 )
             
-            # Check if user has a custom Tableau username mapping for this Connected App
-            # Priority: 1) Manual mapping, 2) Auth0 metadata, 3) App username
-            mapping = db.query(UserTableauServerMapping).filter(
-                UserTableauServerMapping.user_id == current_user.id,
-                UserTableauServerMapping.tableau_server_config_id == config.id
-            ).first()
-            
-            if mapping:
-                tableau_username = mapping.tableau_username
-            elif current_user.tableau_username:
-                tableau_username = current_user.tableau_username
-            else:
-                tableau_username = current_user.username
-            
-            # Normalize config site_id for TableauClient (empty string = default site = None)
-            if config.site_id and isinstance(config.site_id, str) and config.site_id.strip():
-                site_id_for_client = config.site_id.strip() or None
-            else:
-                site_id_for_client = None  # Default site
-
+            tableau_username = resolve_tableau_username(db, config, current_user)
+            site_id_for_client = site_id_from_config(config)
             auth_type = (x_tableau_auth_type or "connected_app").lower()
             if auth_type == "connected_app" and not (config.client_id and config.client_secret):
                 raise HTTPException(
@@ -117,33 +115,11 @@ async def get_tableau_client(
             # Check token store first
             token_entry = token_store.get(current_user.id, config.id, auth_type)
             if token_entry:
-                client = TableauClient(
-                    server_url=config.server_url,
-                    site_id=token_entry.site_id or site_id_for_client,
-                    api_version=config.api_version or "3.15",
-                    client_id=(
-                        "pat-placeholder" if auth_type == "pat"
-                        else "standard-placeholder" if auth_type == "standard"
-                        else config.client_id
-                    ),
-                    client_secret=(
-                        "pat-placeholder" if auth_type == "pat"
-                        else "standard-placeholder" if auth_type == "standard"
-                        else config.client_secret
-                    ),
-                    username=tableau_username,
-                    secret_id=config.secret_id or config.client_id,
-                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
-                    initial_token=token_entry.token,
-                    initial_site_id=token_entry.site_id,
-                    initial_site_content_url=token_entry.site_content_url,
+                return create_tableau_client_from_token(
+                    config, token_entry, auth_type,
+                    tableau_username=tableau_username,
                     on_401_invalidate=invalidate_cb,
                 )
-                if auth_type == "pat":
-                    client._pat_auth = True
-                elif auth_type == "standard":
-                    client._standard_auth = True
-                return client
 
             # For PAT: if no token in cache, try to restore session from stored credentials
             if auth_type == "pat":
@@ -171,13 +147,8 @@ async def get_tableau_client(
                         detail="Failed to access stored credentials.",
                         headers={"X-Error-Code": "TABLEAU_CREDENTIAL_ERROR"},
                     )
-                client = TableauClient(
-                    server_url=config.server_url,
-                    site_id=site_id_for_client,
-                    api_version=config.api_version or "3.15",
-                    client_id="pat-placeholder",
-                    client_secret="pat-placeholder",
-                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                client = create_tableau_client_for_credential_signin(
+                    config, "pat", site_id_for_client,
                 )
                 try:
                     await client.sign_in_with_pat(pat_record.pat_name, pat_secret)
@@ -226,13 +197,8 @@ async def get_tableau_client(
                         detail="Failed to access stored credentials.",
                         headers={"X-Error-Code": "TABLEAU_CREDENTIAL_ERROR"},
                     )
-                client = TableauClient(
-                    server_url=config.server_url,
-                    site_id=site_id_for_client,
-                    api_version=config.api_version or "3.15",
-                    client_id="standard-placeholder",
-                    client_secret="standard-placeholder",
-                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                client = create_tableau_client_for_credential_signin(
+                    config, "standard", site_id_for_client,
                 )
                 try:
                     await client.sign_in_with_password(pw_record.tableau_username, password)
@@ -257,29 +223,13 @@ async def get_tableau_client(
 
             # For Connected App: sign in with lock to prevent parallel sign-ins
             async with token_cache_lock(current_user.id, config.id, auth_type):
-                # Re-check token store after acquiring lock
                 token_entry = token_store.get(current_user.id, config.id, auth_type)
                 if token_entry:
-                    client = TableauClient(
-                        server_url=config.server_url,
-                        site_id=token_entry.site_id or site_id_for_client,
-                        api_version=config.api_version or "3.15",
-                        client_id="pat-placeholder" if auth_type == "pat" else config.client_id,
-                        client_secret="pat-placeholder" if auth_type == "pat" else config.client_secret,
-                        username=tableau_username,
-                        secret_id=config.secret_id or config.client_id,
-                        verify_ssl=not getattr(config, 'skip_ssl_verify', False),
-                        initial_token=token_entry.token,
-                        initial_site_id=token_entry.site_id,
-                        initial_site_content_url=token_entry.site_content_url,
+                    return create_tableau_client_from_token(
+                        config, token_entry, auth_type,
+                        tableau_username=tableau_username,
                         on_401_invalidate=invalidate_cb,
                     )
-                    # Ensure _pat_auth flag is set for PAT tokens
-                    if auth_type == "pat":
-                        client._pat_auth = True
-                    return client
-
-                # Sign in for Connected App
                 client = TableauClient(
                     server_url=config.server_url,
                     site_id=site_id_for_client,
@@ -288,7 +238,7 @@ async def get_tableau_client(
                     client_secret=config.client_secret,
                     username=tableau_username,
                     secret_id=config.secret_id or config.client_id,
-                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                    verify_ssl=not getattr(config, "skip_ssl_verify", False),
                     on_401_invalidate=invalidate_cb,
                 )
                 await client.sign_in()
@@ -1040,6 +990,8 @@ async def get_datasource_schema(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Datasource '{datasource_id}' not found",
             )
+        if _is_permission_error(error_msg):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_DATASOURCE_PERMISSION_MSG)
         logger.error(f"API error getting datasource schema: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1108,6 +1060,8 @@ async def get_datasource_sample(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Datasource '{datasource_id}' not found",
             )
+        if _is_permission_error(error_msg):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_DATASOURCE_PERMISSION_MSG)
         logger.error(f"API error getting datasource sample: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1138,6 +1092,7 @@ async def get_datasource_sample(
         200: {"description": "Query results"},
         400: {"model": ErrorResponse, "description": "Invalid query"},
         401: {"model": ErrorResponse, "description": "Authentication failed"},
+        403: {"model": ErrorResponse, "description": "No API permission on datasource"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
@@ -1196,6 +1151,9 @@ async def execute_vds_query(
             detail=f"Tableau authentication failed: {str(e)}",
         )
     except TableauAPIError as e:
+        error_msg = str(e)
+        if _is_permission_error(error_msg):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_DATASOURCE_PERMISSION_MSG)
         logger.error(f"API error executing query: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

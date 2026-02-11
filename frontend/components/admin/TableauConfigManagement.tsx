@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pencil, Trash2, Plus, X } from 'lucide-react';
+import { extractErrorMessage } from '@/lib/utils';
 
 export function TableauConfigManagement() {
   const [configs, setConfigs] = useState<TableauConfigResponse[]>([]);
@@ -38,8 +39,8 @@ export function TableauConfigManagement() {
       setError(null);
       const configsList = await adminApi.listTableauConfigs();
       setConfigs(configsList);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load configurations');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to load configurations'));
     } finally {
       setLoading(false);
     }
@@ -125,8 +126,8 @@ export function TableauConfigManagement() {
       }
       resetForm();
       loadConfigs();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || `Failed to ${editingConfigId ? 'update' : 'create'} configuration`);
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, `Failed to ${editingConfigId ? 'update' : 'create'} configuration`));
     }
   };
 
@@ -136,8 +137,8 @@ export function TableauConfigManagement() {
       setError(null);
       await adminApi.deleteTableauConfig(configId);
       loadConfigs();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to delete configuration');
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err, 'Failed to delete configuration'));
     }
   };
 
