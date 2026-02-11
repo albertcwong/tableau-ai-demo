@@ -15,7 +15,7 @@ interface SchemaProfilingViewProps {
 
 type SortMode = 'cardinality' | 'alphabetical';
 
-const MAX_BAR_WIDTH = 300;
+const MAX_BAR_WIDTH = 250;
 const MIN_BAR_WIDTH = 4;
 const MAX_VISIBLE_ITEMS = 10;
 
@@ -151,7 +151,7 @@ export function SchemaProfilingView({ enrichedSchema }: SchemaProfilingViewProps
                         onClick={() => setSelectedField(field)}
                         title={getHoverTooltip(field)}
                       >
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-[250px]">
                           <div className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">
                             {field.fieldCaption}
                           </div>
@@ -160,7 +160,7 @@ export function SchemaProfilingView({ enrichedSchema }: SchemaProfilingViewProps
                           <div className="text-xs text-gray-500 dark:text-gray-400 w-16 text-right">
                             {field.cardinality?.toLocaleString() ?? 'N/A'}
                           </div>
-                          <div className="relative w-[300px] h-6 bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
+                          <div className="relative w-[250px] h-6 bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
                             <div
                               className="h-full bg-blue-200 dark:bg-blue-800/50 transition-all"
                               style={{ width: `${barWidth}px` }}
@@ -251,7 +251,7 @@ export function SchemaProfilingView({ enrichedSchema }: SchemaProfilingViewProps
                         onClick={() => setSelectedField(field)}
                         title={getHoverTooltip(field)}
                       >
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-[250px]">
                           <div className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">
                             {field.fieldCaption}
                           </div>
@@ -262,7 +262,7 @@ export function SchemaProfilingView({ enrichedSchema }: SchemaProfilingViewProps
                               ? `${field.min.toLocaleString()} - ${field.max.toLocaleString()}`
                               : 'N/A'}
                           </div>
-                          <div className="relative w-[300px] h-6 bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
+                          <div className="relative w-[250px] h-6 bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
                             <div
                               className="h-full bg-blue-200 dark:bg-blue-800/50 transition-all"
                               style={{ width: `${barWidth}px` }}
