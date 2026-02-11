@@ -54,7 +54,7 @@ export function ChatInterface({
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [lastReasoningSteps, setLastReasoningSteps] = useState<string>('');
-  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number } }>>([]);
+  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string }>>([]);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [reasoningTotalTimeMs, setReasoningTotalTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -200,7 +200,7 @@ export function ChatInterface({
       let reasoningStepsText = '';
       let finalAnswerText = '';
       // Track steps by step_index to handle multiple steps from same node
-      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any> }> = [];
+      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string }> = [];
       let reasoningStepIndex = 0;
       let storedVizqlQuery: Record<string, any> | null = null; // Store vizql_query from metadata
       let firstReasoningStepTime: number | null = null; // Track when first reasoning step arrives
@@ -228,7 +228,9 @@ export function ChatInterface({
         'summarize': 'Generating response',
         // Streamlined VizQL agent nodes
         'build_query': 'Building query',
+        'pre_validation': 'Pre-validation corrections',
         'validate_query': 'Validating query',
+        'execute_query': 'Executing query',
         'format_results': 'Formatting results',
       };
 
@@ -438,10 +440,11 @@ export function ChatInterface({
               // Use node name to get human-readable step name
               const stepDisplayName = nodeNameMap[nodeName] || nodeName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
               
-              // Extract metadata (tool calls, tokens) from the chunk
+              // Extract metadata (tool calls, tokens, tool_result_summary) from the chunk
               const stepMetadata = structuredChunk.metadata || {};
               const toolCalls = stepMetadata.tool_calls || [];
               const tokens = stepMetadata.tokens || null;
+              const toolResultSummary = stepMetadata.tool_result_summary || null;
               
               reasoningStepsText += (reasoningStepsText ? ' ' : '') + stepText;
               
@@ -471,6 +474,7 @@ export function ChatInterface({
                     total: tokens.total
                   } : existingStep.tokens,
                   queryDraft: queryDraft || existingStep.queryDraft,  // Update query_draft if available
+                  toolResultSummary: toolResultSummary || (existingStep as any).toolResultSummary,  // Update tool_result_summary if available
                 };
               } else {
                 // New step - calculate when it started and its duration
@@ -518,6 +522,7 @@ export function ChatInterface({
                     total: tokens.total
                   } : undefined,
                   queryDraft: queryDraft,  // Include query_draft for build_query steps
+                  toolResultSummary: toolResultSummary || undefined,  // Include tool_result_summary if available
                 });
               }
               
@@ -586,14 +591,13 @@ export function ChatInterface({
                   return updated;
                 });
                 
-                // Automatically load the query into the editor if onLoadQuery handler is available
-                if (onLoadQuery && metadata.vizql_query) {
-                  console.log('Auto-loading query into editor:', metadata.vizql_query);
-                  // Extract datasource ID from query
+                if (metadata.vizql_query) {
                   const datasourceId = metadata.vizql_query?.datasource?.datasourceLuid;
                   if (datasourceId) {
-                    console.log('Calling onLoadQuery with datasourceId:', datasourceId);
-                    onLoadQuery(datasourceId, metadata.vizql_query);
+                    if (onLoadQuery) {
+                      console.log('Calling onLoadQuery with datasourceId:', datasourceId);
+                      onLoadQuery(datasourceId, metadata.vizql_query);
+                    }
                   } else {
                     console.warn('No datasourceId found in vizql_query metadata');
                   }
@@ -745,7 +749,7 @@ export function ChatInterface({
         )}
       </div>
       {lastReasoningSteps && (
-        <div className="px-2 sm:px-4 pt-2 sm:pt-4 mb-2">
+        <div className="px-2 sm:px-4 pt-2 sm:pt-4 mb-2 flex-shrink-0">
           <ReasoningSteps 
             reasoningSteps={lastReasoningSteps} 
             stepTimings={stepTimings}

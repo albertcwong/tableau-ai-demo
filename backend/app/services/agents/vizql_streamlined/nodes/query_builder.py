@@ -1,4 +1,5 @@
 """Enhanced query builder node with tool integration."""
+import copy
 import json
 import logging
 from difflib import get_close_matches
@@ -1001,12 +1002,26 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         
         # Track tool calls for this step
         tool_calls_made = []
+        tool_result_summary_parts = []
         if enriched_schema:
             tool_calls_made.append("get_datasource_schema")
+            # Build summary of schema
+            fields = enriched_schema.get("fields", [])
+            dimensions = [f for f in fields if f.get("fieldRole") == "DIMENSION"]
+            measures = [f for f in fields if f.get("fieldRole") == "MEASURE"]
+            if dimensions or measures:
+                summary = f"Schema: {len(dimensions)} dimensions, {len(measures)} measures"
+                tool_result_summary_parts.append(summary)
         if state.get("datasource_metadata"):
             tool_calls_made.append("get_datasource_metadata")
+            metadata = state.get("datasource_metadata", {})
+            ds_name = metadata.get("name", "datasource")
+            tool_result_summary_parts.append(f"Metadata: {ds_name}")
         if state.get("query_reused"):
             tool_calls_made.append("get_prior_query")
+            tool_result_summary_parts.append("Reused prior query")
+        
+        tool_result_summary = "; ".join(tool_result_summary_parts) if tool_result_summary_parts else None
         
         # Call LLM to build query
         ai_client = UnifiedAIClient(
@@ -1147,28 +1162,25 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 logger.error(f"Query draft structure: {json.dumps(query_draft, indent=2)}")
                 raise ValueError(error_msg)
             
+            # Save copy before pre-validation rewrites (for detecting if query was modified)
+            query_before_rewrites = copy.deepcopy(query_draft)
+            
             # CRITICAL: Apply automatic date function detection and correction
-            # This ensures date fields have proper temporal functions even if LLM missed them
             query_draft = _detect_and_apply_date_functions(query_draft, user_query, enriched_schema)
-            
             # CRITICAL: Apply automatic COUNTD detection for "how many" queries
-            # This ensures count queries have COUNTD function even if LLM missed it
             query_draft = _detect_and_apply_count_functions(query_draft, user_query, enriched_schema)
-            
             # CRITICAL: Apply automatic context filter detection
-            # This ensures hierarchical filter dependencies are properly handled
             query_draft = _detect_and_apply_context_filters(query_draft, user_query)
-            
             # CRITICAL: Validate and correct SET filter values against enriched schema sample_values
             query_draft = _validate_and_correct_filter_values(query_draft, enriched_schema)
-            
             # CRITICAL: Adjust calculated field names to avoid conflicts with existing fields
-            # This ensures calculated fields have unique names even if LLM missed the instruction
             query_draft = _adjust_calculated_field_names(query_draft, enriched_schema, schema)
-            
             # CRITICAL: Remove fieldCaption from filter fields that have calculations
-            # Tableau VizQL API does not allow fieldCaption in calculated filter fields
             query_draft = _remove_fieldcaption_from_calculated_filters(query_draft)
+            
+            # Track if pre-validation rewrites were applied (for reasoning step)
+            query_was_rewritten = query_draft != query_before_rewrites
+            pre_validation_changes = ["date functions", "count functions", "context filters", "filter values", "calculated field names"] if query_was_rewritten else []
             
             # Log fields being added for debugging (after auto-fix)
             fields = query_draft.get("query", {}).get("fields", [])  # Refresh after auto-fix
@@ -1219,17 +1231,20 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                 "schema": schema,
                 "enriched_schema": enriched_schema if enriched_schema else state.get("enriched_schema"),
                 "query_reused": prior_query_result is not None,
+                "query_was_rewritten": query_was_rewritten,
+                "pre_validation_changes": pre_validation_changes,
                 "reasoning": response.content,
                 "reasoning_steps": reasoning_steps,
-                "build_attempt": build_attempt,  # Include updated build_attempt
-                "execution_attempt": execution_attempt,  # Include execution_attempt (may be incremented if retrying after execution failure)
-                "build_errors": None,  # Clear build errors on successful build
+                "build_attempt": build_attempt,
+                "execution_attempt": execution_attempt,
+                "build_errors": None,
                 "current_thought": f"Build attempt {build_attempt}: Built query version {query_version} with {len(query_draft.get('query', {}).get('fields', []))} fields",
                 "step_metadata": {
                     "tool_calls": tool_calls_made,
                     "tokens": tokens_used,
                     "build_attempt": build_attempt,
-                    "query_draft": query_draft
+                    "query_draft": query_draft,
+                    "tool_result_summary": tool_result_summary
                 }
             }
             
@@ -1286,7 +1301,8 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                     "tool_calls": tool_calls_made if 'tool_calls_made' in locals() else [],
                     "tokens": tokens_used if 'tokens_used' in locals() else None,
                     "build_attempt": build_attempt,
-                    "query_draft": None  # Explicitly set to None so frontend knows this build failed
+                    "query_draft": None,  # Explicitly set to None so frontend knows this build failed
+                    "tool_result_summary": tool_result_summary if 'tool_result_summary' in locals() else None
                 }
             }
         except Exception as e:
@@ -1309,7 +1325,8 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
                     "tool_calls": tool_calls_made if 'tool_calls_made' in locals() else [],
                     "tokens": tokens_used if 'tokens_used' in locals() else None,
                     "build_attempt": build_attempt,
-                    "query_draft": None
+                    "query_draft": None,
+                    "tool_result_summary": tool_result_summary if 'tool_result_summary' in locals() else None
                 }
             }
     except Exception as e:
@@ -1334,6 +1351,7 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
             "current_thought": f"Build attempt {build_attempt} failed: {str(e)[:150]}",
             "step_metadata": {
                 "build_attempt": build_attempt,
-                "query_draft": None
+                "query_draft": None,
+                "tool_result_summary": None
             }
         }

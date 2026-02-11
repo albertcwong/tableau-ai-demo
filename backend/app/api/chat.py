@@ -950,17 +950,17 @@ async def send_message(
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         
                                         # Extract step metadata if available (tool calls, tokens, query_draft)
-                                        step_metadata = node_state.get("step_metadata", {})
-                                        
-                                        # For build_query node, always include query_draft in metadata (even if None)
+                                        step_metadata = dict(node_state.get("step_metadata") or {})
+                                        # Only include query_draft for build_query and pre_validation
                                         if node_name == "build_query":
-                                            if not step_metadata:
-                                                step_metadata = {}
-                                            # Include query_draft if available (even if build failed)
                                             if "query_draft" in node_state:
                                                 step_metadata["query_draft"] = node_state.get("query_draft")
-                                            # Include build_attempt for tracking
                                             step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
+                                        elif node_name in ("validate_query", "execute_query"):
+                                            step_metadata.pop("query_draft", None)
+                                        elif node_name == "pre_validation":
+                                            if "query_draft" in node_state:
+                                                step_metadata["query_draft"] = node_state.get("query_draft")
                                         
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
@@ -1583,17 +1583,17 @@ async def send_message(
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         
                                         # Extract step metadata if available (tool calls, tokens, query_draft)
-                                        step_metadata = node_state.get("step_metadata", {})
-                                        
-                                        # For build_query node, always include query_draft in metadata (even if None)
+                                        step_metadata = dict(node_state.get("step_metadata") or {})
+                                        # Only include query_draft for build_query and pre_validation
                                         if node_name == "build_query":
-                                            if not step_metadata:
-                                                step_metadata = {}
-                                            # Include query_draft if available (even if build failed)
                                             if "query_draft" in node_state:
                                                 step_metadata["query_draft"] = node_state.get("query_draft")
-                                            # Include build_attempt for tracking
                                             step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
+                                        elif node_name in ("validate_query", "execute_query"):
+                                            step_metadata.pop("query_draft", None)
+                                        elif node_name == "pre_validation":
+                                            if "query_draft" in node_state:
+                                                step_metadata["query_draft"] = node_state.get("query_draft")
                                         
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",

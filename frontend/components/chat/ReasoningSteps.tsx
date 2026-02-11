@@ -15,6 +15,7 @@ interface StepWithTiming {
   toolCalls?: string[]; // Tool calls made in this step
   tokens?: { prompt?: number; completion?: number; total?: number }; // Token usage
   queryDraft?: Record<string, any>; // VizQL query draft for build_query steps
+  toolResultSummary?: string; // Optional summary of tool results
 }
 
 interface ReasoningStepsProps {
@@ -115,6 +116,108 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+interface StreamingTextAreaProps {
+  content: string;
+  isActive: boolean;
+  label: string;
+  className?: string;
+}
+
+const LINE_HEIGHT_REM = 1.5;
+const MAX_LINES = 7;
+
+function StreamingTextArea({ content, isActive, label, className }: StreamingTextAreaProps) {
+  const [displayedLength, setDisplayedLength] = useState(0);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const prevContentRef = useRef(content);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Reset displayed length when content changes
+  useEffect(() => {
+    if (content !== prevContentRef.current) {
+      setDisplayedLength(0);
+      setIsCollapsed(false);
+      prevContentRef.current = content;
+    }
+  }, [content]);
+
+  // Streaming effect: animate text appearing when active
+  useEffect(() => {
+    if (!content || content.length === 0) {
+      setDisplayedLength(0);
+      return;
+    }
+
+    if (isActive && displayedLength < content.length) {
+      const step = Math.max(1, Math.ceil(content.length / 50)); // ~50 frames for full content
+      const interval = setInterval(() => {
+        setDisplayedLength((prev) => {
+          const next = Math.min(prev + step, content.length);
+          return next;
+        });
+      }, 30); // ~30ms per frame = ~1.5s for full content
+      return () => clearInterval(interval);
+    } else if (!isActive && displayedLength < content.length) {
+      // If becomes inactive before streaming completes, show all immediately
+      setDisplayedLength(content.length);
+    }
+  }, [content, isActive, displayedLength]);
+
+  // Auto-grow textarea to fit content, max 7 lines
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const maxHeight = LINE_HEIGHT_REM * MAX_LINES * 16; // rem to px (16px base)
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+  }, [displayedLength, content]);
+
+  if (!content || content.length === 0) {
+    return null;
+  }
+
+  const displayedText = content.slice(0, displayedLength);
+
+  return (
+    <div className={cn('mt-1 transition-all duration-300', className)}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">{label}</span>
+        {!isActive && displayedLength >= content.length && (
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            className="text-[10px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+          >
+            {isCollapsed ? 'Show' : 'Hide'}
+          </button>
+        )}
+      </div>
+      <div
+        className={cn(
+          'transition-all duration-300 overflow-hidden',
+          isCollapsed ? 'max-h-0' : 'max-h-[10.5rem]'
+        )}
+      >
+        <textarea
+          ref={textareaRef}
+          readOnly
+          rows={1}
+          value={displayedText}
+          className={cn(
+            'w-full resize-none min-h-[1.5rem] text-[10px] font-mono bg-gray-50 dark:bg-gray-800',
+            'border border-gray-200 dark:border-gray-700 rounded',
+            'px-2 py-1 text-gray-800 dark:text-gray-200',
+            'overflow-y-auto',
+            className
+          )}
+        />
+        {isActive && displayedLength < content.length && (
+          <span className="inline-block ml-1 animate-pulse text-gray-400">▋</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface ReasoningStepItemProps {
   step: { text: string; duration: number; startTime: number };
   stepTiming?: StepWithTiming;
@@ -125,9 +228,30 @@ interface ReasoningStepItemProps {
 }
 
 function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, currentStepElapsed, stepTimings }: ReasoningStepItemProps) {
-  const [isQueryExpanded, setIsQueryExpanded] = useState(false);
   const isBuildQueryStep = stepTiming?.nodeName === 'build_query' || stepTiming?.nodeName === 'query_builder';
-  const hasDetails = stepTiming?.toolCalls || stepTiming?.tokens || stepTiming?.queryDraft;
+  const isCurrentStep = isReasoningActive && index === (stepTimings?.length || 0) - 1;
+  const hasToolCalls = stepTiming?.toolCalls && stepTiming.toolCalls.length > 0;
+  const hasQueryDraft = stepTiming?.queryDraft;
+  const hasToolResultSummary = stepTiming?.toolResultSummary;
+  
+  // Build tool summary text
+  const toolSummaryText = useMemo(() => {
+    if (hasToolResultSummary) {
+      return stepTiming.toolResultSummary;
+    }
+    if (hasToolCalls) {
+      return `Tools used: ${stepTiming.toolCalls.join(', ')}`;
+    }
+    return '';
+  }, [hasToolCalls, hasToolResultSummary, stepTiming?.toolCalls, stepTiming?.toolResultSummary]);
+
+  // Build VizQL query text
+  const queryText = useMemo(() => {
+    if (hasQueryDraft) {
+      return JSON.stringify(stepTiming.queryDraft, null, 2);
+    }
+    return '';
+  }, [hasQueryDraft, stepTiming?.queryDraft]);
   
   return (
     <div className="flex gap-2 items-start text-xs text-gray-700 dark:text-gray-300">
@@ -143,7 +267,12 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
             <span>{step.text.trim()}</span>
           </div>
           {stepTimings && stepTimings.length > 0 && (
-            <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400 font-mono whitespace-nowrap">
+            <div className={cn(
+              'flex-shrink-0 text-xs font-mono whitespace-nowrap',
+              (isReasoningActive && index === (stepTimings?.length || 0) - 1 && currentStepElapsed > 0)
+                ? 'text-blue-800 dark:text-blue-200 font-bold'
+                : 'text-gray-500 dark:text-gray-400'
+            )}>
               {step.duration > 0 
                 ? formatDuration(step.duration) 
                 : (isReasoningActive && index === (stepTimings?.length || 0) - 1 && currentStepElapsed > 0)
@@ -152,14 +281,8 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
             </div>
           )}
         </div>
-        {hasDetails && (
-          <div className="mt-1 pl-0 space-y-0.5">
-            {stepTiming?.toolCalls && stepTiming.toolCalls.length > 0 && (
-              <div className="text-[10px] text-gray-600 dark:text-gray-400">
-                <span className="font-semibold">Tools:</span>{' '}
-                {stepTiming.toolCalls.join(', ')}
-              </div>
-            )}
+        {(hasToolCalls || hasToolResultSummary || hasQueryDraft || stepTiming?.tokens) && (
+          <div className="mt-1 pl-0 space-y-1">
             {stepTiming?.tokens && (
               <div className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">
                 <span className="font-semibold">Tokens:</span>{' '}
@@ -169,27 +292,19 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
                 {stepTiming.tokens.total && ` (${stepTiming.tokens.total} total)`}
               </div>
             )}
-            {isBuildQueryStep && stepTiming?.queryDraft && (
-              <div className="mt-1">
-                <button
-                  onClick={() => setIsQueryExpanded(!isQueryExpanded)}
-                  className="flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-semibold"
-                >
-                  {isQueryExpanded ? (
-                    <ChevronUp className="h-3 w-3" />
-                  ) : (
-                    <ChevronDown className="h-3 w-3" />
-                  )}
-                  VizQL Query
-                </button>
-                {isQueryExpanded && (
-                  <div className="mt-1 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
-                    <pre className="text-[10px] font-mono text-gray-800 dark:text-gray-200 overflow-x-auto whitespace-pre-wrap break-words">
-                      {JSON.stringify(stepTiming.queryDraft, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
+            {toolSummaryText && (
+              <StreamingTextArea
+                content={toolSummaryText}
+                isActive={isCurrentStep && isReasoningActive}
+                label="Tool Summary"
+              />
+            )}
+            {queryText && (
+              <StreamingTextArea
+                content={queryText}
+                isActive={isCurrentStep && isReasoningActive}
+                label="VizQL Query"
+              />
             )}
           </div>
         )}
@@ -207,15 +322,11 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
   useEffect(() => {
     const prevIsReasoningActive = prevIsReasoningActiveRef.current;
     
-    // Only auto-toggle when the state actually changes
     if (isReasoningActive && !prevIsReasoningActive) {
-      // Reasoning just became active - expand
       setIsExpanded(true);
     } else if (!isReasoningActive && prevIsReasoningActive) {
-      // Reasoning just became inactive (final answer returned) - collapse
       setIsExpanded(false);
     }
-    
     prevIsReasoningActiveRef.current = isReasoningActive;
   }, [isReasoningActive]);
   
@@ -350,7 +461,10 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
             Reasoning Steps ({organizedSteps.length})
           </span>
           {((stepTimings && stepTimings.length > 0) || (isReasoningActive && liveTotalMs)) && totalTime > 0 && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+            <span className={cn(
+              'text-xs font-mono',
+              isReasoningActive && liveTotalMs !== null ? 'text-blue-800 dark:text-blue-200 font-bold' : 'text-gray-500 dark:text-gray-400'
+            )}>
               • {formatDuration(totalTime)}
             </span>
           )}
@@ -363,7 +477,7 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
       </Button>
       {isExpanded && (
         <div className="border-t border-gray-200 dark:border-gray-800">
-          <ScrollArea className="max-h-64">
+          <ScrollArea className="max-h-[50vh]">
             <div className="p-3 space-y-2">
               {organizedSteps.map((step, index) => {
                 const stepTiming = stepTimings && stepTimings[index];
@@ -385,7 +499,10 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
                     <span className="font-medium text-gray-900 dark:text-gray-100">
                       Total Time:
                     </span>
-                    <span className="text-gray-500 dark:text-gray-400 font-mono">
+                    <span className={cn(
+                      'font-mono',
+                      isReasoningActive && liveTotalMs !== null ? 'text-blue-800 dark:text-blue-200 font-bold' : 'text-gray-500 dark:text-gray-400'
+                    )}>
                       {formatDuration(totalTime)}
                     </span>
                   </div>

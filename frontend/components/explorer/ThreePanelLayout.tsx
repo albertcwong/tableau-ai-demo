@@ -558,6 +558,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
           // Dispatch event immediately after selecting (in case component is already mounted)
           // Use setTimeout to ensure state update completes first
           setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('clearQueryResults', { detail: { datasourceId } }));
             window.dispatchEvent(new CustomEvent('loadVizQLQuery', { 
               detail: { datasourceId, query } 
             }));
@@ -565,6 +566,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
         } else {
           console.warn(`Datasource ${datasourceId} not found in loaded datasources. Query stored in localStorage.`);
           // Still dispatch event in case datasource detail is already open
+          window.dispatchEvent(new CustomEvent('clearQueryResults', { detail: { datasourceId } }));
           window.dispatchEvent(new CustomEvent('loadVizQLQuery', { 
             detail: { datasourceId, query } 
           }));

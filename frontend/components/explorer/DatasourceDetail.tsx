@@ -41,6 +41,13 @@ export function DatasourceDetail({
   const [isUpdatingQuery, setIsUpdatingQuery] = useState(false);
   const [queryUpdateAnimation, setQueryUpdateAnimation] = useState(false);
   
+  const clearExecutionState = () => {
+    setQueryError(null);
+    setQueryResults(null);
+    setSortColumn(null);
+    setSortDirection('asc');
+  };
+
   // Keep ref in sync with state
   useEffect(() => {
     queryRef.current = query;
@@ -61,11 +68,8 @@ export function DatasourceDetail({
           // Validate that stored query is valid JSON before setting it
           try {
             JSON.parse(storedQuery);
-            
-            // Show updating indicator immediately
+            clearExecutionState();
             setIsUpdatingQuery(true);
-            
-            // Update query immediately but keep visual feedback
             console.log('Updating query on mount from localStorage:', storedQuery.substring(0, 50) + '...');
             setQuery(storedQuery);
             setQueryUpdateAnimation(true);
@@ -113,10 +117,8 @@ export function DatasourceDetail({
           
           console.log('Setting query:', queryStr.substring(0, 100) + '...');
           
-          // Show updating indicator immediately
+          clearExecutionState();
           setIsUpdatingQuery(true);
-          
-          // Update query state immediately - React will re-render with new value
           setQuery(queryStr);
           setQueryUpdateAnimation(true);
           
@@ -140,6 +142,13 @@ export function DatasourceDetail({
     
     window.addEventListener('loadVizQLQuery', handleLoadQuery as EventListener);
     
+    const handleClearResults = (event: CustomEvent) => {
+      if (event.detail?.datasourceId === datasourceId) {
+        clearExecutionState();
+      }
+    };
+    window.addEventListener('clearQueryResults', handleClearResults as EventListener);
+    
     // Also check localStorage periodically in case query was stored after mount
     // This handles the case where query is stored before datasource is selected
     const checkInterval = setInterval(() => {
@@ -147,14 +156,10 @@ export function DatasourceDetail({
       const storedQuery = localStorage.getItem(storedQueryKey);
       if (storedQuery && storedQuery !== queryRef.current && storedQuery.trim() !== '') {
         try {
-          // Validate JSON before setting
           JSON.parse(storedQuery);
           console.log('Found query in localStorage on interval check, loading into editor');
-          
-          // Show updating indicator immediately
+          clearExecutionState();
           setIsUpdatingQuery(true);
-          
-          // Update query state immediately
           setQuery(storedQuery);
           setQueryUpdateAnimation(true);
           
@@ -175,6 +180,7 @@ export function DatasourceDetail({
     
     return () => {
       window.removeEventListener('loadVizQLQuery', handleLoadQuery as EventListener);
+      window.removeEventListener('clearQueryResults', handleClearResults as EventListener);
       clearInterval(checkInterval);
     };
   }, [datasourceId]);

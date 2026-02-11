@@ -8,6 +8,7 @@ from app.services.agents.vizql_streamlined.state import StreamlinedVizQLState
 from app.services.agents.vizql_streamlined.nodes import (
     start_node,
     build_query_node,
+    pre_validation_node,
     validate_query_node,
     execute_query_node,
     format_results_node,
@@ -39,6 +40,7 @@ def create_streamlined_vizql_graph() -> StateGraph:
     # Add nodes
     workflow.add_node("start", start_node)
     workflow.add_node("build_query", build_query_node)
+    workflow.add_node("pre_validation", pre_validation_node)
     workflow.add_node("validate_query", validate_query_node)
     workflow.add_node("execute_query", execute_query_node)
     workflow.add_node("format_results", format_results_node)
@@ -49,7 +51,8 @@ def create_streamlined_vizql_graph() -> StateGraph:
     
     # Add edges
     workflow.add_edge("start", "build_query")
-    workflow.add_edge("build_query", "validate_query")
+    workflow.add_edge("build_query", "pre_validation")
+    workflow.add_edge("pre_validation", "validate_query")
     
     # Conditional routing from validator
     def route_after_validation(state: StreamlinedVizQLState) -> str:
