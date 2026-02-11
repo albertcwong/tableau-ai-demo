@@ -8,12 +8,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Code2, Play, Loader2, ArrowUp, ArrowDown, ArrowUpDown, GripVertical } from 'lucide-react';
 import { DatasourceEnrichButton } from './DatasourceEnrichButton';
+import type { EnrichSchemaResponse } from '@/lib/api';
 
 interface DatasourceDetailProps {
   datasourceId: string;
   datasourceName: string;
   onAddToContext?: (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void;
   contextObjects?: Array<{ object_id: string; object_type: 'datasource' | 'view' }>;
+  onEnriched?: (result: EnrichSchemaResponse) => void;
 }
 
 export function DatasourceDetail({ 
@@ -21,6 +23,7 @@ export function DatasourceDetail({
   datasourceName,
   onAddToContext,
   contextObjects = [],
+  onEnriched,
 }: DatasourceDetailProps) {
   const [sample, setSample] = useState<DatasourceSample | null>(null);
   const [query, setQuery] = useState<string>('');
@@ -392,6 +395,7 @@ export function DatasourceDetail({
           <DatasourceEnrichButton 
             datasourceId={datasourceId}
             datasourceName={datasourceName}
+            onEnriched={onEnriched}
           />
         </Card>
         

@@ -32,6 +32,7 @@ from app.services.tableau.client import (
     TableauAuthenticationError,
     TableauAPIError,
 )
+from app.services.agents.vizql.schema_enrichment import SchemaEnrichmentService
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.user import User, TableauServerConfig, UserTableauServerMapping, UserTableauPAT
@@ -871,29 +872,55 @@ async def list_workbook_views(
 )
 async def get_datasource_schema(
     datasource_id: str,
+    force_refresh: bool = Query(False, description="Bypass cache to fetch fresh schema (logs raw GraphQL/read-metadata)"),
     client: TableauClient = Depends(get_tableau_client),
 ) -> DatasourceSchemaResponse:
     """
     Get datasource schema.
     
-    Returns column information including names, data types, and whether columns are measures or dimensions.
+    Uses SchemaEnrichmentService (Metadata API + VizQL + columnClass fallback) for accurate
+    measure/dimension categorization. Falls back to VizQL-only schema if enrichment times out.
     """
     try:
-        schema = await client.get_datasource_schema(datasource_id=datasource_id)
-        
+        service = SchemaEnrichmentService(client)
+        core_schema = await service.enrich_datasource_schema(
+            datasource_id, force_refresh=force_refresh, include_statistics=False
+        )
+        fields = core_schema.get("fields", [])
         return DatasourceSchemaResponse(
-            datasource_id=schema["datasource_id"],
+            datasource_id=datasource_id,
             columns=[
                 ColumnSchema(
-                    name=col["name"],
-                    data_type=col.get("data_type"),
-                    remote_type=col.get("remote_type"),
-                    is_measure=col.get("is_measure", False),
-                    is_dimension=col.get("is_dimension", False),
+                    name=f.get("fieldCaption", ""),
+                    data_type=f.get("dataType"),
+                    remote_type=f.get("dataType"),
+                    is_measure=f.get("fieldRole") == "MEASURE",
+                    is_dimension=f.get("fieldRole") == "DIMENSION",
                 )
-                for col in schema["columns"]
+                for f in fields if f.get("fieldCaption")
             ],
         )
+    except (TableauAuthenticationError, TableauAPIError) as e:
+        raise  # Re-raise auth/API errors for proper handling below
+    except Exception as enrich_err:
+        logger.warning(f"Schema enrichment failed, falling back to VizQL-only: {enrich_err}")
+        try:
+            schema = await client.get_datasource_schema(datasource_id=datasource_id)
+            return DatasourceSchemaResponse(
+                datasource_id=schema["datasource_id"],
+                columns=[
+                    ColumnSchema(
+                        name=col["name"],
+                        data_type=col.get("data_type"),
+                        remote_type=col.get("remote_type"),
+                        is_measure=col.get("is_measure", False),
+                        is_dimension=col.get("is_dimension", False),
+                    )
+                    for col in schema["columns"]
+                ],
+            )
+        except Exception:
+            raise enrich_err  # Raise original enrichment error
         
     except TableauAuthenticationError as e:
         logger.error(f"Authentication error getting datasource schema: {e}")

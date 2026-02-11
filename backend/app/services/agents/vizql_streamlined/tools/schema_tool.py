@@ -32,52 +32,16 @@ async def get_datasource_schema(
         }
     """
     try:
-        # Check cache first for enriched schema
-        if use_enriched:
-            cache_key = f"enriched_schema:{datasource_id}"
-            try:
-                cached_data = redis_client.get(cache_key)
-                if cached_data:
-                    if isinstance(cached_data, bytes):
-                        cached_data = cached_data.decode('utf-8')
-                    enriched_schema = json.loads(cached_data)
-                    logger.info(
-                        f"✓ Using cached enriched schema for {datasource_id}: "
-                        f"{len(enriched_schema.get('fields', []))} fields"
-                    )
-                    # Return full enriched schema structure plus columns for backward compatibility
-                    return {
-                        "fields": enriched_schema.get("fields", []),  # Full field objects
-                        "columns": [
-                            {
-                                "name": field.get("fieldCaption", ""),
-                                "type": field.get("dataType", "UNKNOWN"),
-                                "role": field.get("fieldRole", "UNKNOWN"),
-                                "description": field.get("description", ""),
-                                "is_measure": field.get("fieldRole") == "MEASURE",
-                                "is_dimension": field.get("fieldRole") == "DIMENSION",
-                            }
-                            for field in enriched_schema.get("fields", [])
-                            if not field.get("hidden")
-                        ],
-                        "measures": enriched_schema.get("measures", []),
-                        "dimensions": enriched_schema.get("dimensions", []),
-                        "field_map": enriched_schema.get("field_map", {}),
-                        "enriched": True,
-                        "datasource_id": datasource_id
-                    }
-            except Exception as cache_error:
-                logger.debug(f"Cache check failed: {cache_error}, will fetch fresh")
-        
-        # Try to fetch enriched schema
+        # Try to fetch enriched schema (core schema only, no stats for agents)
         if use_enriched:
             try:
                 tableau_client = tableau_client or TableauClient()
                 enrichment_service = SchemaEnrichmentService(tableau_client)
+                # Get core schema only (no stats) - fast for agents
                 enriched_schema = await enrichment_service.enrich_datasource_schema(
                     datasource_id,
                     force_refresh=False,
-                    include_statistics=False  # Skip statistics for speed
+                    include_statistics=False  # Skip statistics for speed - core schema only
                 )
                 logger.info(
                     f"✓ Fetched enriched schema: {len(enriched_schema.get('fields', []))} fields"

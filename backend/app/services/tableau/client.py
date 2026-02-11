@@ -2086,6 +2086,7 @@ class TableauClient:
         }
         
         try:
+            logger.info(f"Read-metadata request: {json.dumps(payload, indent=2)}")
             logger.info(f"Requesting metadata for datasource {datasource_id}")
             response = await self._client.post(
                 metadata_url,
@@ -2096,7 +2097,7 @@ class TableauClient:
             
             response.raise_for_status()
             result = response.json()
-            
+            logger.info(f"Read-metadata raw response: {json.dumps(result, indent=2)}")
             logger.info(f"Successfully retrieved metadata: {len(result.get('data', []))} fields")
             return result
             
@@ -2138,12 +2139,13 @@ class TableauClient:
                 fields {
                     id
                     name
+                    fullyQualifiedName
                     description
                     __typename
-                    ... on CalculatedField {
-                        formula
+                    ... on DataField {
+                        role
                     }
-                    ... on TableCalculationField {
+                    ... on CalculatedField {
                         formula
                     }
                 }
@@ -2165,6 +2167,7 @@ class TableauClient:
         }
         
         try:
+            logger.info(f"Metadata API GraphQL request: {json.dumps(payload, indent=2)}")
             logger.info(f"Querying Metadata API for field roles for datasource {datasource_id}")
             response = await self._client.post(
                 graphql_url,
@@ -2175,7 +2178,7 @@ class TableauClient:
             
             response.raise_for_status()
             result = response.json()
-            
+            logger.info(f"Metadata API GraphQL raw response: {json.dumps(result, indent=2)}")
             # Check for GraphQL errors
             if "errors" in result:
                 error_messages = [err.get("message", "Unknown error") for err in result["errors"]]
@@ -2187,14 +2190,27 @@ class TableauClient:
             datasources = result.get("data", {}).get("publishedDatasources", [])
             
             if not datasources:
-                logger.warning(f"No datasource found with LUID {datasource_id} in Metadata API")
+                logger.warning(
+                    f"No datasource found with LUID {datasource_id} in Metadata API. "
+                    f"Response keys: {list(result.get('data', {}).keys())}"
+                )
                 return {}
-            
+
             datasource = datasources[0]
-            fields = datasource.get("fields", [])
-            
+            raw_fields = datasource.get("fields", [])
+            # fields is [[Field]!]! - array of arrays (per table), flatten
+            fields = []
+            for item in raw_fields:
+                if isinstance(item, list):
+                    fields.extend(item)
+                else:
+                    fields.append(item)
+
             if not fields:
-                logger.info("No fields returned from Metadata API")
+                logger.warning(
+                    f"No fields in Metadata API datasource. raw_fields type={type(raw_fields)}, "
+                    f"len={len(raw_fields)}, sample={raw_fields[:2] if raw_fields else []}"
+                )
                 return {}
             
             for field in fields:
@@ -2221,23 +2237,33 @@ class TableauClient:
                     elif isinstance(aggregation_value, dict) and "formula" in aggregation_value:
                         field_info["formula"] = aggregation_value.get("formula")
                 
-                # Try to infer role from field type name (if available)
-                # Common patterns in Tableau Metadata API: MeasureField, DimensionField, CalculatedField, etc.
+                # Store field type
                 if field_type:
                     field_info["fieldType"] = field_type
-                    # Try to infer role from type name
-                    field_type_upper = field_type.upper()
-                    if "MEASURE" in field_type_upper:
-                        field_info["role"] = "MEASURE"
-                    elif "DIMENSION" in field_type_upper:
-                        field_info["role"] = "DIMENSION"
-                    # If we can't determine from type, leave role as None
-                    # It will be determined from VizQL metadata instead
                 
-                # Map by field name (which should match fieldCaption from VizQL)
+                # Use role directly from DataField interface (source of truth)
+                role = field.get("role")
+                if role:
+                    field_info["role"] = role.upper()  # Normalize to uppercase (DIMENSION, MEASURE, UNKNOWN)
+                
+                # Map by field name (exact + case-insensitive for VizQL matching)
                 field_map[field_name] = field_info
+                if field_name:
+                    field_map[field_name.lower()] = field_info
+                # Also index by fullyQualifiedName and its last segment (e.g. "Table].[Sales" -> "Sales")
+                fqn = field.get("fullyQualifiedName") or ""
+                if fqn:
+                    field_map[fqn] = field_info
+                    last_seg = fqn.split("].")[-1].split(".")[-1].strip("[]")
+                    if last_seg and last_seg not in field_map:
+                        field_map[last_seg] = field_info
             
-            logger.info(f"Retrieved {len(field_map)} fields from Metadata API")
+            logger.info(f"Retrieved {len(raw_fields)} raw field groups, {len(fields)} fields from Metadata API")
+            if not field_map and fields:
+                logger.warning(
+                    f"All {len(fields)} Metadata API fields had empty name. "
+                    f"Sample field keys: {list(fields[0].keys()) if fields else []}"
+                )
             return field_map
             
         except httpx.HTTPStatusError as e:
@@ -2276,8 +2302,10 @@ class TableauClient:
         stats = {
             "cardinality": None,
             "sample_values": [],
+            "value_counts": [],
             "min": None,
             "max": None,
+            "median": None,
             "null_percentage": None
         }
         
@@ -2285,31 +2313,44 @@ class TableauClient:
             # Build query for this field
             field_query = {"fieldCaption": field_caption}
             
-            # For measures, use default aggregation; for dimensions, get distinct values
+            # For measures, use default aggregation; for dimensions, get value counts
             if is_measure:
-                # Get aggregated stats (min, max, count)
-                # Query with MIN, MAX, COUNT aggregations
+                # Get aggregated stats (min, max, count, median)
                 query_payload = {
                     "datasource": {"datasourceLuid": datasource_id},
                     "query": {
                         "fields": [
                             {"fieldCaption": field_caption, "function": "MIN"},
                             {"fieldCaption": field_caption, "function": "MAX"},
-                            {"fieldCaption": field_caption, "function": "COUNT"}
+                            {"fieldCaption": field_caption, "function": "COUNT"},
+                            {"fieldCaption": field_caption, "function": "MEDIAN"}
                         ]
                     },
                     "options": {"returnFormat": "OBJECTS", "disaggregate": False}
                 }
             else:
-                # For dimensions, get distinct values (sample) - COUNTD will be queried separately
+                # For dimensions: get value_counts via aggregated query with TOP filter
                 query_payload = {
                     "datasource": {"datasourceLuid": datasource_id},
                     "query": {
                         "fields": [
-                            {"fieldCaption": field_caption}
+                            {"fieldCaption": field_caption},
+                            {"fieldCaption": field_caption, "function": "COUNT"}
+                        ],
+                        "filters": [
+                            {
+                                "field": {"fieldCaption": field_caption},
+                                "filterType": "TOP",
+                                "howMany": 100,
+                                "direction": "TOP",
+                                "fieldToMeasure": {
+                                    "fieldCaption": field_caption,
+                                    "function": "COUNT"
+                                }
+                            }
                         ]
                     },
-                    "options": {"returnFormat": "OBJECTS", "disaggregate": True}
+                    "options": {"returnFormat": "OBJECTS", "disaggregate": False}
                 }
             
             headers = {
@@ -2335,28 +2376,69 @@ class TableauClient:
                 first_row = result["data"][0]
                 
                 if not is_measure:
-                    # For dimensions: get sample values and cardinality
-                    sample_values = []
+                    # For dimensions: parse value_counts from aggregated query response
+                    value_counts = []
+                    count_key = None
+                    field_key = None
                     
-                    # Get sample values from sampled datapoints (up to 100 rows)
-                    for row in result["data"][:100]:
-                        if isinstance(row, dict):
-                            # Look for the field value - try common key patterns
-                            for key, value in row.items():
-                                # Match field caption in key (case-insensitive)
-                                if field_caption.lower() in key.lower() or key.lower() == field_caption.lower():
-                                    if value is not None and str(value).strip():
-                                        val_str = str(value)
-                                        if val_str not in sample_values:
-                                            sample_values.append(val_str)
-                                    break
-                        elif isinstance(row, list) and len(row) > 0:
-                            # Array format - first element is usually the field value
-                            val_str = str(row[0])
-                            if val_str not in sample_values:
-                                sample_values.append(val_str)
+                    # Parse value_counts from aggregated query (already sorted by count desc)
+                    if len(result["data"]) > 0:
+                        # Find the COUNT key and field key in first row
+                        first_row = result["data"][0]
+                        if isinstance(first_row, dict):
+                            field_caption_lower = field_caption.lower()
+                            for key in first_row.keys():
+                                key_lower = key.lower()
+                                # COUNT key: contains "count" and may contain field caption
+                                if "count" in key_lower:
+                                    if count_key is None:  # Take first COUNT key found
+                                        count_key = key
+                                # Field key: matches field caption (exact or contains)
+                                elif field_caption_lower == key_lower or field_caption_lower in key_lower:
+                                    if field_key is None:
+                                        field_key = key
+                            
+                            # Fallback: if field_key not found, try first non-count key
+                            if not field_key and len(first_row) > 0:
+                                for key in first_row.keys():
+                                    if "count" not in key.lower():
+                                        field_key = key
+                                        break
+                            
+                            # Extract value_counts from all rows
+                            for row in result["data"]:
+                                if isinstance(row, dict):
+                                    # Try field_key first, then fallback to first non-count key
+                                    value = None
+                                    if field_key:
+                                        value = row.get(field_key)
+                                    else:
+                                        # Fallback: find first non-count key
+                                        for k, v in row.items():
+                                            if "count" not in k.lower():
+                                                value = v
+                                                break
+                                    
+                                    count = None
+                                    if count_key:
+                                        count = row.get(count_key)
+                                    else:
+                                        # Fallback: find first count key
+                                        for k, v in row.items():
+                                            if "count" in k.lower():
+                                                count = v
+                                                break
+                                    
+                                    if value is not None and count is not None:
+                                        try:
+                                            count_int = int(count) if isinstance(count, (int, float)) else int(str(count))
+                                            value_counts.append({"value": str(value), "count": count_int})
+                                        except (ValueError, TypeError):
+                                            pass
                     
-                    stats["sample_values"] = sample_values[:10]  # Max 10
+                    stats["value_counts"] = value_counts  # Up to 100, already sorted by count desc
+                    # Derive sample_values from top 10 value_counts
+                    stats["sample_values"] = [vc["value"] for vc in value_counts[:10]]
                     
                     # Get cardinality using a separate COUNTD query (aggregated, not disaggregated)
                     # This ensures we get the total distinct count, not per-row counts
@@ -2415,16 +2497,17 @@ class TableauClient:
                         logger.debug(f"Could not get cardinality via separate query for {field_caption}: {e}")
                 
                 else:
-                    # For measures: extract min/max from aggregated results
+                    # For measures: extract min/max/median from aggregated results
                     if data_type in ["INTEGER", "REAL", "DOUBLE", "FLOAT"]:
                         min_val = None
                         max_val = None
+                        median_val = None
                         
-                        # Results might be in first row with MIN/MAX as keys
+                        # Results might be in first row with MIN/MAX/MEDIAN as keys
                         if isinstance(first_row, dict):
                             for key, value in first_row.items():
                                 key_lower = key.lower()
-                                if "min" in key_lower and value is not None:
+                                if "min" in key_lower and "median" not in key_lower and value is not None:
                                     try:
                                         min_val = float(value) if value != "" else None
                                     except (ValueError, TypeError):
@@ -2434,41 +2517,70 @@ class TableauClient:
                                         max_val = float(value) if value != "" else None
                                     except (ValueError, TypeError):
                                         pass
+                                elif "median" in key_lower and value is not None:
+                                    try:
+                                        median_val = float(value) if value != "" else None
+                                    except (ValueError, TypeError):
+                                        pass
                         
                         stats["min"] = min_val
                         stats["max"] = max_val
-            
-            # Get null percentage with a separate query
-            try:
-                null_query = {
-                    "datasource": {"datasourceLuid": datasource_id},
-                    "query": {
-                        "fields": [
-                            {"fieldCaption": field_caption, "function": "COUNT"},
-                            {"fieldCaption": field_caption, "function": "COUNTD"}
-                        ]
-                    },
-                    "options": {"returnFormat": "OBJECTS", "disaggregate": False}
-                }
-                
-                null_response = await self._client.post(
-                    query_url,
-                    json=null_query,
-                    headers=headers,
-                    timeout=self.timeout,
-                )
-                null_response.raise_for_status()
-                null_result = null_response.json()
-                
-                # Calculate null percentage
-                # This is approximate: (total_count - distinct_count) / total_count
-                # More accurate would require a COUNT(*) vs COUNT(field) comparison
-                if "data" in null_result and len(null_result["data"]) > 0:
-                    # Simplified: if we can't get exact null count, leave it None
-                    pass
-                    
-            except Exception as e:
-                logger.debug(f"Could not get null percentage for {field_caption}: {e}")
+                        stats["median"] = median_val
+                        
+                        # Get null percentage: try Number of Records to get total_rows
+                        # null_percentage = (total_rows - non_null_count) / total_rows * 100
+                        # non_null_count = COUNT(field) from measure query
+                        non_null_count = None
+                        # Extract COUNT from measure query result
+                        if isinstance(first_row, dict):
+                            for key, value in first_row.items():
+                                if "count" in key.lower() and "countd" not in key.lower():
+                                    try:
+                                        non_null_count = int(value) if isinstance(value, (int, float)) else int(str(value))
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass
+                        
+                        if non_null_count is not None:
+                            try:
+                                # Try to get total_rows from Number of Records
+                                number_of_records_query = {
+                                    "datasource": {"datasourceLuid": datasource_id},
+                                    "query": {
+                                        "fields": [
+                                            {"fieldCaption": "Number of Records", "function": "SUM"}
+                                        ]
+                                    },
+                                    "options": {"returnFormat": "OBJECTS", "disaggregate": False}
+                                }
+                                
+                                records_response = await self._client.post(
+                                    query_url,
+                                    json=number_of_records_query,
+                                    headers=headers,
+                                    timeout=self.timeout,
+                                )
+                                records_response.raise_for_status()
+                                records_result = records_response.json()
+                                
+                                if "data" in records_result and len(records_result["data"]) > 0:
+                                    records_row = records_result["data"][0]
+                                    if isinstance(records_row, dict):
+                                        total_rows = None
+                                        for key, value in records_row.items():
+                                            if "sum" in key.lower() or "number" in key.lower():
+                                                try:
+                                                    total_rows = int(value) if isinstance(value, (int, float)) else int(str(value))
+                                                    break
+                                                except (ValueError, TypeError):
+                                                    pass
+                                        
+                                        if total_rows and total_rows > 0:
+                                            null_count = total_rows - non_null_count
+                                            stats["null_percentage"] = (null_count / total_rows) * 100
+                                            logger.debug(f"Calculated null_percentage for {field_caption}: {stats['null_percentage']:.2f}%")
+                            except Exception as e:
+                                logger.debug(f"Could not get null percentage for {field_caption} (Number of Records not available): {e}")
             
         except Exception as e:
             logger.debug(f"Could not get statistics for field {field_caption}: {e}")

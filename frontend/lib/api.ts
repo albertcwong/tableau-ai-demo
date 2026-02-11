@@ -661,9 +661,12 @@ export const tableauExplorerApi = {
     return response.data;
   },
 
-  // Get datasource schema
-  getDatasourceSchema: async (datasourceId: string): Promise<DatasourceSchema> => {
-    const response = await apiClient.get<DatasourceSchema>(`/api/v1/tableau/datasources/${datasourceId}/schema`);
+  // Get datasource schema (enrichment pipeline: VizQL + Metadata API - can be slow)
+  getDatasourceSchema: async (datasourceId: string, forceRefresh = false): Promise<DatasourceSchema> => {
+    const response = await apiClient.get<DatasourceSchema>(`/api/v1/tableau/datasources/${datasourceId}/schema`, {
+      timeout: LONG_OPERATION_TIMEOUT,
+      params: forceRefresh ? { force_refresh: 'true' } : undefined,
+    });
     return response.data;
   },
 
@@ -1078,8 +1081,10 @@ export interface EnrichSchemaResponse {
       // Field statistics
       cardinality?: number | null;
       sample_values?: string[];
+      value_counts?: Array<{ value: string; count: number }>;
       min?: number | null;
       max?: number | null;
+      median?: number | null;
       null_percentage?: number | null;
     }>;
     field_map: Record<string, any>;

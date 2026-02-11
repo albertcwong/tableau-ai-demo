@@ -17,7 +17,7 @@ import type { TableauConfigOption } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { GripVertical, ChevronDown, ChevronRight, Server, Hash, Calendar, Type, CheckSquare, TextInitial } from 'lucide-react';
+import { GripVertical, ChevronDown, ChevronRight, Server, Hash, Calendar, Type, CheckSquare, TextInitial, Sparkles, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DatasourceSchema, ColumnSchema } from '@/types';
@@ -65,6 +65,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const [gridWidth, setGridWidth] = useState(1);
   const [gridHeight, setGridHeight] = useState(1);
   const [multiViews, setMultiViews] = useState<Array<TableauView | null>>([null]);
+  const [enrichedDatasourceIds, setEnrichedDatasourceIds] = useState<Set<string>>(new Set());
 
   // Check initial connection state - only restore if configs are available AND token is valid
   useEffect(() => {
@@ -251,39 +252,46 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     }
   };
 
+  const fetchSchema = async (datasource: TableauDatasource, forceRefresh = false) => {
+    if (loadingSchemas.has(datasource.id)) return;
+    setLoadingSchemas((prev) => new Set([...prev, datasource.id]));
+    try {
+      const schema = await tableauExplorerApi.getDatasourceSchema(datasource.id, forceRefresh);
+      setDatasourceSchemas((prev) => new Map(prev).set(datasource.id, schema));
+    } catch (err) {
+      console.error(`Failed to load schema for datasource ${datasource.id}:`, err);
+    } finally {
+      setLoadingSchemas((prev) => {
+        const next = new Set(prev);
+        next.delete(datasource.id);
+        return next;
+      });
+    }
+  };
+
   const handleToggleDatasource = async (datasource: TableauDatasource) => {
     const isExpanded = expandedDatasources.has(datasource.id);
-    
     if (isExpanded) {
-      // Collapse
       const newExpanded = new Set(expandedDatasources);
       newExpanded.delete(datasource.id);
       setExpandedDatasources(newExpanded);
     } else {
-      // Expand - load schema if not already loaded
       setExpandedDatasources(new Set([...expandedDatasources, datasource.id]));
-      
       if (!datasourceSchemas.has(datasource.id) && !loadingSchemas.has(datasource.id)) {
-        setLoadingSchemas(new Set([...loadingSchemas, datasource.id]));
-        try {
-          const schema = await tableauExplorerApi.getDatasourceSchema(datasource.id);
-          setDatasourceSchemas(new Map(datasourceSchemas).set(datasource.id, schema));
-        } catch (err) {
-          console.error(`Failed to load schema for datasource ${datasource.id}:`, err);
-        } finally {
-          setLoadingSchemas(prev => {
-            const newSet = new Set(prev);
-            newSet.delete(datasource.id);
-            return newSet;
-          });
-        }
+        await fetchSchema(datasource);
       }
     }
   };
 
-  const handleSelectDatasource = (datasource: TableauDatasource) => {
+  const handleSelectDatasource = async (datasource: TableauDatasource) => {
     setSelectedObject({ type: 'datasource', data: datasource });
     onDatasourceSelect?.(datasource);
+    if (!expandedDatasources.has(datasource.id)) {
+      setExpandedDatasources((prev) => new Set([...prev, datasource.id]));
+    }
+    if (!datasourceSchemas.has(datasource.id) && !loadingSchemas.has(datasource.id)) {
+      await fetchSchema(datasource);
+    }
   };
 
   // Notify parent of rendered state changes
@@ -524,7 +532,15 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                                   )}
                                 </button>
                                 <div className="flex-1 min-w-0">
-                                  <div className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">{ds.name}</div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">{ds.name}</div>
+                                    {enrichedDatasourceIds.has(ds.id) && (
+                                      <span className="px-1.5 py-0.5 text-[10px] font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 rounded flex items-center gap-1" title="Schema enriched for AI">
+                                        <Sparkles className="h-2.5 w-2.5" />
+                                        Enriched
+                                      </span>
+                                    )}
+                                  </div>
                                   {ds.project_name && (
                                     <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{ds.project_name}</div>
                                   )}
@@ -552,6 +568,22 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                           
                           {isExpanded && (
                             <div className="px-2 pb-2 border-t border-gray-200 dark:border-gray-700 mt-1 pt-2 space-y-2">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] text-gray-500 dark:text-gray-400">Schema</span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 px-1.5 text-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    fetchSchema(ds, true);
+                                  }}
+                                  disabled={isLoadingSchema}
+                                  title="Refresh schema (bypass cache, logs GraphQL/read-metadata)"
+                                >
+                                  <RefreshCw className={cn('h-3 w-3', isLoadingSchema && 'animate-spin')} />
+                                </Button>
+                              </div>
                               {isLoadingSchema ? (
                                 <div className="space-y-2">
                                   <Skeleton className="h-4 w-full" />
@@ -768,6 +800,9 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
               datasourceName={selectedObject.data.name}
               onAddToContext={onAddToContext}
               contextObjects={contextObjects}
+              onEnriched={(result) => {
+                setEnrichedDatasourceIds(prev => new Set([...prev, result.datasource_id]));
+              }}
             />
           </div>
         ) : (
