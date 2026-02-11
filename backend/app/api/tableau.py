@@ -39,7 +39,7 @@ from app.services.tableau.client import (
 from app.services.agents.vizql.schema_enrichment import SchemaEnrichmentService
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.user import User, TableauServerConfig, UserTableauServerMapping, UserTableauPAT
+from app.models.user import User, TableauServerConfig, UserTableauServerMapping, UserTableauPAT, UserTableauPassword
 from sqlalchemy import or_
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def get_tableau_client(
             if auth_type == "connected_app" and not (config.client_id and config.client_secret):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Connected App credentials are not configured for this server. Use PAT authentication or contact your admin."
+                    detail="Connected App credentials are not configured for this server. Use PAT or standard authentication or contact your admin."
                 )
             
             token_store = get_token_store(auth_type)
@@ -121,8 +121,16 @@ async def get_tableau_client(
                     server_url=config.server_url,
                     site_id=token_entry.site_id or site_id_for_client,
                     api_version=config.api_version or "3.15",
-                    client_id="pat-placeholder" if auth_type == "pat" else config.client_id,
-                    client_secret="pat-placeholder" if auth_type == "pat" else config.client_secret,
+                    client_id=(
+                        "pat-placeholder" if auth_type == "pat"
+                        else "standard-placeholder" if auth_type == "standard"
+                        else config.client_id
+                    ),
+                    client_secret=(
+                        "pat-placeholder" if auth_type == "pat"
+                        else "standard-placeholder" if auth_type == "standard"
+                        else config.client_secret
+                    ),
                     username=tableau_username,
                     secret_id=config.secret_id or config.client_id,
                     verify_ssl=not getattr(config, 'skip_ssl_verify', False),
@@ -131,9 +139,10 @@ async def get_tableau_client(
                     initial_site_content_url=token_entry.site_content_url,
                     on_401_invalidate=invalidate_cb,
                 )
-                # Ensure _pat_auth flag is set for PAT tokens
                 if auth_type == "pat":
                     client._pat_auth = True
+                elif auth_type == "standard":
+                    client._standard_auth = True
                 return client
 
             # For PAT: if no token in cache, try to restore session from stored credentials
@@ -189,6 +198,61 @@ async def get_tableau_client(
                 token_store.set(current_user.id, config.id, auth_type, token_entry)
                 client._pat_auth = True
                 logger.info(f"Restored PAT session for user={current_user.id} config={config.id}")
+                return client
+
+            # For standard: if no token in cache, restore from stored credentials
+            if auth_type == "standard":
+                if not getattr(config, 'allow_standard_auth', False):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Standard authentication is not enabled for this server",
+                    )
+                pw_record = db.query(UserTableauPassword).filter(
+                    UserTableauPassword.user_id == current_user.id,
+                    UserTableauPassword.tableau_server_config_id == config.id,
+                ).first()
+                if not pw_record:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="No credentials configured. Please add username/password in Settings and connect.",
+                        headers={"X-Error-Code": "TABLEAU_STANDARD_NOT_CONFIGURED"},
+                    )
+                try:
+                    password = decrypt_pat(pw_record.password_encrypted)
+                except Exception as e:
+                    logger.error(f"Failed to decrypt stored password: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to access stored credentials.",
+                        headers={"X-Error-Code": "TABLEAU_CREDENTIAL_ERROR"},
+                    )
+                client = TableauClient(
+                    server_url=config.server_url,
+                    site_id=site_id_for_client,
+                    api_version=config.api_version or "3.15",
+                    client_id="standard-placeholder",
+                    client_secret="standard-placeholder",
+                    verify_ssl=not getattr(config, 'skip_ssl_verify', False),
+                )
+                try:
+                    await client.sign_in_with_password(pw_record.tableau_username, password)
+                except TableauAuthenticationError as e:
+                    logger.warning(f"Standard auth restore failed (session expired/invalid): {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Tableau session expired. Please reconnect using the Connect button.",
+                        headers={"X-Error-Code": "TABLEAU_SESSION_EXPIRED"},
+                    )
+                expires_at = client.token_expires_at or datetime.now(timezone.utc) + timedelta(minutes=240)
+                token_entry = TokenEntry(
+                    token=client.auth_token,
+                    expires_at=expires_at,
+                    site_id=client.site_id,
+                    site_content_url=client.site_content_url,
+                )
+                token_store.set(current_user.id, config.id, auth_type, token_entry)
+                client._standard_auth = True
+                logger.info(f"Restored standard auth session for user={current_user.id} config={config.id}")
                 return client
 
             # For Connected App: sign in with lock to prevent parallel sign-ins

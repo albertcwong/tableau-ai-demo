@@ -69,6 +69,7 @@ class TableauConfigCreate(BaseModel):
     client_secret: Optional[str] = None
     secret_id: Optional[str] = None
     allow_pat_auth: Optional[bool] = False
+    allow_standard_auth: Optional[bool] = False
     skip_ssl_verify: Optional[bool] = False
 
 
@@ -82,6 +83,7 @@ class TableauConfigUpdate(BaseModel):
     client_secret: Optional[str] = None
     secret_id: Optional[str] = None
     allow_pat_auth: Optional[bool] = None
+    allow_standard_auth: Optional[bool] = None
     skip_ssl_verify: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -97,6 +99,7 @@ class TableauConfigResponse(BaseModel):
     client_secret: Optional[str]  # Note: In production, consider masking this
     secret_id: Optional[str]
     allow_pat_auth: Optional[bool] = False
+    allow_standard_auth: Optional[bool] = False
     skip_ssl_verify: Optional[bool] = False
     is_active: bool
     created_by: Optional[int]
@@ -378,6 +381,7 @@ async def list_tableau_configs(
         client_secret=c.client_secret,
         secret_id=c.secret_id,
         allow_pat_auth=getattr(c, 'allow_pat_auth', False),
+        allow_standard_auth=getattr(c, 'allow_standard_auth', False),
         skip_ssl_verify=getattr(c, 'skip_ssl_verify', False),
         is_active=c.is_active,
         created_by=c.created_by,
@@ -393,11 +397,12 @@ async def create_tableau_config(
 ):
     """Create a new Tableau server configuration."""
     allow_pat = config_data.allow_pat_auth or False
+    allow_standard = config_data.allow_standard_auth or False
     has_connected_app = bool((config_data.client_id or "").strip() and (config_data.client_secret or "").strip())
-    if not allow_pat and not has_connected_app:
+    if not allow_pat and not allow_standard and not has_connected_app:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either Connected App credentials (client_id and client_secret) or allow_pat_auth must be provided"
+            detail="Either Connected App credentials (client_id and client_secret), allow_pat_auth, or allow_standard_auth must be provided"
         )
     new_config = TableauServerConfig(
         name=config_data.name,
@@ -408,6 +413,7 @@ async def create_tableau_config(
         client_secret=(config_data.client_secret or "").strip() or None,  # TODO: Encrypt this
         secret_id=(config_data.secret_id or config_data.client_id or "").strip() or None,
         allow_pat_auth=config_data.allow_pat_auth or False,
+        allow_standard_auth=config_data.allow_standard_auth or False,
         skip_ssl_verify=config_data.skip_ssl_verify or False,
         is_active=True,
         created_by=current_user.id
@@ -426,6 +432,7 @@ async def create_tableau_config(
         client_secret=new_config.client_secret,
         secret_id=new_config.secret_id,
         allow_pat_auth=getattr(new_config, 'allow_pat_auth', False),
+        allow_standard_auth=getattr(new_config, 'allow_standard_auth', False),
         skip_ssl_verify=getattr(new_config, 'skip_ssl_verify', False),
         is_active=new_config.is_active,
         created_by=new_config.created_by,
@@ -456,6 +463,7 @@ async def get_tableau_config(
         client_secret=config.client_secret,
         secret_id=config.secret_id,
         allow_pat_auth=getattr(config, 'allow_pat_auth', False),
+        allow_standard_auth=getattr(config, 'allow_standard_auth', False),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,
@@ -494,17 +502,20 @@ async def update_tableau_config(
         config.secret_id = (config_data.secret_id or "").strip() or None
     if config_data.allow_pat_auth is not None:
         config.allow_pat_auth = config_data.allow_pat_auth
+    if config_data.allow_standard_auth is not None:
+        config.allow_standard_auth = config_data.allow_standard_auth
     if config_data.skip_ssl_verify is not None:
         config.skip_ssl_verify = config_data.skip_ssl_verify
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
 
     allow_pat = getattr(config, 'allow_pat_auth', False)
+    allow_standard = getattr(config, 'allow_standard_auth', False)
     has_connected_app = bool((config.client_id or "").strip() and (config.client_secret or "").strip())
-    if not allow_pat and not has_connected_app:
+    if not allow_pat and not allow_standard and not has_connected_app:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either Connected App credentials (client_id and client_secret) or allow_pat_auth must be provided"
+            detail="Either Connected App credentials (client_id and client_secret), allow_pat_auth, or allow_standard_auth must be provided"
         )
 
     db.commit()
@@ -520,6 +531,7 @@ async def update_tableau_config(
         client_secret=config.client_secret,
         secret_id=config.secret_id,
         allow_pat_auth=getattr(config, 'allow_pat_auth', False),
+        allow_standard_auth=getattr(config, 'allow_standard_auth', False),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,

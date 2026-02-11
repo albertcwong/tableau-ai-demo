@@ -793,12 +793,25 @@ export interface TableauConfigOption {
   server_url: string;
   site_id?: string | null;
   allow_pat_auth?: boolean;
+  allow_standard_auth?: boolean;
   has_connected_app?: boolean;
 }
 
 export interface TableauAuthRequest {
   config_id: number;
-  auth_type?: 'connected_app' | 'pat';
+  auth_type?: 'connected_app' | 'pat' | 'standard';
+}
+
+export interface SwitchSiteRequest {
+  config_id: number;
+  auth_type: 'standard' | 'pat';
+  site_content_url: string;
+}
+
+export interface SiteInfo {
+  id?: string | null;
+  name?: string | null;
+  contentUrl?: string | null;
 }
 
 export interface TableauAuthResponse {
@@ -863,6 +876,18 @@ export const authApi = {
     const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/authenticate', request);
     return response.data;
   },
+
+  switchSite: async (request: SwitchSiteRequest): Promise<TableauAuthResponse> => {
+    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/switch-site', request);
+    return response.data;
+  },
+
+  listSites: async (configId: number, authType: 'standard' | 'pat'): Promise<SiteInfo[]> => {
+    const response = await apiClient.get<SiteInfo[]>('/api/v1/tableau-auth/sites', {
+      params: { config_id: configId, auth_type: authType },
+    });
+    return response.data;
+  },
 };
 
 // User settings API (PAT management)
@@ -881,6 +906,21 @@ export interface CreateTableauPAT {
   pat_secret: string;
 }
 
+export interface UserTableauPassword {
+  id: number;
+  tableau_server_config_id: number;
+  tableau_username: string;
+  server_name: string;
+  server_url: string;
+  created_at: string;
+}
+
+export interface CreateTableauPassword {
+  tableau_server_config_id: number;
+  tableau_username: string;
+  password: string;
+}
+
 export const userSettingsApi = {
   getSettings: async (): Promise<{ username: string; role: string; has_tableau_pats: boolean }> => {
     const response = await apiClient.get('/api/v1/user/settings');
@@ -896,6 +936,18 @@ export const userSettingsApi = {
   },
   deleteTableauPAT: async (configId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/user/tableau-pats/${configId}`);
+  },
+
+  listTableauPasswords: async (): Promise<UserTableauPassword[]> => {
+    const response = await apiClient.get<UserTableauPassword[]>('/api/v1/user/tableau-passwords');
+    return response.data;
+  },
+  createTableauPassword: async (data: CreateTableauPassword): Promise<UserTableauPassword> => {
+    const response = await apiClient.post<UserTableauPassword>('/api/v1/user/tableau-passwords', data);
+    return response.data;
+  },
+  deleteTableauPassword: async (configId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/user/tableau-passwords/${configId}`);
   },
 };
 
@@ -922,6 +974,7 @@ export interface TableauConfigCreate {
   client_secret?: string;
   secret_id?: string;
   allow_pat_auth?: boolean;
+  allow_standard_auth?: boolean;
   skip_ssl_verify?: boolean;
 }
 
@@ -934,6 +987,7 @@ export interface TableauConfigUpdate {
   client_secret?: string;
   secret_id?: string;
   allow_pat_auth?: boolean;
+  allow_standard_auth?: boolean;
   skip_ssl_verify?: boolean;
   is_active?: boolean;
 }
@@ -948,6 +1002,7 @@ export interface TableauConfigResponse {
   client_secret?: string | null;
   secret_id?: string | null;
   allow_pat_auth?: boolean;
+  allow_standard_auth?: boolean;
   skip_ssl_verify?: boolean;
   is_active: boolean;
   created_by?: number | null;

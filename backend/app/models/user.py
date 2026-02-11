@@ -99,6 +99,7 @@ class User(Base):
     provider_configs = relationship("ProviderConfig", back_populates="created_by_user", cascade="all, delete-orphan")
     tableau_server_mappings = relationship("UserTableauServerMapping", back_populates="user", cascade="all, delete-orphan")
     tableau_pats = relationship("UserTableauPAT", back_populates="user", cascade="all, delete-orphan")
+    tableau_passwords = relationship("UserTableauPassword", back_populates="user", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -122,6 +123,7 @@ class TableauServerConfig(Base):
     client_secret = Column(String(500), nullable=True, comment="Connected App secret (optional when allow_pat_auth)")
     secret_id = Column(String(255), nullable=True, comment="Secret ID for JWT 'kid' header (defaults to client_id)")
     allow_pat_auth = Column(Boolean, default=False, nullable=False, comment="Allow users to authenticate with Personal Access Token")
+    allow_standard_auth = Column(Boolean, default=False, nullable=False, comment="Allow users to authenticate with username and password")
     skip_ssl_verify = Column(Boolean, default=False, nullable=False, comment="Skip SSL certificate verification for Tableau API calls")
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -132,6 +134,7 @@ class TableauServerConfig(Base):
     created_by_user = relationship("User", back_populates="tableau_configs")
     user_mappings = relationship("UserTableauServerMapping", back_populates="tableau_server_config", cascade="all, delete-orphan")
     user_pats = relationship("UserTableauPAT", back_populates="tableau_config", cascade="all, delete-orphan")
+    user_passwords = relationship("UserTableauPassword", back_populates="tableau_config", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -190,6 +193,30 @@ class UserTableauPAT(Base):
 
     def __repr__(self):
         return f"<UserTableauPAT(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, pat_name={self.pat_name})>"
+
+
+class UserTableauPassword(Base):
+    """User's Tableau username/password for standard authentication."""
+    __tablename__ = "user_tableau_passwords"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tableau_server_config_id = Column(Integer, ForeignKey("tableau_server_configs.id"), nullable=False, index=True)
+    tableau_username = Column(String(255), nullable=False, comment="Tableau username")
+    password_encrypted = Column(Text, nullable=False, comment="Encrypted Tableau password")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="tableau_passwords")
+    tableau_config = relationship("TableauServerConfig", back_populates="user_passwords")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'tableau_server_config_id', name='uq_user_tableau_password'),
+    )
+
+    def __repr__(self):
+        return f"<UserTableauPassword(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id})>"
 
 
 class ProviderConfig(Base):

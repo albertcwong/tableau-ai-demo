@@ -13,14 +13,16 @@ import { useAuth } from '@/components/auth/AuthContext';
 
 interface TableauConnectionStatusProps {
   onConnectionChange?: (connected: boolean, config?: TableauConfigOption) => void;
+  onSiteChange?: () => void;
 }
 
-export function TableauConnectionStatus({ onConnectionChange }: TableauConnectionStatusProps) {
+export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: TableauConnectionStatusProps) {
   const { isAdmin, isAuthenticated } = useAuth();
   const [configs, setConfigs] = useState<TableauConfigOption[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
-  const [authType, setAuthType] = useState<'connected_app' | 'pat'>('connected_app');
+  const [authType, setAuthType] = useState<'connected_app' | 'pat' | 'standard'>('connected_app');
   const [userPatConfigIds, setUserPatConfigIds] = useState<number[]>([]);
+  const [userPasswordConfigIds, setUserPasswordConfigIds] = useState<number[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<{
     connected: boolean;
     config?: TableauConfigOption;
@@ -28,6 +30,8 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   }>({ connected: false });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sites, setSites] = useState<{ id?: string; name?: string; contentUrl?: string }[]>([]);
+  const [switchingSite, setSwitchingSite] = useState(false);
 
   // Load configs on mount
   useEffect(() => {
@@ -45,18 +49,20 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   const loadConfigs = async () => {
     if (!isAuthenticated) return;
     try {
-      const [configsList, pats] = await Promise.all([
+      const [configsList, pats, passwords] = await Promise.all([
         authApi.listTableauConfigs(),
         userSettingsApi.listTableauPATs().catch(() => []),
+        userSettingsApi.listTableauPasswords().catch(() => []),
       ]);
       setConfigs(configsList);
       setUserPatConfigIds(pats.map((p) => p.tableau_server_config_id));
+      setUserPasswordConfigIds(passwords.map((p) => p.tableau_server_config_id));
       const storedConfigId = localStorage.getItem('tableau_config_id');
       const storedAuthType = localStorage.getItem('tableau_auth_type');
       if (storedConfigId && configsList.find((c) => c.id === Number(storedConfigId))) {
         setSelectedConfigId(Number(storedConfigId));
       }
-      if (storedAuthType === 'pat' || storedAuthType === 'connected_app') {
+      if (storedAuthType === 'pat' || storedAuthType === 'connected_app' || storedAuthType === 'standard') {
         setAuthType(storedAuthType);
       }
     } catch (err) {
@@ -77,7 +83,13 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
     try {
       const config = configs.find((c) => c.id === selectedConfigId);
       const hasCA = config?.has_connected_app ?? false;
-      const effectiveAuthType = hasCA ? authType : 'pat';
+      const effectiveAuthType = hasCA
+        ? authType
+        : config?.allow_pat_auth
+          ? 'pat'
+          : config?.allow_standard_auth
+            ? 'standard'
+            : 'pat';
       const authResponse = await authApi.authenticateTableau({
         config_id: selectedConfigId,
         auth_type: effectiveAuthType,
@@ -87,6 +99,18 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
         config,
         authResponse,
       });
+
+      const canSwitchSite = effectiveAuthType === 'standard' || effectiveAuthType === 'pat';
+      if (canSwitchSite && selectedConfigId) {
+        try {
+          const sitesList = await authApi.listSites(selectedConfigId, effectiveAuthType);
+          setSites(sitesList);
+        } catch {
+          setSites([]);
+        }
+      } else {
+        setSites([]);
+      }
 
       // Store connection state
       localStorage.setItem('tableau_config_id', String(selectedConfigId));
@@ -123,17 +147,58 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
   const handleDisconnect = () => {
     setConnectionStatus({ connected: false });
     setSelectedConfigId(null);
+    setSites([]);
     localStorage.removeItem('tableau_config_id');
     localStorage.removeItem('tableau_auth_type');
     localStorage.removeItem('tableau_connected');
     localStorage.removeItem('tableau_token_expires_at');
+    localStorage.removeItem('tableau_site_content_url');
     onConnectionChange?.(false);
+  };
+
+  const canSwitchSite =
+    connectionStatus.connected &&
+    (authType === 'standard' || authType === 'pat') &&
+    selectedConfigId &&
+    sites.length > 0;
+
+  const handleSwitchSite = async (siteContentUrl: string) => {
+    if (!selectedConfigId || switchingSite) return;
+    const currentUrl = sites.find((s) => s.id === connectionStatus.authResponse?.site_id)?.contentUrl ?? '';
+    if (siteContentUrl === currentUrl) return;
+    setSwitchingSite(true);
+    setError(null);
+    try {
+      const authResponse = await authApi.switchSite({
+        config_id: selectedConfigId,
+        auth_type: authType as 'standard' | 'pat',
+        site_content_url: siteContentUrl,
+      });
+      setConnectionStatus((prev) => ({ ...prev, authResponse }));
+      if (authResponse.expires_at) {
+        localStorage.setItem('tableau_token_expires_at', authResponse.expires_at);
+      }
+      localStorage.setItem('tableau_site_content_url', siteContentUrl);
+      onConnectionChange?.(true, connectionStatus.config);
+      onSiteChange?.();
+    } catch (err: unknown) {
+      const errMsg =
+        (err as { response?: { data?: { detail?: string } }; message?: string })?.response?.data?.detail ||
+        (err as { message?: string })?.message ||
+        'Failed to switch site';
+      setError(errMsg);
+    } finally {
+      setSwitchingSite(false);
+    }
   };
 
   const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : null;
   const hasConnectedApp = selectedConfig?.has_connected_app ?? false;
-  const showAuthTypeSelect = selectedConfig?.allow_pat_auth || !hasConnectedApp;
+  const showAuthTypeSelect =
+    selectedConfig?.allow_pat_auth || selectedConfig?.allow_standard_auth || !hasConnectedApp;
   const canUsePat = !!selectedConfig?.allow_pat_auth && userPatConfigIds.includes(selectedConfigId!);
+  const canUseStandard =
+    !!selectedConfig?.allow_standard_auth && userPasswordConfigIds.includes(selectedConfigId!);
 
   if (configs.length === 0 && !isAdmin) {
     return (
@@ -158,8 +223,8 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
               setError(null);
               const newConfig = configs.find((c) => c.id === Number(value));
               const hasCA = newConfig?.has_connected_app ?? false;
-              if (!newConfig?.allow_pat_auth) setAuthType('connected_app');
-              else if (!hasCA) setAuthType('pat');
+              if (!newConfig?.allow_pat_auth && !newConfig?.allow_standard_auth) setAuthType('connected_app');
+              else if (!hasCA) setAuthType(newConfig?.allow_pat_auth ? 'pat' : 'standard');
               if (connectionStatus.connected) {
                 handleDisconnect();
               }
@@ -222,9 +287,15 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
         {showAuthTypeSelect && (
           <div className="flex items-center gap-2">
             <Select
-              value={hasConnectedApp ? authType : 'pat'}
+              value={
+                authType === 'connected_app' && !hasConnectedApp
+                  ? selectedConfig?.allow_pat_auth
+                    ? 'pat'
+                    : 'standard'
+                  : authType
+              }
               onValueChange={(v) => {
-                setAuthType(v as 'connected_app' | 'pat');
+                setAuthType(v as 'connected_app' | 'pat' | 'standard');
                 setError(null);
               }}
               disabled={connectionStatus.connected || loading}
@@ -237,11 +308,21 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
                 <SelectItem value="pat" disabled={!canUsePat}>
                   Personal Access Token {!canUsePat && '(configure in Settings)'}
                 </SelectItem>
+                {selectedConfig?.allow_standard_auth && (
+                  <SelectItem value="standard" disabled={!canUseStandard}>
+                    Username/Password {!canUseStandard && '(configure in Settings)'}
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
-            {(authType === 'pat' || !hasConnectedApp) && !canUsePat && (
+            {(authType === 'pat' || !hasConnectedApp) && !canUsePat && selectedConfig?.allow_pat_auth && (
               <Link href="/settings">
                 <Button variant="outline" size="sm">Add PAT in Settings</Button>
+              </Link>
+            )}
+            {authType === 'standard' && !canUseStandard && (
+              <Link href="/settings">
+                <Button variant="outline" size="sm">Add credentials in Settings</Button>
               </Link>
             )}
           </div>
@@ -250,15 +331,51 @@ export function TableauConnectionStatus({ onConnectionChange }: TableauConnectio
       )}
 
       {connectionStatus.connected && connectionStatus.config && (
-        <Alert className="bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
-          <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
-          <AlertDescription className="text-green-800 dark:text-green-200">
-            Connected to <strong>{connectionStatus.config.name}</strong>
-            {connectionStatus.authResponse?.site_id && (
-              <span> (Site: {connectionStatus.authResponse.site_id})</span>
-            )}
-          </AlertDescription>
-        </Alert>
+        <div className="space-y-2">
+          <Alert className="bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+            <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+            <AlertDescription className="text-green-800 dark:text-green-200">
+              Connected to <strong>{connectionStatus.config.name}</strong>
+              {connectionStatus.authResponse?.site_id && (
+                <span> (Site: {connectionStatus.authResponse.site_id})</span>
+              )}
+            </AlertDescription>
+          </Alert>
+          {canSwitchSite && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-muted-foreground shrink-0">Site:</label>
+              <Select
+                value={
+                  (() => {
+                    const contentUrl =
+                      sites.find((s) => s.id === connectionStatus.authResponse?.site_id)?.contentUrl ?? '';
+                    return contentUrl || '__default__';
+                  })()
+                }
+                onValueChange={(v) => handleSwitchSite(v === '__default__' ? '' : v)}
+                disabled={switchingSite}
+              >
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue placeholder="Switch site..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {sites.map((s) => {
+                    const contentUrl = s.contentUrl ?? '';
+                    const value = contentUrl || '__default__';
+                    return (
+                      <SelectItem key={s.id ?? value} value={value}>
+                        {s.name ?? s.contentUrl ?? 'Default'}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              {switchingSite && (
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {error && (

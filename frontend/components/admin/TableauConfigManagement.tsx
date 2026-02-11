@@ -24,6 +24,7 @@ export function TableauConfigManagement() {
     client_secret: '',
     secret_id: '',
     allow_pat_auth: false,
+    allow_standard_auth: false,
     skip_ssl_verify: false,
   });
 
@@ -54,6 +55,7 @@ export function TableauConfigManagement() {
       client_secret: '',
       secret_id: '',
       allow_pat_auth: false,
+      allow_standard_auth: false,
       skip_ssl_verify: false,
     });
     setEditingConfigId(null);
@@ -70,6 +72,7 @@ export function TableauConfigManagement() {
       client_secret: '', // Don't pre-populate secret for security
       secret_id: config.secret_id || '',
       allow_pat_auth: config.allow_pat_auth || false,
+      allow_standard_auth: config.allow_standard_auth || false,
       skip_ssl_verify: config.skip_ssl_verify || false,
     });
     setEditingConfigId(config.id);
@@ -107,12 +110,18 @@ export function TableauConfigManagement() {
           ...(formData.client_secret ? { client_secret: formData.client_secret } : {}),
           secret_id: formData.secret_id || undefined,
           allow_pat_auth: formData.allow_pat_auth,
+          allow_standard_auth: formData.allow_standard_auth,
           skip_ssl_verify: formData.skip_ssl_verify,
         };
         await adminApi.updateTableauConfig(editingConfigId, updateData);
       } else {
         // Create new config
-        await adminApi.createTableauConfig({ ...formData, allow_pat_auth: formData.allow_pat_auth || false, skip_ssl_verify: formData.skip_ssl_verify || false });
+        await adminApi.createTableauConfig({
+          ...formData,
+          allow_pat_auth: formData.allow_pat_auth || false,
+          allow_standard_auth: formData.allow_standard_auth || false,
+          skip_ssl_verify: formData.skip_ssl_verify || false,
+        });
       }
       resetForm();
       loadConfigs();
@@ -254,6 +263,23 @@ export function TableauConfigManagement() {
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   If enabled, users can authenticate with their own PAT instead of using the Connected App
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    id="allow_standard_auth"
+                    type="checkbox"
+                    checked={formData.allow_standard_auth || false}
+                    onChange={(e) => setFormData({ ...formData, allow_standard_auth: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="allow_standard_auth" className="cursor-pointer">
+                    Allow Username/Password Authentication
+                  </Label>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  If enabled, users can authenticate with Tableau username and password
                 </p>
               </div>
               <div className="space-y-2">

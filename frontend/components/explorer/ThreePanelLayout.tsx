@@ -681,7 +681,10 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                 <Server className="h-4 w-4 text-gray-500 dark:text-gray-400" />
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Tableau Servers</h3>
               </div>
-              <TableauConnectionStatus onConnectionChange={handleConnectionChange} />
+              <TableauConnectionStatus
+                onConnectionChange={handleConnectionChange}
+                onSiteChange={() => loadDatasourcesAndWorkbooks()}
+              />
             </div>
 
             {/* Datasources Section */}

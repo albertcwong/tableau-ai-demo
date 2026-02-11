@@ -97,6 +97,7 @@ class TableauClient:
         self.token_expires_at: Optional[datetime] = None
         self.site_content_url: Optional[str] = None
         self._pat_auth: bool = False  # True when authenticated via PAT (no refresh)
+        self._standard_auth: bool = False  # True when authenticated via username/password (no refresh)
         self._on_401_invalidate: Optional[Callable[[], None]] = on_401_invalidate
         # Pre-seeded from cache (avoids sign-in when token reuse)
         if initial_token:
@@ -109,6 +110,8 @@ class TableauClient:
             # Detect PAT auth from client_id placeholder
             if client_id == "pat-placeholder":
                 self._pat_auth = True
+            elif client_id == "standard-placeholder":
+                self._standard_auth = True
         
         # SSL verification setting
         # If verify_ssl=False (from config skip_ssl_verify), skip verification
@@ -620,16 +623,145 @@ class TableauClient:
         except httpx.RequestError as e:
             raise TableauAuthenticationError(f"Network error during PAT authentication: {str(e)}") from e
 
+    async def sign_in_with_password(self, username: str, password: str) -> Dict[str, Any]:
+        """
+        Authenticate with Tableau using username and password.
+
+        Args:
+            username: Tableau username
+            password: Tableau password
+
+        Returns:
+            Dictionary with authentication details including token and site info
+        """
+        sign_in_url = urljoin(self.api_base, 'auth/signin')
+        credentials = {
+            "name": username,
+            "password": password,
+            "site": {"contentUrl": self.site_id or ""}
+        }
+        payload = {"credentials": credentials}
+        try:
+            response = await self._client.post(
+                sign_in_url,
+                json=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            creds = data.get("credentials", {})
+            self.auth_token = creds.get("token")
+            site_info = creds.get("site", {})
+            self.site_content_url = site_info.get("contentUrl") or site_info.get("contenturl")
+            if site_info.get("id"):
+                self.site_id = site_info["id"]
+            # Token valid ~240 min (Server) / 120 min (Cloud)
+            self.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=240)
+            if not self.auth_token:
+                raise TableauAuthenticationError("No token received from standard sign-in")
+            self._standard_auth = True
+            return {
+                "token": self.auth_token,
+                "site_content_url": self.site_content_url,
+                "expires_at": self.token_expires_at.isoformat(),
+                "site": site_info,
+                "user": creds.get("user", {}),
+                "credentials": creds,
+            }
+        except httpx.HTTPStatusError as e:
+            raise TableauAuthenticationError(
+                f"Standard authentication failed: {e.response.status_code} - {e.response.text}"
+            ) from e
+        except httpx.RequestError as e:
+            raise TableauAuthenticationError(f"Network error during standard authentication: {str(e)}") from e
+
+    async def switch_site(self, content_url: str) -> Dict[str, Any]:
+        """
+        Switch to another site without re-authenticating. Tableau Server only (not Cloud).
+
+        Args:
+            content_url: Site content URL to switch to (empty string for default site)
+
+        Returns:
+            Dictionary with new credentials including token and site info
+        """
+        if not self.auth_token:
+            raise TableauAuthenticationError("Not authenticated. Call sign_in first.")
+        switch_url = urljoin(self.api_base, 'auth/switchSite')
+        payload = {"site": {"contentUrl": content_url or ""}}
+        try:
+            response = await self._client.post(
+                switch_url,
+                json=payload,
+                headers={
+                    "X-Tableau-Auth": self.auth_token,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            creds = data.get("credentials", {})
+            self.auth_token = creds.get("token")
+            site_info = creds.get("site", {})
+            self.site_content_url = site_info.get("contentUrl") or site_info.get("contenturl")
+            if site_info.get("id"):
+                self.site_id = site_info["id"]
+            self.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=240)
+            if not self.auth_token:
+                raise TableauAuthenticationError("No token received from switch-site")
+            return {
+                "token": self.auth_token,
+                "site_content_url": self.site_content_url,
+                "site": site_info,
+                "user": creds.get("user", {}),
+                "credentials": creds,
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 405:
+                raise TableauAuthenticationError(
+                    "Switch site is not available on Tableau Cloud. This feature is Tableau Server only."
+                ) from e
+            raise TableauAuthenticationError(
+                f"Switch site failed: {e.response.status_code} - {e.response.text}"
+            ) from e
+        except httpx.RequestError as e:
+            raise TableauAuthenticationError(f"Network error during switch-site: {str(e)}") from e
+
+    async def list_sites(self, page_size: int = 100, page_number: int = 1) -> List[Dict[str, Any]]:
+        """
+        List sites the user has access to. Requires valid auth token.
+
+        Returns:
+            List of site dictionaries with id, name, contentUrl
+        """
+        await self._ensure_authenticated()
+        endpoint = "sites"
+        params = {"pageSize": page_size, "pageNumber": page_number}
+        response = await self._request("GET", endpoint, params=params)
+        sites = response.get("sites", {}).get("site", [])
+        items = sites if isinstance(sites, list) else [sites] if sites else []
+        return [
+            {
+                "id": s.get("id"),
+                "name": s.get("name"),
+                "contentUrl": s.get("contentUrl") or s.get("contenturl"),
+            }
+            for s in items
+        ]
+
     async def _ensure_authenticated(self) -> None:
         """Ensure client is authenticated, signing in if necessary."""
         if not self.auth_token or not self.token_expires_at:
             if self._pat_auth:
                 raise TableauAuthenticationError("PAT session expired. Please reconnect.")
+            if self._standard_auth:
+                raise TableauAuthenticationError("Standard session expired. Please reconnect.")
             logger.info("No auth token found, calling sign_in()...")
             await self.sign_in()
             return
-        # PAT auth cannot refresh; user must reconnect when token expires
-        if self._pat_auth:
+        # PAT and standard auth cannot refresh; user must reconnect when token expires
+        if self._pat_auth or self._standard_auth:
             return
         # Refresh if token expires within 1 minute
         if datetime.now(timezone.utc) >= (self.token_expires_at - timedelta(minutes=1)):

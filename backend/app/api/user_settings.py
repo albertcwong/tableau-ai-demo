@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
-from app.models.user import User, TableauServerConfig, UserTableauPAT
+from app.models.user import User, TableauServerConfig, UserTableauPAT, UserTableauPassword
 from app.services.pat_encryption import encrypt_pat, decrypt_pat
 
 logger = logging.getLogger(__name__)
@@ -147,4 +147,117 @@ async def delete_tableau_pat(
             detail="PAT not found for this server",
         )
     db.delete(pat)
+    db.commit()
+
+
+class TableauPasswordResponse(BaseModel):
+    """Tableau password credential response (no password)."""
+    id: int
+    tableau_server_config_id: int
+    tableau_username: str
+    server_name: str
+    server_url: str
+    created_at: str
+
+
+class TableauPasswordCreate(BaseModel):
+    """Tableau standard credential create/update model."""
+    tableau_server_config_id: int = Field(..., description="Tableau server config ID")
+    tableau_username: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=1)
+
+
+@router.get("/tableau-passwords", response_model=List[TableauPasswordResponse])
+async def list_tableau_passwords(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List current user's configured Tableau standard credentials."""
+    passwords = (
+        db.query(UserTableauPassword, TableauServerConfig)
+        .join(TableauServerConfig, UserTableauPassword.tableau_server_config_id == TableauServerConfig.id)
+        .filter(
+            UserTableauPassword.user_id == current_user.id,
+            TableauServerConfig.is_active == True,
+        )
+        .all()
+    )
+    return [
+        TableauPasswordResponse(
+            id=pw.id,
+            tableau_server_config_id=pw.tableau_server_config_id,
+            tableau_username=pw.tableau_username,
+            server_name=config.name,
+            server_url=config.server_url,
+            created_at=pw.created_at.isoformat(),
+        )
+        for pw, config in passwords
+    ]
+
+
+@router.post("/tableau-passwords", response_model=TableauPasswordResponse, status_code=status.HTTP_201_CREATED)
+async def create_or_update_tableau_password(
+    data: TableauPasswordCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create or update standard credentials for a Tableau server."""
+    config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.id == data.tableau_server_config_id,
+        TableauServerConfig.is_active == True,
+        TableauServerConfig.allow_standard_auth == True,
+    ).first()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tableau server config not found or standard auth not enabled",
+        )
+    encrypted = encrypt_pat(data.password)
+    existing = db.query(UserTableauPassword).filter(
+        UserTableauPassword.user_id == current_user.id,
+        UserTableauPassword.tableau_server_config_id == data.tableau_server_config_id,
+    ).first()
+    if existing:
+        existing.tableau_username = data.tableau_username
+        existing.password_encrypted = encrypted
+        db.commit()
+        db.refresh(existing)
+        pw = existing
+    else:
+        pw = UserTableauPassword(
+            user_id=current_user.id,
+            tableau_server_config_id=data.tableau_server_config_id,
+            tableau_username=data.tableau_username,
+            password_encrypted=encrypted,
+        )
+        db.add(pw)
+        db.commit()
+        db.refresh(pw)
+    return TableauPasswordResponse(
+        id=pw.id,
+        tableau_server_config_id=pw.tableau_server_config_id,
+        tableau_username=pw.tableau_username,
+        server_name=config.name,
+        server_url=config.server_url,
+        created_at=pw.created_at.isoformat(),
+    )
+
+
+@router.delete("/tableau-passwords/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tableau_password(
+    config_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete standard credentials for a Tableau server."""
+    pw = db.query(UserTableauPassword).filter(
+        UserTableauPassword.user_id == current_user.id,
+        UserTableauPassword.tableau_server_config_id == config_id,
+    ).first()
+    if not pw:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credentials not found for this server",
+        )
+    db.delete(pw)
     db.commit()
