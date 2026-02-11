@@ -141,7 +141,8 @@ async def get_datasources_list_resource() -> str:
         
         # Fetch from Tableau
         client = TableauClient()
-        datasources = await client.get_datasources()
+        result = await client.get_datasources()
+        datasources = result["items"]
         
         result = {
             "datasources": datasources,

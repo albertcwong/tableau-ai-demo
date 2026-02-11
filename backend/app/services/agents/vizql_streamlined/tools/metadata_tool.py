@@ -39,7 +39,8 @@ async def get_datasource_metadata(
         # Get all datasources and find the one matching datasource_id
         # Note: Tableau REST API doesn't have a direct "get datasource by ID" endpoint
         # so we need to list and filter
-        datasources = await tableau_client.get_datasources(page_size=1000)
+        result = await tableau_client.get_datasources(page_size=1000)
+        datasources = result["items"]
         
         # Find matching datasource
         matching_ds = None

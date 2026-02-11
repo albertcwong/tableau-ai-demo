@@ -52,17 +52,20 @@ async def tableau_list_datasources(
     """
     try:
         client = get_tableau_client()
-        datasources = await client.get_datasources(
+        result = await client.get_datasources(
             project_id=project_id,
             page_size=page_size,
             page_number=page_number,
         )
+        datasources = result["items"]
+        pagination = result["pagination"]
         
         return {
             "datasources": datasources,
             "count": len(datasources),
             "page_size": page_size,
             "page_number": page_number,
+            "total_available": pagination.get("totalAvailable"),
         }
     except TableauClientError as e:
         logger.error(f"Tableau client error: {e}")

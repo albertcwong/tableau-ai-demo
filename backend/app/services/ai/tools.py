@@ -127,7 +127,8 @@ async def list_datasources_tool(
     """
     client = tableau_client or TableauClient()
     try:
-        datasources = await client.get_datasources(project_id=project_id)
+        result = await client.get_datasources(project_id=project_id)
+        datasources = result["items"]
         result = []
         for ds in datasources:
             project = ds.get("project", {})

@@ -25,6 +25,10 @@ from app.api.models import (
     ExecuteVDSQueryRequest,
     ExecuteVDSQueryResponse,
     ColumnSchema,
+    PaginationInfo,
+    PaginatedDatasourcesResponse,
+    PaginatedWorkbooksResponse,
+    PaginatedViewsResponse,
 )
 from app.services.tableau.client import (
     TableauClient,
@@ -280,11 +284,11 @@ def _normalize_view(view: dict) -> ViewResponse:
 
 @router.get(
     "/datasources",
-    response_model=List[DatasourceResponse],
+    response_model=PaginatedDatasourcesResponse,
     summary="List all datasources",
-    description="Retrieve a list of all datasources from Tableau Server.",
+    description="Retrieve a paginated list of all datasources from Tableau Server.",
     responses={
-        200: {"description": "List of datasources"},
+        200: {"description": "Paginated list of datasources"},
         401: {"model": ErrorResponse, "description": "Authentication failed"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
@@ -293,21 +297,33 @@ async def list_datasources(
     project_id: Optional[str] = Query(None, description="Filter by project ID"),
     page_size: int = Query(100, ge=1, le=1000, description="Number of results per page"),
     page_number: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    search: Optional[str] = Query(None, description="Search term for datasource name (wildcard search)"),
     client: TableauClient = Depends(get_tableau_client),
-) -> List[DatasourceResponse]:
+) -> PaginatedDatasourcesResponse:
     """
     List all datasources.
     
-    Returns a paginated list of datasources. Optionally filtered by project.
+    Returns a paginated list of datasources. Optionally filtered by project and/or name search.
     """
     try:
-        datasources = await client.get_datasources(
+        result = await client.get_datasources(
             project_id=project_id,
             page_size=page_size,
             page_number=page_number,
+            name_filter=search,
         )
         
-        return [_normalize_datasource(ds) for ds in datasources]
+        datasources = [_normalize_datasource(ds) for ds in result["items"]]
+        pagination = result["pagination"]
+        
+        return PaginatedDatasourcesResponse(
+            datasources=datasources,
+            pagination=PaginationInfo(
+                page_number=pagination["pageNumber"],
+                page_size=pagination["pageSize"],
+                total_available=pagination["totalAvailable"],
+            ),
+        )
         
     except TableauAuthenticationError as e:
         logger.error(f"Authentication error listing datasources: {e}")
@@ -734,11 +750,11 @@ async def get_project_contents(
 
 @router.get(
     "/workbooks",
-    response_model=List[WorkbookResponse],
+    response_model=PaginatedWorkbooksResponse,
     summary="List all workbooks",
-    description="Retrieve a list of all workbooks from Tableau Server. Optionally filtered by project.",
+    description="Retrieve a paginated list of all workbooks from Tableau Server. Optionally filtered by project and/or name search.",
     responses={
-        200: {"description": "List of workbooks"},
+        200: {"description": "Paginated list of workbooks"},
         401: {"model": ErrorResponse, "description": "Authentication failed"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
@@ -747,21 +763,33 @@ async def list_workbooks(
     project_id: Optional[str] = Query(None, description="Filter by project ID"),
     page_size: int = Query(100, ge=1, le=1000, description="Number of results per page"),
     page_number: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    search: Optional[str] = Query(None, description="Search term for workbook name (wildcard search)"),
     client: TableauClient = Depends(get_tableau_client),
-) -> List[WorkbookResponse]:
+) -> PaginatedWorkbooksResponse:
     """
     List all workbooks.
     
-    Returns a paginated list of workbooks. Optionally filtered by project.
+    Returns a paginated list of workbooks. Optionally filtered by project and/or name search.
     """
     try:
-        workbooks = await client.get_workbooks(
+        result = await client.get_workbooks(
             project_id=project_id,
             page_size=page_size,
             page_number=page_number,
+            name_filter=search,
         )
         
-        return [_normalize_workbook(wb) for wb in workbooks]
+        workbooks = [_normalize_workbook(wb) for wb in result["items"]]
+        pagination = result["pagination"]
+        
+        return PaginatedWorkbooksResponse(
+            workbooks=workbooks,
+            pagination=PaginationInfo(
+                page_number=pagination["pageNumber"],
+                page_size=pagination["pageSize"],
+                total_available=pagination["totalAvailable"],
+            ),
+        )
         
     except TableauAuthenticationError as e:
         logger.error(f"Authentication error listing workbooks: {e}")
@@ -793,11 +821,11 @@ async def list_workbooks(
 
 @router.get(
     "/workbooks/{workbook_id}/views",
-    response_model=List[ViewResponse],
+    response_model=PaginatedViewsResponse,
     summary="List views in workbook",
-    description="Retrieve a list of views within a workbook.",
+    description="Retrieve a paginated list of views within a workbook. Optionally filtered by name search.",
     responses={
-        200: {"description": "List of views"},
+        200: {"description": "Paginated list of views"},
         401: {"model": ErrorResponse, "description": "Authentication failed"},
         404: {"model": ErrorResponse, "description": "Workbook not found"},
         500: {"model": ErrorResponse, "description": "Internal server error"},
@@ -807,21 +835,33 @@ async def list_workbook_views(
     workbook_id: str,
     page_size: int = Query(100, ge=1, le=1000, description="Number of results per page"),
     page_number: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    search: Optional[str] = Query(None, description="Search term for view name/caption (wildcard search)"),
     client: TableauClient = Depends(get_tableau_client),
-) -> List[ViewResponse]:
+) -> PaginatedViewsResponse:
     """
     List views in a workbook.
     
-    Returns a paginated list of views within the specified workbook.
+    Returns a paginated list of views within the specified workbook. Optionally filtered by name search.
     """
     try:
-        views = await client.get_workbook_views(
+        result = await client.get_workbook_views(
             workbook_id=workbook_id,
             page_size=page_size,
             page_number=page_number,
+            name_filter=search,
         )
         
-        return [_normalize_view(view) for view in views]
+        views = [_normalize_view(view) for view in result["items"]]
+        pagination = result["pagination"]
+        
+        return PaginatedViewsResponse(
+            views=views,
+            pagination=PaginationInfo(
+                page_number=pagination["pageNumber"],
+                page_size=pagination["pageSize"],
+                total_available=pagination["totalAvailable"],
+            ),
+        )
         
     except TableauAuthenticationError as e:
         logger.error(f"Authentication error listing workbook views: {e}")

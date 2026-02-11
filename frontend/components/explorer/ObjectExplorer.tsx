@@ -146,7 +146,8 @@ export function ObjectExplorer({ onAddToContext, contextObjects = [] }: ObjectEx
     setLoading(true);
     setError(null);
     try {
-      const views = await tableauExplorerApi.listWorkbookViews(workbook.id);
+      const result = await tableauExplorerApi.listWorkbookViews(workbook.id);
+      const views = result.views;
       setSelectedObject({ type: 'workbook', data: workbook, views });
       setBreadcrumbs([
         ...breadcrumbs,

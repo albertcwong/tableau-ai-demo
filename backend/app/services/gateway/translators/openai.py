@@ -53,7 +53,9 @@ class OpenAITranslator(BaseTranslator):
         }
         
         # Payload passes through unchanged, but parse function_call strings back to objects
+        # Remove internal gateway parameters that OpenAI doesn't accept
         payload = request.copy()
+        payload.pop("provider", None)  # Remove provider parameter - OpenAI doesn't accept it
         
         # Fix function_call in messages: gateway model requires strings, but OpenAI needs objects
         if "messages" in payload:

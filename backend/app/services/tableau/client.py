@@ -756,25 +756,35 @@ class TableauClient:
         project_id: Optional[str] = None,
         page_size: int = 100,
         page_number: int = 1,
-    ) -> List[Dict[str, Any]]:
+        name_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Get list of datasources.
+        Get list of datasources with pagination.
         
         Args:
             project_id: Optional project ID to filter by
             page_size: Number of results per page (max 1000)
             page_number: Page number (1-indexed)
+            name_filter: Optional search term for name (wildcard: *term*)
             
         Returns:
-            List of datasource dictionaries
+            Dict with 'items' (list of datasource dicts) and 'pagination' (pageNumber, pageSize, totalAvailable)
         """
         params = {
             "pageSize": min(page_size, 1000),
             "pageNumber": page_number,
         }
         
+        filters = []
         if project_id:
-            params["filter"] = f"projectId:eq:{project_id}"
+            filters.append(f"projectId:eq:{project_id}")
+        if name_filter:
+            # Escape * in user input, then wrap with * for contains search
+            escaped = name_filter.replace("*", "\\*")
+            filters.append(f"name:eq:*{escaped}*")
+        
+        if filters:
+            params["filter"] = ",".join(filters)
         
         # Ensure authenticated first (this will call sign_in if needed)
         # _request also calls _ensure_authenticated, but we need site_id before building endpoint
@@ -788,6 +798,7 @@ class TableauClient:
         logger.info("GET_DATASOURCES CALL")
         logger.info(f"  Site ID being used: '{site_id}'")
         logger.info(f"  Project ID filter: '{project_id}'")
+        logger.info(f"  Name filter: '{name_filter}'")
         logger.info(f"  Page size: {page_size}, Page number: {page_number}")
         
         if not site_id:
@@ -800,8 +811,21 @@ class TableauClient:
         
         response = await self._request("GET", endpoint, params=params)
         
+        # Parse pagination
+        pagination_info = self._parse_pagination(response)
+        
+        # Extract datasources
         datasources = response.get("datasources", {}).get("datasource", [])
-        return datasources if isinstance(datasources, list) else [datasources] if datasources else []
+        items = datasources if isinstance(datasources, list) else [datasources] if datasources else []
+        
+        # If totalAvailable not in pagination, use len(items) as fallback (single page)
+        if pagination_info["totalAvailable"] is None:
+            pagination_info["totalAvailable"] = len(items)
+        
+        return {
+            "items": items,
+            "pagination": pagination_info
+        }
     
     async def get_views(
         self,
@@ -1135,6 +1159,45 @@ class TableauClient:
         
         return result
     
+    def _parse_pagination(self, response: Dict[str, Any]) -> Dict[str, int]:
+        """
+        Parse pagination info from Tableau API response.
+        
+        Pagination can be at top level or under tsResponse.
+        XML format: <pagination pageNumber="1" pageSize="100" totalAvailable="158"/>
+        JSON format: {"pagination": {"pageNumber": 1, "pageSize": 100, "totalAvailable": 158}}
+        
+        Args:
+            response: Response dict (may have tsResponse wrapper)
+            
+        Returns:
+            Dict with pageNumber, pageSize, totalAvailable (or defaults if missing)
+        """
+        # Unwrap tsResponse if present
+        data = response.get("tsResponse", response) if "tsResponse" in response else response
+        
+        pagination = data.get("pagination", {})
+        
+        # Handle XML format: pagination attributes are at top level of pagination dict
+        # Handle JSON format: pagination is an object with keys
+        if isinstance(pagination, dict):
+            page_number = int(pagination.get("pageNumber") or pagination.get("@pageNumber") or 1)
+            page_size = int(pagination.get("pageSize") or pagination.get("@pageSize") or 100)
+            total_available = pagination.get("totalAvailable") or pagination.get("@totalAvailable")
+            if total_available is not None:
+                total_available = int(total_available)
+        else:
+            # Fallback if pagination is not a dict
+            page_number = 1
+            page_size = 100
+            total_available = None
+        
+        return {
+            "pageNumber": page_number,
+            "pageSize": page_size,
+            "totalAvailable": total_available
+        }
+    
     async def get_projects(
         self,
         parent_project_id: Optional[str] = None,
@@ -1237,7 +1300,8 @@ class TableauClient:
         # Get all datasources and filter by project_id client-side
         # (Some Tableau API versions don't support projectId filter for datasources)
         logger.info(f"Fetching all datasources and filtering by project_id: {project_id}")
-        all_datasources = await self.get_datasources(page_size=1000)
+        all_datasources_result = await self.get_datasources(page_size=1000)
+        all_datasources = all_datasources_result["items"]
         
         def matches_project(obj: Dict[str, Any], proj_id: str) -> bool:
             """Check if object belongs to the specified project."""
@@ -1255,13 +1319,15 @@ class TableauClient:
         
         # Get workbooks in project (workbooks API may support projectId filter)
         try:
-            workbooks = await self.get_workbooks(project_id=project_id, page_size=1000)
+            workbooks_result = await self.get_workbooks(project_id=project_id, page_size=1000)
+            workbooks = workbooks_result["items"]
         except TableauAPIError as e:
             # If workbooks filter fails, fetch all and filter client-side
             error_msg = str(e).lower()
             if "projectid" in error_msg or "filter" in error_msg or "400065" in str(e):
                 logger.warning(f"Workbooks API doesn't support projectId filter, filtering client-side: {e}")
-                all_workbooks = await self.get_workbooks(page_size=1000)
+                all_workbooks_result = await self.get_workbooks(page_size=1000)
+                all_workbooks = all_workbooks_result["items"]
                 workbooks = [wb for wb in all_workbooks if matches_project(wb, project_id)]
                 logger.info(f"Filtered to {len(workbooks)} workbooks in project {project_id}")
             else:
@@ -1282,25 +1348,35 @@ class TableauClient:
         project_id: Optional[str] = None,
         page_size: int = 100,
         page_number: int = 1,
-    ) -> List[Dict[str, Any]]:
+        name_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Get list of workbooks.
+        Get list of workbooks with pagination.
         
         Args:
             project_id: Optional project ID to filter by
             page_size: Number of results per page (max 1000)
             page_number: Page number (1-indexed)
+            name_filter: Optional search term for name (wildcard: *term*)
             
         Returns:
-            List of workbook dictionaries
+            Dict with 'items' (list of workbook dicts) and 'pagination' (pageNumber, pageSize, totalAvailable)
         """
         params = {
             "pageSize": min(page_size, 1000),
             "pageNumber": page_number,
         }
         
+        filters = []
         if project_id:
-            params["filter"] = f"projectId:eq:{project_id}"
+            filters.append(f"projectId:eq:{project_id}")
+        if name_filter:
+            # Escape * in user input, then wrap with * for contains search
+            escaped = name_filter.replace("*", "\\*")
+            filters.append(f"name:eq:*{escaped}*")
+        
+        if filters:
+            params["filter"] = ",".join(filters)
         
         await self._ensure_authenticated()
         site_id = self.site_id or ""
@@ -1313,6 +1389,9 @@ class TableauClient:
         
         logger.debug(f"Workbooks response keys: {list(response.keys()) if isinstance(response, dict) else 'not a dict'}")
         
+        # Parse pagination
+        pagination_info = self._parse_pagination(response)
+        
         # Handle both XML (parsed to dict) and JSON response formats
         # Unwrap tsResponse if present
         if "tsResponse" in response:
@@ -1321,7 +1400,7 @@ class TableauClient:
         # Extract workbooks data
         if "workbooks" not in response:
             logger.warning(f"No 'workbooks' key found in response. Keys: {list(response.keys())}")
-            return []
+            return {"items": [], "pagination": pagination_info}
         
         workbooks_data = response["workbooks"]
         
@@ -1332,7 +1411,7 @@ class TableauClient:
             workbook_list = workbooks_data
         else:
             logger.warning(f"Unexpected workbooks_data type: {type(workbooks_data)}")
-            return []
+            return {"items": [], "pagination": pagination_info}
         
         # Normalize to list
         if isinstance(workbook_list, list):
@@ -1342,17 +1421,25 @@ class TableauClient:
         else:
             workbooks = []
         
+        # If totalAvailable not in pagination, use len(items) as fallback (single page)
+        if pagination_info["totalAvailable"] is None:
+            pagination_info["totalAvailable"] = len(workbooks)
+        
         logger.info(f"Found {len(workbooks)} workbooks")
-        return workbooks
+        return {
+            "items": workbooks,
+            "pagination": pagination_info
+        }
     
     async def get_workbook_views(
         self,
         workbook_id: str,
         page_size: int = 100,
         page_number: int = 1,
-    ) -> List[Dict[str, Any]]:
+        name_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Get views within a workbook.
+        Get views within a workbook with pagination.
         
         Uses the workbook-specific endpoint: GET /api/api-version/sites/site-id/workbooks/workbook-id/views
         
@@ -1360,9 +1447,10 @@ class TableauClient:
             workbook_id: Workbook ID
             page_size: Number of results per page (max 1000)
             page_number: Page number (1-indexed)
+            name_filter: Optional search term for view name/caption (wildcard: *term*)
             
         Returns:
-            List of view dictionaries
+            Dict with 'items' (list of view dicts) and 'pagination' (pageNumber, pageSize, totalAvailable)
         """
         await self._ensure_authenticated()
         site_id = self.site_id or ""
@@ -1378,15 +1466,25 @@ class TableauClient:
             "pageNumber": page_number,
         }
         
+        if name_filter:
+            # Escape * in user input, then wrap with * for contains search
+            # Use name field (caption filtering may require separate filter syntax)
+            escaped = name_filter.replace("*", "\\*")
+            params["filter"] = f"name:eq:*{escaped}*"
+        
         logger.info("-" * 80)
         logger.info("GET_WORKBOOK_VIEWS CALL")
         logger.info(f"  Site ID: '{site_id}'")
         logger.info(f"  Workbook ID: '{workbook_id}'")
+        logger.info(f"  Name filter: '{name_filter}'")
         logger.info(f"  Endpoint: {endpoint}")
         logger.info(f"  Page size: {page_size}, Page number: {page_number}")
         logger.info("-" * 80)
         
         response = await self._request("GET", endpoint, params=params)
+        
+        # Parse pagination
+        pagination_info = self._parse_pagination(response)
         
         # Handle both XML (parsed to dict) and JSON response formats
         # Unwrap tsResponse if present
@@ -1403,7 +1501,7 @@ class TableauClient:
             view_list = views_data
         else:
             logger.warning(f"Unexpected views_data type: {type(views_data)}")
-            return []
+            return {"items": [], "pagination": pagination_info}
         
         # Normalize to list
         if isinstance(view_list, list):
@@ -1413,8 +1511,15 @@ class TableauClient:
         else:
             views = []
         
+        # If totalAvailable not in pagination, use len(items) as fallback (single page)
+        if pagination_info["totalAvailable"] is None:
+            pagination_info["totalAvailable"] = len(views)
+        
         logger.info(f"Found {len(views)} views for workbook {workbook_id}")
-        return views
+        return {
+            "items": views,
+            "pagination": pagination_info
+        }
     
     async def get_view(self, view_id: str) -> Dict[str, Any]:
         """

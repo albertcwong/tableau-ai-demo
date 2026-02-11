@@ -17,7 +17,8 @@ import type { TableauConfigOption } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { GripVertical, ChevronDown, ChevronRight, Server, Hash, Calendar, Type, CheckSquare, TextInitial, Sparkles, RefreshCw } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { GripVertical, ChevronDown, ChevronRight, Server, Hash, Calendar, Type, CheckSquare, TextInitial, Sparkles, RefreshCw, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DatasourceSchema, ColumnSchema } from '@/types';
@@ -66,6 +67,24 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const [gridHeight, setGridHeight] = useState(1);
   const [multiViews, setMultiViews] = useState<Array<TableauView | null>>([null]);
   const [enrichedDatasourceIds, setEnrichedDatasourceIds] = useState<Set<string>>(new Set());
+  
+  // Pagination state
+  const [datasourcePagination, setDatasourcePagination] = useState<{ pageNumber: number; totalAvailable: number } | null>(null);
+  const [workbookPagination, setWorkbookPagination] = useState<{ pageNumber: number; totalAvailable: number } | null>(null);
+  const [workbookViewsPagination, setWorkbookViewsPagination] = useState<Map<string, { pageNumber: number; totalAvailable: number }>>(new Map());
+  
+  // Search state
+  const [datasourceSearchTerm, setDatasourceSearchTerm] = useState('');
+  const [debouncedDatasourceSearch, setDebouncedDatasourceSearch] = useState('');
+  const [workbookSearchTerm, setWorkbookSearchTerm] = useState('');
+  const [debouncedWorkbookSearch, setDebouncedWorkbookSearch] = useState('');
+  const [workbookViewSearchTerms, setWorkbookViewSearchTerms] = useState<Map<string, string>>(new Map());
+  const [debouncedWorkbookViewSearchTerms, setDebouncedWorkbookViewSearchTerms] = useState<Map<string, string>>(new Map());
+  
+  // Request cancellation
+  const datasourceAbortController = useRef<AbortController | null>(null);
+  const workbookAbortController = useRef<AbortController | null>(null);
+  const workbookViewsAbortControllers = useRef<Map<string, AbortController>>(new Map());
 
   // Check initial connection state - only restore if configs are available AND token is valid
   useEffect(() => {
@@ -143,7 +162,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     // Only load if connected AND we have a connected config
     // This prevents loading on initial mount when isConnected might be false
     if (isConnected && connectedConfig) {
-      loadDatasourcesAndWorkbooks();
+      loadDatasourcesAndWorkbooks(1, false);
     } else if (!isConnected) {
       // Clear data when disconnected
       setAllDatasources([]);
@@ -156,27 +175,198 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       setSelectedObject(null);
       setError(null);
       setLoadingData(false);
+      setDatasourcePagination(null);
+      setWorkbookPagination(null);
+      setWorkbookViewsPagination(new Map());
+      setDatasourceSearchTerm('');
+      setDebouncedDatasourceSearch('');
+      setWorkbookSearchTerm('');
+      setDebouncedWorkbookSearch('');
+      setWorkbookViewSearchTerms(new Map());
+      setDebouncedWorkbookViewSearchTerms(new Map());
     }
   }, [isConnected, connectedConfig]);
 
-  const loadDatasourcesAndWorkbooks = async () => {
+  // Debounce search terms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedDatasourceSearch(datasourceSearchTerm);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [datasourceSearchTerm]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedWorkbookSearch(workbookSearchTerm);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [workbookSearchTerm]);
+
+  useEffect(() => {
+    const timers: NodeJS.Timeout[] = [];
+    workbookViewSearchTerms.forEach((term, workbookId) => {
+      const timer = setTimeout(() => {
+        setDebouncedWorkbookViewSearchTerms((prev) => {
+          const next = new Map(prev);
+          if (term) {
+            next.set(workbookId, term);
+          } else {
+            next.delete(workbookId);
+          }
+          return next;
+        });
+      }, 400);
+      timers.push(timer);
+    });
+    return () => timers.forEach(clearTimeout);
+  }, [workbookViewSearchTerms]);
+
+  const loadDatasources = async (pageNumber = 1, append = false) => {
     setLoadingData(true);
     setError(null);
 
     try {
-      // Load datasources and workbooks in parallel
-      const [datasources, workbooks] = await Promise.all([
-        tableauExplorerApi.listDatasources(),
-        tableauExplorerApi.listWorkbooks(),
-      ]);
+      // Cancel previous request if any
+      if (datasourceAbortController.current) {
+        datasourceAbortController.current.abort();
+      }
 
-      setAllDatasources(datasources);
-      setAllWorkbooks(workbooks);
+      const newAbortController = new AbortController();
+      datasourceAbortController.current = newAbortController;
+
+      // Only search if term length >= 2
+      const search = debouncedDatasourceSearch.length >= 2 ? debouncedDatasourceSearch : undefined;
+
+      const result = await tableauExplorerApi.listDatasources(6, pageNumber, search);
+
+      // Check if request was aborted
+      if (newAbortController.signal.aborted) {
+        return;
+      }
+
+      if (append) {
+        setAllDatasources((prev) => [...prev, ...result.datasources]);
+      } else {
+        setAllDatasources(result.datasources);
+      }
+
+      setDatasourcePagination({
+        pageNumber: result.pagination.page_number,
+        totalAvailable: result.pagination.total_available,
+      });
     } catch (err) {
-      console.error('Failed to load datasources and workbooks:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load datasources and workbooks');
+      if (err instanceof Error && err.name === 'AbortError') {
+        return; // Ignore aborted requests
+      }
+      console.error('Failed to load datasources:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load datasources');
     } finally {
       setLoadingData(false);
+    }
+  };
+
+  const loadWorkbooks = async (pageNumber = 1, append = false) => {
+    setLoadingData(true);
+    setError(null);
+
+    try {
+      // Cancel previous request if any
+      if (workbookAbortController.current) {
+        workbookAbortController.current.abort();
+      }
+
+      const newAbortController = new AbortController();
+      workbookAbortController.current = newAbortController;
+
+      // Only search if term length >= 2
+      const search = debouncedWorkbookSearch.length >= 2 ? debouncedWorkbookSearch : undefined;
+
+      const result = await tableauExplorerApi.listWorkbooks(6, pageNumber, search);
+
+      // Check if request was aborted
+      if (newAbortController.signal.aborted) {
+        return;
+      }
+
+      if (append) {
+        setAllWorkbooks((prev) => [...prev, ...result.workbooks]);
+      } else {
+        setAllWorkbooks(result.workbooks);
+      }
+
+      setWorkbookPagination({
+        pageNumber: result.pagination.page_number,
+        totalAvailable: result.pagination.total_available,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return; // Ignore aborted requests
+      }
+      console.error('Failed to load workbooks:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load workbooks');
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const loadDatasourcesAndWorkbooks = async () => {
+    await Promise.all([loadDatasources(1, false), loadWorkbooks(1, false)]);
+  };
+
+  // Reload when search terms change (debounced)
+  useEffect(() => {
+    if (isConnected && connectedConfig) {
+      loadDatasources(1, false);
+    }
+  }, [debouncedDatasourceSearch, isConnected, connectedConfig]);
+
+  useEffect(() => {
+    if (isConnected && connectedConfig) {
+      loadWorkbooks(1, false);
+    }
+  }, [debouncedWorkbookSearch, isConnected, connectedConfig]);
+
+  const loadWorkbookViews = async (workbookId: string, pageNumber = 1, append = false) => {
+    try {
+      // Cancel previous request if any
+      const prevController = workbookViewsAbortControllers.current.get(workbookId);
+      if (prevController) {
+        prevController.abort();
+      }
+
+      const newAbortController = new AbortController();
+      workbookViewsAbortControllers.current.set(workbookId, newAbortController);
+
+      const searchTerm = debouncedWorkbookViewSearchTerms.get(workbookId);
+      const search = searchTerm && searchTerm.length >= 2 ? searchTerm : undefined;
+
+      const result = await tableauExplorerApi.listWorkbookViews(workbookId, 50, pageNumber, search);
+
+      // Check if request was aborted
+      if (newAbortController.signal.aborted) {
+        return;
+      }
+
+      if (append) {
+        setWorkbookViews((prev) => {
+          const existing = prev.get(workbookId) || [];
+          return new Map(prev).set(workbookId, [...existing, ...result.views]);
+        });
+      } else {
+        setWorkbookViews((prev) => new Map(prev).set(workbookId, result.views));
+      }
+
+      setWorkbookViewsPagination((prev) =>
+        new Map(prev).set(workbookId, {
+          pageNumber: result.pagination.page_number,
+          totalAvailable: result.pagination.total_available,
+        })
+      );
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return; // Ignore aborted requests
+      }
+      console.error(`Failed to load views for workbook ${workbookId}:`, err);
     }
   };
 
@@ -190,17 +380,24 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       newExpanded.add(workbook.id);
       // Load views if not already loaded
       if (!workbookViews.has(workbook.id)) {
-        try {
-          const views = await tableauExplorerApi.listWorkbookViews(workbook.id);
-          setWorkbookViews(new Map(workbookViews).set(workbook.id, views));
-        } catch (err) {
-          console.error(`Failed to load views for workbook ${workbook.id}:`, err);
-        }
+        await loadWorkbookViews(workbook.id, 1, false);
       }
     }
 
     setExpandedWorkbooks(newExpanded);
   };
+
+  // Reload workbook views when search term changes (debounced)
+  useEffect(() => {
+    expandedWorkbooks.forEach((workbookId) => {
+      const searchTerm = debouncedWorkbookViewSearchTerms.get(workbookId);
+      // Only reload if views are already loaded (search term changed)
+      if (workbookViews.has(workbookId)) {
+        loadWorkbookViews(workbookId, 1, false);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedWorkbookViewSearchTerms, expandedWorkbooks]);
 
   // Handle resize
   useEffect(() => {
@@ -328,15 +525,23 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
           console.log('Datasource not found, loading datasources...');
           try {
             setLoadingData(true);
-            const [datasources, workbooks] = await Promise.all([
-              tableauExplorerApi.listDatasources(),
-              tableauExplorerApi.listWorkbooks(),
+            const [datasourcesResult, workbooksResult] = await Promise.all([
+              tableauExplorerApi.listDatasources(6),
+              tableauExplorerApi.listWorkbooks(6),
             ]);
-            setAllDatasources(datasources);
-            setAllWorkbooks(workbooks);
+            setAllDatasources(datasourcesResult.datasources);
+            setAllWorkbooks(workbooksResult.workbooks);
+            setDatasourcePagination({
+              pageNumber: datasourcesResult.pagination.page_number,
+              totalAvailable: datasourcesResult.pagination.total_available,
+            });
+            setWorkbookPagination({
+              pageNumber: workbooksResult.pagination.page_number,
+              totalAvailable: workbooksResult.pagination.total_available,
+            });
             console.log('Loaded datasources:', datasources.length);
             // Try again after loading
-            datasource = datasources.find(ds => ds.id === datasourceId);
+            datasource = datasourcesResult.datasources.find(ds => ds.id === datasourceId);
             console.log('After loading, found datasource:', datasource ? datasource.name : 'still not found');
           } catch (err) {
             console.error('Failed to load datasources:', err);
@@ -395,8 +600,8 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     setLoadingData(true);
     setError(null);
     try {
-      const views = await tableauExplorerApi.listWorkbookViews(workbook.id);
-      setSelectedObject({ type: 'workbook', data: workbook, views });
+      const result = await tableauExplorerApi.listWorkbookViews(workbook.id);
+      setSelectedObject({ type: 'workbook', data: workbook, views: result.views });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workbook views');
     } finally {
@@ -483,6 +688,29 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                 <div className="flex items-center gap-2 mb-3">
                   <DatasourceIcon className="text-gray-500 dark:text-gray-400" width={18} height={18} />
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Datasources</h3>
+                  {datasourcePagination && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      ({allDatasources.length}{datasourcePagination.totalAvailable > allDatasources.length ? ` / ${datasourcePagination.totalAvailable}` : ''})
+                    </span>
+                  )}
+                </div>
+                <div className="mb-2 relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <Input
+                    type="text"
+                    placeholder="Search datasources..."
+                    value={datasourceSearchTerm}
+                    onChange={(e) => setDatasourceSearchTerm(e.target.value)}
+                    className="h-7 pl-7 pr-7 text-xs"
+                  />
+                  {datasourceSearchTerm && (
+                    <button
+                      onClick={() => setDatasourceSearchTerm('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
                 {loadingData ? (
                   <div className="space-y-2">
@@ -492,7 +720,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                 ) : allDatasources.length === 0 ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">No datasources found</p>
                 ) : (
-                  <div className="space-y-1">
+                  <div className="space-y-1 max-h-[250px] overflow-y-auto">
                     {allDatasources.map((ds) => {
                       const isInContext = contextObjects.some(
                         (ctx) => ctx.object_id === ds.id && ctx.object_type === 'datasource'
@@ -649,6 +877,19 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                         </Card>
                       );
                     })}
+                    {datasourcePagination && datasourcePagination.totalAvailable > allDatasources.length && (
+                      <div className="mt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full h-7 text-xs"
+                          onClick={() => loadDatasources((datasourcePagination.pageNumber || 0) + 1, true)}
+                          disabled={loadingData}
+                        >
+                          Load More ({datasourcePagination.totalAvailable - allDatasources.length} remaining)
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -660,6 +901,29 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                 <div className="flex items-center gap-2 mb-3">
                   <WorkbookIcon className="text-gray-500 dark:text-gray-400" width={18} height={18} />
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Workbooks</h3>
+                  {workbookPagination && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      ({allWorkbooks.length}{workbookPagination.totalAvailable > allWorkbooks.length ? ` / ${workbookPagination.totalAvailable}` : ''})
+                    </span>
+                  )}
+                </div>
+                <div className="mb-2 relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <Input
+                    type="text"
+                    placeholder="Search workbooks..."
+                    value={workbookSearchTerm}
+                    onChange={(e) => setWorkbookSearchTerm(e.target.value)}
+                    className="h-7 pl-7 pr-7 text-xs"
+                  />
+                  {workbookSearchTerm && (
+                    <button
+                      onClick={() => setWorkbookSearchTerm('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
                 {loadingData ? (
                   <div className="space-y-2">
@@ -669,7 +933,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                 ) : allWorkbooks.length === 0 ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">No workbooks found</p>
                 ) : (
-                  <div className="space-y-1">
+                  <div className="space-y-1 max-h-[250px] overflow-y-auto">
                     {allWorkbooks.map((wb) => {
                       const isExpanded = expandedWorkbooks.has(wb.id);
                       const views = workbookViews.get(wb.id) || [];
@@ -713,6 +977,36 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                           
                           {isExpanded && (
                             <div className="px-2 pb-2 border-t border-gray-200 dark:border-gray-700 mt-1 pt-2">
+                              <div className="mb-2 relative">
+                                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
+                                <Input
+                                  type="text"
+                                  placeholder="Search views..."
+                                  value={workbookViewSearchTerms.get(wb.id) || ''}
+                                  onChange={(e) => {
+                                    const newTerms = new Map(workbookViewSearchTerms);
+                                    if (e.target.value) {
+                                      newTerms.set(wb.id, e.target.value);
+                                    } else {
+                                      newTerms.delete(wb.id);
+                                    }
+                                    setWorkbookViewSearchTerms(newTerms);
+                                  }}
+                                  className="h-6 pl-6 pr-6 text-xs"
+                                />
+                                {workbookViewSearchTerms.get(wb.id) && (
+                                  <button
+                                    onClick={() => {
+                                      const newTerms = new Map(workbookViewSearchTerms);
+                                      newTerms.delete(wb.id);
+                                      setWorkbookViewSearchTerms(newTerms);
+                                    }}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
                               {views.length === 0 ? (
                                 <div className="text-xs text-gray-500 dark:text-gray-400">No views found</div>
                               ) : (
@@ -769,11 +1063,40 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                                   })}
                                 </div>
                               )}
+                              {(() => {
+                                const pagination = workbookViewsPagination.get(wb.id);
+                                return pagination && pagination.totalAvailable > views.length ? (
+                                  <div className="mt-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="w-full h-6 text-xs"
+                                      onClick={() => loadWorkbookViews(wb.id, (pagination.pageNumber || 0) + 1, true)}
+                                      disabled={loadingData}
+                                    >
+                                      Load More ({pagination.totalAvailable - views.length} remaining)
+                                    </Button>
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
                           )}
                         </Card>
                       );
                     })}
+                    {workbookPagination && workbookPagination.totalAvailable > allWorkbooks.length && (
+                      <div className="mt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full h-7 text-xs"
+                          onClick={() => loadWorkbooks((workbookPagination.pageNumber || 0) + 1, true)}
+                          disabled={loadingData}
+                        >
+                          Load More ({workbookPagination.totalAvailable - allWorkbooks.length} remaining)
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

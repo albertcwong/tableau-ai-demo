@@ -23,6 +23,9 @@ import type {
   ChatContext,
   AddContextRequest,
   RemoveContextRequest,
+  PaginatedDatasourcesResponse,
+  PaginatedWorkbooksResponse,
+  PaginatedViewsResponse,
 } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -640,23 +643,46 @@ export const agentsApi = {
 // Phase 5A: Object Explorer API functions
 export const tableauExplorerApi = {
   // List all datasources
-  listDatasources: async (pageSize = 100, pageNumber = 1): Promise<TableauDatasource[]> => {
+  listDatasources: async (
+    pageSize = 100,
+    pageNumber = 1,
+    search?: string
+  ): Promise<PaginatedDatasourcesResponse> => {
     const params: Record<string, any> = { pageSize, pageNumber };
-    const response = await apiClient.get<TableauDatasource[]>('/api/v1/tableau/datasources', { params });
+    if (search) {
+      params.search = search;
+    }
+    const response = await apiClient.get<PaginatedDatasourcesResponse>('/api/v1/tableau/datasources', { params });
     return response.data;
   },
 
   // List all workbooks
-  listWorkbooks: async (pageSize = 100, pageNumber = 1): Promise<TableauWorkbook[]> => {
+  listWorkbooks: async (
+    pageSize = 100,
+    pageNumber = 1,
+    search?: string
+  ): Promise<PaginatedWorkbooksResponse> => {
     const params: Record<string, any> = { pageSize, pageNumber };
-    const response = await apiClient.get<TableauWorkbook[]>('/api/v1/tableau/workbooks', { params });
+    if (search) {
+      params.search = search;
+    }
+    const response = await apiClient.get<PaginatedWorkbooksResponse>('/api/v1/tableau/workbooks', { params });
     return response.data;
   },
 
   // List views in workbook
-  listWorkbookViews: async (workbookId: string, pageSize = 100, pageNumber = 1): Promise<TableauView[]> => {
-    const response = await apiClient.get<TableauView[]>(`/api/v1/tableau/workbooks/${workbookId}/views`, {
-      params: { pageSize, pageNumber },
+  listWorkbookViews: async (
+    workbookId: string,
+    pageSize = 100,
+    pageNumber = 1,
+    search?: string
+  ): Promise<PaginatedViewsResponse> => {
+    const params: Record<string, any> = { pageSize, pageNumber };
+    if (search) {
+      params.search = search;
+    }
+    const response = await apiClient.get<PaginatedViewsResponse>(`/api/v1/tableau/workbooks/${workbookId}/views`, {
+      params,
     });
     return response.data;
   },

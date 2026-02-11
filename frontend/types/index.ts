@@ -81,6 +81,27 @@ export interface TableauView {
   updated_at?: string;
 }
 
+export interface PaginationInfo {
+  page_number: number;
+  page_size: number;
+  total_available: number;
+}
+
+export interface PaginatedDatasourcesResponse {
+  datasources: TableauDatasource[];
+  pagination: PaginationInfo;
+}
+
+export interface PaginatedWorkbooksResponse {
+  workbooks: TableauWorkbook[];
+  pagination: PaginationInfo;
+}
+
+export interface PaginatedViewsResponse {
+  views: TableauView[];
+  pagination: PaginationInfo;
+}
+
 export interface TableauEmbedUrl {
   view_id: string;
   workbook_id?: string;

@@ -175,6 +175,31 @@ class ColumnSchema(BaseModel):
     is_dimension: bool
 
 
+class PaginationInfo(BaseModel):
+    """Pagination metadata from Tableau API."""
+    page_number: int
+    page_size: int
+    total_available: int
+
+
+class PaginatedDatasourcesResponse(BaseModel):
+    """Paginated response model for datasources."""
+    datasources: List[DatasourceResponse]
+    pagination: PaginationInfo
+
+
+class PaginatedWorkbooksResponse(BaseModel):
+    """Paginated response model for workbooks."""
+    workbooks: List[WorkbookResponse]
+    pagination: PaginationInfo
+
+
+class PaginatedViewsResponse(BaseModel):
+    """Paginated response model for views."""
+    views: List[ViewResponse]
+    pagination: PaginationInfo
+
+
 class DatasourceSchemaResponse(BaseModel):
     """Response model for datasource schema."""
     datasource_id: str
