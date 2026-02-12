@@ -43,7 +43,7 @@ const MAX_WIDTH = 1200; // Maximum width
 const DEFAULT_WIDTH = 384;
 
 export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange, renderedState }: AgentPanelProps) {
-  const [agentType, setAgentType] = useState<AgentType>('general');
+  const [agentType, setAgentType] = useState<AgentType>('vizql');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
   const [threads, setThreads] = useState<ConversationResponse[]>([]);
@@ -71,7 +71,11 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
         setModel(user.preferred_model);
       }
       if (user.preferred_agent_type) {
-        setAgentType(user.preferred_agent_type as AgentType);
+        // Handle migration from 'general' to 'vizql'
+        const agentType = user.preferred_agent_type === 'general' ? 'vizql' : user.preferred_agent_type;
+        if (agentType === 'vizql' || agentType === 'summary') {
+          setAgentType(agentType as AgentType);
+        }
       }
     } catch (err) {
       console.error('Failed to load user preferences:', err);

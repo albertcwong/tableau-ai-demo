@@ -14,6 +14,7 @@ import { TableauConfigManagement } from '@/components/admin/TableauConfigManagem
 import { ProviderConfigManagement } from '@/components/admin/ProviderConfigManagement';
 import { FeedbackManagement } from '@/components/admin/FeedbackManagement';
 import { AuthConfigManagement } from '@/components/admin/AuthConfigManagement';
+import { AgentManagement } from '@/components/admin/AgentManagement';
 import { Home, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -101,13 +102,14 @@ function AdminDashboardContent() {
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Console</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Manage users, Tableau server configurations, AI provider configurations, and view feedback
+            Manage users, agents, Tableau server configurations, AI provider configurations, and view feedback
           </p>
         </div>
 
         <Tabs defaultValue="users" className="space-y-4">
           <TabsList>
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="auth">Authentication</TabsTrigger>
             <TabsTrigger value="tableau">Tableau Connected Apps</TabsTrigger>
             <TabsTrigger value="providers">Providers</TabsTrigger>
@@ -124,6 +126,20 @@ function AdminDashboardContent() {
               </CardHeader>
               <CardContent>
                 <UserManagement />
+              </CardContent>
+            </Card>
+          </TabsContent>
+          
+          <TabsContent value="agents">
+            <Card>
+              <CardHeader>
+                <CardTitle>Agent Management</CardTitle>
+                <CardDescription>
+                  Configure agent versions, enable/disable versions, set defaults, and manage agent-level settings
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AgentManagement />
               </CardContent>
             </Card>
           </TabsContent>

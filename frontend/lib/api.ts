@@ -245,7 +245,7 @@ export interface MessageRequest {
   content: string;
   model?: string;
   provider: string;
-  agent_type?: 'summary' | 'vizql' | 'general';
+  agent_type?: 'summary' | 'vizql';
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
@@ -253,7 +253,7 @@ export interface MessageRequest {
 
 export const chatApi = {
   // Create a new conversation
-  createConversation: async (agentType?: 'general' | 'vizql' | 'summary'): Promise<ConversationResponse> => {
+  createConversation: async (agentType?: 'vizql' | 'summary'): Promise<ConversationResponse> => {
     const url = agentType 
       ? `/api/v1/chat/conversations?agent_type=${agentType}`
       : '/api/v1/chat/conversations';
@@ -295,7 +295,7 @@ export const chatApi = {
   },
 
   // Create a greeting message when agent type changes
-  createGreetingMessage: async (conversationId: number, agentType: 'general' | 'vizql' | 'summary'): Promise<MessageResponse> => {
+  createGreetingMessage: async (conversationId: number, agentType: 'vizql' | 'summary'): Promise<MessageResponse> => {
     const response = await apiClient.post<MessageResponse>(
       `/api/v1/chat/conversations/${conversationId}/greeting?agent_type=${agentType}`
     );
@@ -1138,6 +1138,37 @@ export interface AuthConfigUpdate {
   auth0_tableau_metadata_field?: string;
 }
 
+// Agent Configuration interfaces
+export interface AgentVersionResponse {
+  version: string;
+  is_enabled: boolean;
+  is_default: boolean;
+  description?: string | null;
+}
+
+export interface AgentConfigResponse {
+  agent_name: string;
+  versions: AgentVersionResponse[];
+  default_version?: string | null;
+}
+
+export interface AgentVersionUpdate {
+  is_enabled?: boolean;
+  is_default?: boolean;
+  description?: string;
+}
+
+export interface AgentSettingsResponse {
+  agent_name: string;
+  max_build_retries?: number | null;
+  max_execution_retries?: number | null;
+}
+
+export interface AgentSettingsUpdate {
+  max_build_retries?: number;
+  max_execution_retries?: number;
+}
+
 // VizQL API functions
 export interface EnrichSchemaResponse {
   datasource_id: string;
@@ -1306,6 +1337,57 @@ export const adminApi = {
 
   updateAuthConfig: async (configData: AuthConfigUpdate): Promise<AuthConfigResponse> => {
     const response = await apiClient.put<AuthConfigResponse>('/api/v1/admin/auth-config', configData);
+    return response.data;
+  },
+
+  // Agent management
+  listAgents: async (): Promise<Record<string, AgentVersionResponse[]>> => {
+    const response = await apiClient.get<Record<string, AgentVersionResponse[]>>('/api/v1/admin/agents');
+    return response.data;
+  },
+
+  getAgentVersions: async (agentName: string): Promise<AgentConfigResponse> => {
+    const response = await apiClient.get<AgentConfigResponse>(`/api/v1/admin/agents/${agentName}`);
+    return response.data;
+  },
+
+  getAgentSettings: async (agentName: string): Promise<AgentSettingsResponse> => {
+    const response = await apiClient.get<AgentSettingsResponse>(`/api/v1/admin/agents/${agentName}/settings`);
+    return response.data;
+  },
+
+  updateAgentVersion: async (
+    agentName: string,
+    version: string,
+    config: AgentVersionUpdate
+  ): Promise<AgentVersionResponse> => {
+    const response = await apiClient.put<AgentVersionResponse>(
+      `/api/v1/admin/agents/${agentName}/versions/${version}`,
+      config
+    );
+    return response.data;
+  },
+
+  updateAgentSettings: async (
+    agentName: string,
+    settings: AgentSettingsUpdate
+  ): Promise<AgentSettingsResponse> => {
+    const response = await apiClient.put<AgentSettingsResponse>(
+      `/api/v1/admin/agents/${agentName}/settings`,
+      settings
+    );
+    return response.data;
+  },
+
+  createAgentVersion: async (
+    agentName: string,
+    version: string,
+    config: AgentVersionUpdate
+  ): Promise<AgentVersionResponse> => {
+    const response = await apiClient.post<AgentVersionResponse>(
+      `/api/v1/admin/agents/${agentName}/versions/${version}`,
+      config
+    );
     return response.data;
   },
 };

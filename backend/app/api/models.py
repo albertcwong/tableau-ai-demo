@@ -226,3 +226,39 @@ class ExecuteVDSQueryResponse(BaseModel):
     columns: List[str]
     data: List[List[Any]]
     row_count: int
+
+
+# Agent Configuration Models
+class AgentVersionResponse(BaseModel):
+    """Response model for an agent version configuration."""
+    version: str
+    is_enabled: bool
+    is_default: bool
+    description: Optional[str] = None
+
+
+class AgentConfigResponse(BaseModel):
+    """Response model for agent configuration."""
+    agent_name: str
+    versions: List[AgentVersionResponse]
+    default_version: Optional[str] = None
+
+
+class AgentVersionUpdate(BaseModel):
+    """Request model for updating agent version configuration."""
+    is_enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
+    description: Optional[str] = None
+
+
+class AgentSettingsResponse(BaseModel):
+    """Response model for agent-level settings."""
+    agent_name: str
+    max_build_retries: Optional[int] = None
+    max_execution_retries: Optional[int] = None
+
+
+class AgentSettingsUpdate(BaseModel):
+    """Request model for updating agent-level settings."""
+    max_build_retries: Optional[int] = Field(None, ge=1, le=10)
+    max_execution_retries: Optional[int] = Field(None, ge=1, le=10)

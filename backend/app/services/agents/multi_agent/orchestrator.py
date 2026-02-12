@@ -169,30 +169,98 @@ Return ONLY the JSON array, no other text."""
         # Prepare state for agent
         if agent_type == "vizql":
             from app.core.config import settings
-            graph = AgentGraphFactory.create_vizql_graph()
+            from app.core.database import get_db
+            from app.services.agent_config_service import AgentConfigService
+            
+            # Get default vizql version from DB config
+            db = next(get_db())
+            try:
+                agent_config_service = AgentConfigService(db)
+                vizql_version = agent_config_service.get_default_version('vizql') or 'v3'
+                retry_settings = agent_config_service.get_agent_settings('vizql')
+                max_build_retries = retry_settings.get('max_build_retries')
+                max_execution_retries = retry_settings.get('max_execution_retries')
+            finally:
+                db.close()
+            
+            graph = AgentGraphFactory.create_vizql_graph(
+                version=vizql_version,
+                max_build_retries=max_build_retries,
+                max_execution_retries=max_execution_retries
+            )
             message_history = []
             if input_data:
                 message_history = [{"role": "system", "content": f"Previous step results: {input_data}"}]
-            state = {
-                "user_query": action,
-                "agent_type": "vizql",
-                "context_datasources": context.get("datasources", []),
-                "context_views": context.get("views", []),
-                "messages": message_history,
-                "message_history": message_history,
-                "tool_calls": [],
-                "tool_results": [],
-                "current_thought": None,
-                "final_answer": None,
-                "error": None,
-                "confidence": None,
-                "processing_time": None,
-                "model": self.model,
-                "provider": self.provider,
-                "tableau_client": tableau_client,
-                "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
-                "datasource_id": context.get("datasources", [None])[0] if context.get("datasources") else None,
-            }
+            
+            # Initialize state based on version
+            if vizql_version == "v3":
+                state = {
+                    "user_query": action,
+                    "agent_type": "vizql",
+                    "context_datasources": context.get("datasources", []),
+                    "context_views": context.get("views", []),
+                    "messages": message_history,
+                    "tool_calls": [],
+                    "tool_results": [],
+                    "current_thought": None,
+                    "final_answer": None,
+                    "error": None,
+                    "confidence": None,
+                    "processing_time": None,
+                    "model": self.model,
+                    "provider": self.provider,
+                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                    "build_attempt": 1,
+                    "execution_attempt": 1,
+                    "query_version": 0,
+                    "reasoning_steps": [],
+                    "build_errors": None,
+                    "execution_errors": None,
+                    "enriched_schema": None,
+                    "schema": None,
+                }
+            elif vizql_version == "v2":
+                state = {
+                    "user_query": action,
+                    "message_history": message_history,
+                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                    "datasource_id": context.get("datasources", [None])[0] if context.get("datasources") else None,
+                    "tableau_client": tableau_client,
+                    "raw_data": None,
+                    "tool_calls": [],
+                    "final_answer": None,
+                    "error": None,
+                    "model": self.model,
+                    "provider": self.provider,
+                }
+            else:  # v1
+                state = {
+                    "user_query": action,
+                    "agent_type": "vizql",
+                    "context_datasources": context.get("datasources", []),
+                    "context_views": context.get("views", []),
+                    "messages": [],
+                    "tool_calls": [],
+                    "tool_results": [],
+                    "current_thought": None,
+                    "final_answer": None,
+                    "error": None,
+                    "confidence": None,
+                    "processing_time": None,
+                    "model": self.model,
+                    "provider": self.provider,
+                    "schema": None,
+                    "required_measures": [],
+                    "required_dimensions": [],
+                    "required_filters": {},
+                    "query_draft": None,
+                    "query_version": 0,
+                    "is_valid": False,
+                    "validation_errors": [],
+                    "validation_suggestions": [],
+                    "query_results": None,
+                    "execution_error": None,
+                }
             
             result = await graph.ainvoke(state)
             return {
@@ -235,7 +303,7 @@ Return ONLY the JSON array, no other text."""
             }
         
         else:
-            # General agent - use simple chat
+            # LLM fallback for non-vizql/summary steps (internal use only, not user-selectable)
             from app.services.ai.client import UnifiedAIClient
             from app.core.config import settings
             
@@ -257,7 +325,7 @@ Return ONLY the JSON array, no other text."""
             )
             
             return {
-                "agent_type": "general",
+                "agent_type": "llm_fallback",  # Internal fallback, not user-selectable
                 "result": response.content,
                 "state": {}
             }

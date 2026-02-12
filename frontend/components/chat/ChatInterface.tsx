@@ -24,8 +24,8 @@ export interface ChatInterfaceProps {
   className?: string;
   defaultModel?: string;
   hideModelSelector?: boolean;
-  agentType?: 'summary' | 'vizql' | 'general';
-  onAgentTypeChange?: (agentType: 'summary' | 'vizql' | 'general') => void;
+  agentType?: 'summary' | 'vizql';
+  onAgentTypeChange?: (agentType: 'summary' | 'vizql') => void;
   context?: ChatContextObject[];
   onRemoveContext?: (objectId: string) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
@@ -38,7 +38,7 @@ export function ChatInterface({
   className,
   defaultModel = DEFAULT_MODEL,
   hideModelSelector = false,
-  agentType = 'general',
+  agentType = 'vizql',
   onAgentTypeChange,
   context = [],
   onRemoveContext,
@@ -60,7 +60,7 @@ export function ChatInterface({
   const [error, setError] = useState<Error | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const previousAgentTypeRef = useRef<'general' | 'vizql' | 'summary'>(agentType);
+  const previousAgentTypeRef = useRef<'vizql' | 'summary'>(agentType);
 
   // Sync selectedModel when defaultModel prop changes
   useEffect(() => {

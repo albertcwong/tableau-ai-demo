@@ -94,10 +94,10 @@ class Settings(BaseSettings):
     AUTH0_ISSUER: str = ""
     BACKEND_API_URL: str = "http://localhost:8000"  # Backend API URL for MCP Server
     
-    # VizQL Agent
-    VIZQL_AGENT_TYPE: str = "tool_use"  # "tool_use", "graph_based", "controlled", or "streamlined"
-    VIZQL_MAX_BUILD_RETRIES: int = 3  # Maximum number of query build/refinement attempts (default: 3)
-    VIZQL_MAX_EXECUTION_RETRIES: int = 3  # Maximum number of execution retry attempts (default: 3)
+    # VizQL Agent (DEPRECATED - use admin panel agent config instead)
+    VIZQL_AGENT_TYPE: str = "tool_use"  # DEPRECATED: Use admin panel to configure agent versions. Fallback only.
+    VIZQL_MAX_BUILD_RETRIES: int = 3  # DEPRECATED: Use admin panel to configure retry settings. Fallback only.
+    VIZQL_MAX_EXECUTION_RETRIES: int = 3  # DEPRECATED: Use admin panel to configure retry settings. Fallback only.
     
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE) if ENV_FILE.exists() else ".env",
@@ -152,6 +152,29 @@ class Settings(BaseSettings):
         if v > 100:
             raise ValueError('Pool size should not exceed 100')
         return v
+    
+    @model_validator(mode='after')
+    def warn_deprecated_vizql_config(self):
+        """Warn about deprecated VizQL config env vars."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Check if deprecated vars are set (non-default values)
+        if self.VIZQL_AGENT_TYPE != "tool_use":
+            logger.warning(
+                "VIZQL_AGENT_TYPE env var is deprecated. "
+                "Please configure agent versions via the admin panel at /admin/agents. "
+                "This env var is kept for backward compatibility only."
+            )
+        
+        if self.VIZQL_MAX_BUILD_RETRIES != 3 or self.VIZQL_MAX_EXECUTION_RETRIES != 3:
+            logger.warning(
+                "VIZQL_MAX_BUILD_RETRIES and VIZQL_MAX_EXECUTION_RETRIES env vars are deprecated. "
+                "Please configure retry settings via the admin panel at /admin/agents/vizql/settings. "
+                "These env vars are kept for backward compatibility only."
+            )
+        
+        return self
 
 
 settings = Settings()

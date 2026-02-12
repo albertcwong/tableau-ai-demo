@@ -1,6 +1,6 @@
 """Admin API endpoints."""
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
@@ -10,7 +10,13 @@ from app.core.auth import get_password_hash
 from app.api.auth import get_current_admin_user
 from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType, UserTableauServerMapping, AuthConfig
 from app.models.chat import Message, Conversation, ChatContext
+from app.models.agent_config import AgentConfig
 from app.services.auth_config_service import get_auth_config, update_auth_config
+from app.services.agent_config_service import AgentConfigService
+from app.api.models import (
+    AgentConfigResponse, AgentVersionResponse, AgentVersionUpdate,
+    AgentSettingsResponse, AgentSettingsUpdate
+)
 
 
 def get_provider_type_value(provider_type) -> str:

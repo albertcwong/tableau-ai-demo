@@ -60,7 +60,8 @@ class MessageRequest(BaseModel):
     content: str = Field(..., min_length=1, description="Message content")
     model: str = Field(default="gpt-4", description="AI model to use")
     provider: str = Field(..., description="Provider name (e.g., 'openai', 'apple', 'vertex')")
-    agent_type: Optional[str] = Field(None, description="Agent type: 'summary', 'vizql', 'multi_agent', or 'general'")
+    agent_type: Optional[str] = Field(None, description="Agent type: 'summary', 'vizql', or 'multi_agent'")
+    agent_version: Optional[str] = Field(None, description="Agent version (e.g., 'v1', 'v2', 'v3' for vizql). Defaults to DB default.")
     stream: bool = Field(default=False, description="Whether to stream the response")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
@@ -125,7 +126,7 @@ def get_current_user_optional(
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     request: Request,
-    agent_type: Optional[str] = Query(None, description="Agent type for personalized greeting: 'general', 'vizql', or 'summary'"),
+    agent_type: Optional[str] = Query(None, description="Agent type for personalized greeting: 'vizql' or 'summary'"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
@@ -143,8 +144,8 @@ async def create_conversation(
     }
     
     # Default greeting if agent_type is not provided or invalid
-    agent_type_normalized = agent_type.lower() if agent_type else 'general'
-    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['general'])
+    agent_type_normalized = agent_type.lower() if agent_type else 'vizql'
+    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['vizql'])
     
     # Create initial greeting message from assistant
     greeting_message = Message(
@@ -168,7 +169,7 @@ async def create_conversation(
 @router.post("/conversations/{conversation_id}/greeting", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def create_greeting_message(
     conversation_id: int,
-    agent_type: str = Query(..., description="Agent type for personalized greeting: 'general', 'vizql', or 'summary'"),
+    agent_type: str = Query(..., description="Agent type for personalized greeting: 'vizql' or 'summary'"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
@@ -180,14 +181,13 @@ async def create_greeting_message(
     
     # Personalized greetings per agent type
     greeting_messages = {
-        'general': "Hello! I'm your General Agent assistant. I can help you explore Tableau objects, answer questions about your data, and assist with general queries. What would you like to know?",
         'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
         'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
     }
     
-    # Normalize agent type
-    agent_type_normalized = agent_type.lower() if agent_type else 'general'
-    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['general'])
+    # Normalize agent type (default to vizql)
+    agent_type_normalized = agent_type.lower() if agent_type else 'vizql'
+    greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['vizql'])
     
     # Create greeting message
     greeting_message = Message(
@@ -391,22 +391,7 @@ async def build_agent_messages(
                 "content": system_prompt
             })
     
-    elif agent_type == 'general' or not agent_type:
-        # General Agent: Include context but use general tools
-        if datasource_ids or view_ids:
-            system_prompt = "You are a General Agent helping users interact with Tableau. "
-            system_prompt += "You have access to Tableau objects in context.\n\n"
-            
-            if datasource_ids:
-                system_prompt += f"Context Datasources: {', '.join(datasource_ids)}\n"
-            if view_ids:
-                system_prompt += f"Context Views: {', '.join(view_ids)}\n"
-            
-            messages.insert(0, {
-                "role": "system",
-                "content": system_prompt
-            })
-    
+    # Note: General agent removed - default to vizql if no agent_type specified
     return messages
 
 
@@ -476,7 +461,7 @@ async def send_message(
     
     # Tableau client is provided via dependency (uses user's selected config from X-Tableau-Config-Id header)
     # Require connection for Tableau-dependent agents
-    resolved_agent_type = request.agent_type or 'general'
+    resolved_agent_type = request.agent_type or 'vizql'  # Default to vizql instead of general
     if resolved_agent_type in ('vizql', 'summary', 'multi_agent') and (datasource_ids or view_ids):
         if not tableau_client:
             raise HTTPException(
@@ -484,13 +469,6 @@ async def send_message(
                 detail="Please connect to Tableau first using the Connect button.",
                 headers={"X-Error-Code": "TABLEAU_NOT_CONNECTED"},
             )
-    # Fallback for general agent only (backward compatibility)
-    elif not tableau_client:
-        try:
-            tableau_client = TableauClient()
-        except Exception as e:
-            logger.warning(f"Could not create fallback Tableau client: {e}")
-            tableau_client = None
     
     # Initialize feedback manager for query refinement
     from app.services.agents.feedback import FeedbackManager
@@ -509,14 +487,14 @@ async def send_message(
 
     try:
         # Route to agent graphs if agent_type is specified and context is available
-        agent_type = request.agent_type or 'general'
+        agent_type = request.agent_type or 'vizql'  # Default to vizql instead of general
         
         # Check if multi-agent is needed (either explicitly requested or detected)
         use_multi_agent = False
         if agent_type == 'multi_agent':
             use_multi_agent = True
-        elif agent_type == 'general' or not agent_type:
-            # Use meta-agent to determine if multi-agent is needed
+        elif not agent_type or agent_type == 'vizql':
+            # Use meta-agent to determine if multi-agent is needed (when no explicit agent_type)
             from app.services.agents.meta_agent import MetaAgentSelector
             meta_selector = MetaAgentSelector(model=request.model, provider=provider)
             selection = await meta_selector.select_agent(
@@ -525,7 +503,8 @@ async def send_message(
                     "datasources": datasource_ids,
                     "views": view_ids,
                     "conversation_history": history_messages[-5:] if history_messages else []
-                }
+                },
+                available_agents=["vizql", "summary", "multi_agent"]  # Remove general from available agents
             )
             if selection.get("requires_multi_agent") or selection.get("selected_agent") == "multi_agent":
                 use_multi_agent = True
@@ -669,7 +648,7 @@ async def send_message(
                         tokens_used=None,
                         feedback=assistant_message.feedback,
                         total_time_ms=assistant_message.total_time_ms,
-                        vizql_query=None,  # Not available for general agent
+                        vizql_query=None,  # Not available for multi-agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -704,42 +683,37 @@ async def send_message(
             debugger = get_debugger()
             node_states = []  # Track node states for debugging
             
-            # Check which agent type to use
-            agent_type_setting = settings.VIZQL_AGENT_TYPE
-            use_tool_use = agent_type_setting == "tool_use"
-            use_controlled = agent_type_setting == "controlled"
-            use_streamlined = agent_type_setting == "streamlined"
+            # Get agent version and retry settings from DB config
+            from app.services.agent_config_service import AgentConfigService
+            agent_config_service = AgentConfigService(db)
+            
+            # Get version (use request param or DB default)
+            agent_version = request.agent_version
+            if not agent_version:
+                agent_version = agent_config_service.get_default_version('vizql') or 'v3'
+            
+            # Validate version is enabled
+            if not agent_config_service.is_version_enabled('vizql', agent_version):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"VizQL version '{agent_version}' is not enabled. Available versions: {', '.join(agent_config_service.get_enabled_versions('vizql'))}"
+                )
+            
+            # Get retry settings from DB (with fallback to env vars)
+            retry_settings = agent_config_service.get_agent_settings('vizql')
+            max_build_retries = retry_settings.get('max_build_retries')
+            max_execution_retries = retry_settings.get('max_execution_retries')
+            
+            # Create graph with version and retry settings
             graph = AgentGraphFactory.create_vizql_graph(
-                use_tool_use=use_tool_use,
-                use_controlled=use_controlled,
-                use_streamlined=use_streamlined
+                version=agent_version,
+                max_build_retries=max_build_retries,
+                max_execution_retries=max_execution_retries
             )
             
-            # Initialize state for VizQL agent
-            if use_controlled:
-                # Controlled graph state
-                message_history = []
-                for msg in history_messages:
-                    msg_dict = {
-                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
-                        "content": msg.content
-                    }
-                    message_history.append(msg_dict)
-                
-                logger.info(f"Initializing controlled graph state with model: {request.model}")
-                initial_state = {
-                    "user_query": refined_query,
-                    "datasource_id": datasource_ids[0] if datasource_ids else None,
-                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
-                    "tableau_client": tableau_client,
-                    "message_history": message_history,
-                    "model": request.model,
-                    "provider": provider_for_state,
-                    "attempt": 1,  # Controlled agent still uses attempt
-                    "current_thought": None,
-                }
-            elif use_streamlined:
-                # Streamlined agent state
+            # Initialize state for VizQL agent based on version
+            if agent_version == "v3":
+                # Streamlined agent state (v3)
                 message_history = []
                 for msg in history_messages:
                     msg_dict = {
@@ -753,7 +727,7 @@ async def send_message(
                             msg_dict["query_results"] = msg.extra_metadata.get('query_results')
                     message_history.append(msg_dict)
                 
-                logger.info(f"Initializing streamlined graph state with model: {request.model}")
+                logger.info(f"Initializing streamlined graph state (v3) with model: {request.model}")
                 initial_state = {
                     "user_query": refined_query,
                     "agent_type": "vizql",
@@ -779,10 +753,8 @@ async def send_message(
                     "enriched_schema": None,  # Optional - can be pre-fetched
                     "schema": None,  # Will be fetched if needed
                 }
-            elif use_tool_use:
-                # Tool-use agent state (simplified)
-                # Format message history for tool-use agent
-                # Convert database messages to format expected by tool-use agent
+            elif agent_version == "v2":
+                # Tool-use agent state (v2)
                 tool_use_message_history = []
                 for msg in history_messages:
                     msg_dict = {
@@ -790,13 +762,11 @@ async def send_message(
                         "content": msg.content
                     }
                     # Add metadata and dimension values for assistant messages with query results
-                    # Dimension values provide structured context for follow-up queries
                     if msg.role == MessageRole.ASSISTANT and msg.extra_metadata:
                         if isinstance(msg.extra_metadata, dict):
                             vizql_query = msg.extra_metadata.get('vizql_query')
                             query_results = msg.extra_metadata.get('query_results')
                             if query_results:
-                                # Include metadata + dimension values (NOT full data array)
                                 row_count = query_results.get('row_count', len(query_results.get('data', [])))
                                 columns = query_results.get('columns', [])
                                 dimension_values = query_results.get('dimension_values', {})
@@ -804,17 +774,13 @@ async def send_message(
                                 msg_dict["data_metadata"] = {
                                     "row_count": row_count,
                                     "columns": columns,
-                                    "dimension_values": dimension_values  # Add structured dimension values
+                                    "dimension_values": dimension_values
                                 }
-                                logger.info(f"Added query_results metadata to message history for message {msg.id}: {row_count} rows, {len(columns)} columns, {len(dimension_values)} dimensions (data array excluded)")
                             if vizql_query:
                                 msg_dict["original_query"] = str(vizql_query)
                     tool_use_message_history.append(msg_dict)
                 
-                logger.info(f"Formatted message history: {len(tool_use_message_history)} messages")
-                logger.info(f"Messages with data: {sum(1 for m in tool_use_message_history if 'data' in m)}")
-                
-                logger.info(f"Initializing tool-use agent state with model: {request.model}")
+                logger.info(f"Initializing tool-use agent state (v2) with model: {request.model}")
                 initial_state = {
                     "user_query": refined_query,
                     "message_history": tool_use_message_history,
@@ -825,12 +791,11 @@ async def send_message(
                     "tool_calls": [],
                     "final_answer": None,
                     "error": None,
-                    "model": request.model,  # Use the model from the request
+                    "model": request.model,
                     "provider": provider_for_state,
                 }
-                logger.info(f"Initial state model field: {initial_state.get('model')}")
-            else:
-                # Graph-based agent state (original)
+            else:  # v1
+                # Graph-based agent state (v1 - original)
                 initial_state = {
                     "user_query": refined_query,
                     "agent_type": "vizql",
@@ -1782,7 +1747,7 @@ async def send_message(
                         tokens_used=None,
                         feedback=assistant_message.feedback,
                         total_time_ms=assistant_message.total_time_ms,
-                        vizql_query=None,  # Not available for general agent
+                        vizql_query=None,  # Not available for multi-agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,
@@ -1987,7 +1952,7 @@ async def send_message(
                         tokens_used=assistant_message.tokens_used,
                         feedback=assistant_message.feedback,
                         total_time_ms=assistant_message.total_time_ms,
-                        vizql_query=None,  # Not available for general agent
+                        vizql_query=None,  # Not available for multi-agent
                         created_at=assistant_message.created_at
                     ),
                     conversation_id=request.conversation_id,

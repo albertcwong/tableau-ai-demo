@@ -1,6 +1,6 @@
 """Streamlined VizQL agent graph implementation."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -19,7 +19,10 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def create_streamlined_vizql_graph() -> StateGraph:
+def create_streamlined_vizql_graph(
+    max_build_retries: Optional[int] = None,
+    max_execution_retries: Optional[int] = None
+) -> StateGraph:
     """
     Create streamlined VizQL agent graph.
     
@@ -54,15 +57,18 @@ def create_streamlined_vizql_graph() -> StateGraph:
     workflow.add_edge("build_query", "pre_validation")
     workflow.add_edge("pre_validation", "validate_query")
     
+    # Use provided retry config or fall back to settings
+    _max_build_retries = max_build_retries if max_build_retries is not None else settings.VIZQL_MAX_BUILD_RETRIES
+    _max_execution_retries = max_execution_retries if max_execution_retries is not None else settings.VIZQL_MAX_EXECUTION_RETRIES
+    
     # Conditional routing from validator
     def route_after_validation(state: StreamlinedVizQLState) -> str:
         """Route based on validation result."""
         is_valid = state.get("is_valid", False)
         build_attempt = state.get("build_attempt", 1)
-        max_build_retries = settings.VIZQL_MAX_BUILD_RETRIES
         error = state.get("error")
         
-        logger.info(f"route_after_validation: is_valid={is_valid}, build_attempt={build_attempt}, max={max_build_retries}, error={error}")
+        logger.info(f"route_after_validation: is_valid={is_valid}, build_attempt={build_attempt}, max={_max_build_retries}, error={error}")
         
         # Check for errors first
         if error:
@@ -75,12 +81,12 @@ def create_streamlined_vizql_graph() -> StateGraph:
             return "execute"
         
         # Invalid query - check if we can retry build
-        if build_attempt > max_build_retries:
-            logger.info(f"Routing to error_handler (build_attempt {build_attempt} > max {max_build_retries})")
+        if build_attempt > _max_build_retries:
+            logger.info(f"Routing to error_handler (build_attempt {build_attempt} > max {_max_build_retries})")
             return "error_handler"
         
         # Retry build_query with errors (build_attempt will be incremented in build_query node)
-        logger.info(f"Routing to retry build_query (build_attempt {build_attempt} <= max {max_build_retries})")
+        logger.info(f"Routing to retry build_query (build_attempt {build_attempt} <= max {_max_build_retries})")
         return "retry"
     
     workflow.add_conditional_edges(
@@ -98,9 +104,8 @@ def create_streamlined_vizql_graph() -> StateGraph:
         """Route after execution - check for errors."""
         execution_status = state.get("execution_status")
         execution_attempt = state.get("execution_attempt", 1)
-        max_execution_retries = settings.VIZQL_MAX_EXECUTION_RETRIES
         
-        logger.info(f"route_after_execution: execution_status={execution_status}, execution_attempt={execution_attempt}, max={max_execution_retries}")
+        logger.info(f"route_after_execution: execution_status={execution_status}, execution_attempt={execution_attempt}, max={_max_execution_retries}")
         
         if execution_status == "success":
             logger.info("Routing to format_results (execution successful)")
@@ -108,13 +113,13 @@ def create_streamlined_vizql_graph() -> StateGraph:
         
         # Execution failed - check if we can retry execution
         # execution_attempt will be incremented in query_builder, so check if next attempt would exceed max
-        if execution_attempt >= max_execution_retries:
-            logger.info(f"Routing to error_handler (execution_attempt {execution_attempt} >= max {max_execution_retries})")
+        if execution_attempt >= _max_execution_retries:
+            logger.info(f"Routing to error_handler (execution_attempt {execution_attempt} >= max {_max_execution_retries})")
             return "error_handler"
         
         # Retry build_query with errors
         # build_attempt will be reset to 1 in query_builder when retrying after execution failure
-        logger.info(f"Routing to retry build_query (execution_attempt {execution_attempt} < max {max_execution_retries})")
+        logger.info(f"Routing to retry build_query (execution_attempt {execution_attempt} < max {_max_execution_retries})")
         return "retry"
     
     workflow.add_conditional_edges(

@@ -40,7 +40,7 @@ class MetaAgentSelector:
             Dictionary with selected agent, confidence, and reasoning
         """
         if available_agents is None:
-            available_agents = ["vizql", "summary", "general", "multi_agent"]
+            available_agents = ["vizql", "summary", "multi_agent"]
         
         selection_prompt = self._build_selection_prompt(
             user_query=user_query,

@@ -184,12 +184,66 @@ export function ViewEmbedder({
           }
         });
 
+        // Listen for errors from the tableau-viz component
+        viz.addEventListener('error', (event: any) => {
+          if (!mounted) return;
+          const errorDetail = event.detail || {};
+          const errorMessage = errorDetail.message || errorDetail.error || 'Unknown error';
+          
+          // Check for SSL certificate errors
+          if (errorMessage.includes('ERR_CERT') || 
+              errorMessage.includes('certificate') || 
+              errorMessage.includes('SSL') ||
+              errorMessage.includes('TLS') ||
+              errorMessage.includes('Common Name')) {
+            const certErrorMsg = 'SSL Certificate Error: The Tableau server\'s SSL certificate is invalid or doesn\'t match the hostname. ' +
+              'This is a browser security restriction. Solutions: ' +
+              '1) Configure your Tableau server with a valid SSL certificate, ' +
+              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or ' +
+              '3) Access the application over HTTP if security allows.';
+            setError(certErrorMsg);
+            setLoading(false);
+            onError?.(new Error(certErrorMsg));
+            return;
+          }
+          
+          setError(errorMessage);
+          setLoading(false);
+          onError?.(new Error(errorMessage));
+        });
+
+        // Monitor network errors via window error handler
+        const handleWindowError = (event: ErrorEvent) => {
+          const errorMsg = event.message || '';
+          if (errorMsg.includes('ERR_CERT') || 
+              errorMsg.includes('net::ERR_CERT_COMMON_NAME_INVALID') ||
+              errorMsg.includes('Failed to load resource')) {
+            const certErrorMsg = 'SSL Certificate Error: The Tableau server\'s SSL certificate is invalid or doesn\'t match the hostname. ' +
+              'This is a browser security restriction. Solutions: ' +
+              '1) Configure your Tableau server with a valid SSL certificate, ' +
+              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or ' +
+              '3) Access the application over HTTP if security allows.';
+            if (mounted) {
+              setError(certErrorMsg);
+              setLoading(false);
+              onError?.(new Error(certErrorMsg));
+            }
+          }
+        };
+
+        window.addEventListener('error', handleWindowError);
+
         // Set loading to false after a timeout as fallback
         setTimeout(() => {
           if (mounted) {
             setLoading(false);
           }
         }, 5000);
+
+        // Cleanup error handler
+        return () => {
+          window.removeEventListener('error', handleWindowError);
+        };
 
       } catch (err) {
         if (!mounted) return;
