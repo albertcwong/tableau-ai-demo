@@ -1,13 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { adminApi, AgentConfigResponse, AgentVersionResponse, AgentVersionUpdate, AgentSettingsResponse, AgentSettingsUpdate } from '@/lib/api';
+import { adminApi, AgentVersionResponse, AgentSettingsResponse, AgentSettingsUpdate } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Save, RefreshCw } from 'lucide-react';
 import { extractErrorMessage } from '@/lib/utils';
 
@@ -51,39 +50,18 @@ export function AgentManagement() {
     }
   };
 
-  const handleToggleVersion = async (agentName: string, version: string, currentEnabled: boolean) => {
+  const handleSetActive = async (agentName: string, version: string) => {
     try {
       setSaving(`${agentName}-${version}`);
       setError(null);
       setSuccess(null);
       
-      await adminApi.updateAgentVersion(agentName, version, {
-        is_enabled: !currentEnabled
-      });
+      await adminApi.setActiveVersion(agentName, version);
       
       await loadAgents();
-      setSuccess(`Version ${version} ${!currentEnabled ? 'enabled' : 'disabled'} successfully`);
+      setSuccess(`Active version set to ${version} for ${agentName}`);
     } catch (err: unknown) {
-      setError(extractErrorMessage(err, 'Failed to update version'));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const handleSetDefault = async (agentName: string, version: string) => {
-    try {
-      setSaving(`${agentName}-${version}-default`);
-      setError(null);
-      setSuccess(null);
-      
-      await adminApi.updateAgentVersion(agentName, version, {
-        is_default: true
-      });
-      
-      await loadAgents();
-      setSuccess(`Default version set to ${version} for ${agentName}`);
-    } catch (err: unknown) {
-      setError(extractErrorMessage(err, 'Failed to set default version'));
+      setError(extractErrorMessage(err, 'Failed to set active version'));
     } finally {
       setSaving(null);
     }
@@ -157,7 +135,7 @@ export function AgentManagement() {
         <div>
           <h2 className="text-xl font-semibold">Agent Versions</h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Manage agent versions, enable/disable versions, and set defaults
+            Select which version is used in chat
           </p>
         </div>
         <Button onClick={loadAgents} variant="outline" size="sm">
@@ -180,67 +158,44 @@ export function AgentManagement() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Versions */}
+              {/* Version selector */}
               <div>
-                <h3 className="text-sm font-medium mb-3">Versions</h3>
+                <h3 className="text-sm font-medium mb-3">Active version</h3>
                 <div className="space-y-2">
                   {versions.map((version) => {
-                    const savingKey = `${agentName}-${version.version}`;
-                    const savingDefaultKey = `${agentName}-${version.version}-default`;
-                    const isSaving = saving === savingKey || saving === savingDefaultKey;
-                    
+                    const isActive = version.is_default;
+                    const isSaving = saving === `${agentName}-${version.version}`;
                     return (
                       <div
                         key={version.version}
                         className="flex items-center justify-between p-3 border rounded-lg bg-gray-50 dark:bg-gray-800"
                       >
-                        <div className="flex items-center gap-3 flex-1">
-                          <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-3 flex-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`agent-${agentName}`}
+                            checked={isActive}
+                            onChange={() => !isActive && handleSetActive(agentName, version.version)}
+                            disabled={isSaving}
+                            className="h-4 w-4"
+                          />
+                          <div>
                             <span className="font-medium">{version.version}</span>
-                            {version.is_default && (
-                              <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                                Default
-                              </span>
-                            )}
-                            {!version.is_enabled && (
-                              <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
-                                Disabled
+                            {version.description && (
+                              <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">
+                                {version.description}
                               </span>
                             )}
                           </div>
-                          {version.description && (
-                            <span className="text-sm text-gray-600 dark:text-gray-400">
-                              {version.description}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {!version.is_default && version.is_enabled && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleSetDefault(agentName, version.version)}
-                              disabled={isSaving}
-                            >
-                              {isSaving && saving === savingDefaultKey ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                'Set Default'
-                              )}
-                            </Button>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <Checkbox
-                              id={`toggle-${agentName}-${version.version}`}
-                              checked={version.is_enabled}
-                              onCheckedChange={() => handleToggleVersion(agentName, version.version, version.is_enabled)}
-                              disabled={isSaving}
-                            />
-                            <Label htmlFor={`toggle-${agentName}-${version.version}`} className="text-sm cursor-pointer">
-                              Enabled
-                            </Label>
-                          </div>
-                        </div>
+                        </label>
+                        {isActive && (
+                          <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                            Active
+                          </span>
+                        )}
+                        {isSaving && (
+                          <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                        )}
                       </div>
                     );
                   })}

@@ -74,6 +74,13 @@ export function ViewEmbedder({
           }
         }
 
+        // Check for potential SSL certificate issues with EC2 hostnames
+        const embedUrl = new URL(embedData.url);
+        if (embedUrl.hostname.includes('ec2-') && embedUrl.hostname.includes('.compute.amazonaws.com')) {
+          console.warn('Warning: Tableau server is using an EC2 hostname which may have SSL certificate issues. ' +
+            'If you encounter ERR_CERT_COMMON_NAME_INVALID errors, configure a valid SSL certificate or use a reverse proxy.');
+        }
+
         setEmbedInfo(embedData);
       } catch (err: any) {
         if (!mounted) return;
@@ -169,28 +176,23 @@ export function ViewEmbedder({
         containerRef.current!.appendChild(viz);
         vizRef.current = viz;
 
-        // Wait for the web component to load
-        viz.addEventListener('firstinteractive', () => {
-          if (mounted) {
+        let viewLoaded = false;
+        const markLoaded = () => {
+          if (!viewLoaded && mounted) {
+            viewLoaded = true;
             setLoading(false);
           }
-        });
+        };
 
-        // Handle errors from the web component
-        viz.addEventListener('tabswitched', () => {
-          // View loaded successfully
-          if (mounted) {
-            setLoading(false);
-          }
-        });
+        viz.addEventListener('firstinteractive', markLoaded);
+        viz.addEventListener('tabswitched', markLoaded);
 
         // Listen for errors from the tableau-viz component
-        viz.addEventListener('error', (event: any) => {
-          if (!mounted) return;
+        const handleVizError = (event: any) => {
+          if (!mounted || viewLoaded) return;
           const errorDetail = event.detail || {};
           const errorMessage = errorDetail.message || errorDetail.error || 'Unknown error';
           
-          // Check for SSL certificate errors
           if (errorMessage.includes('ERR_CERT') || 
               errorMessage.includes('certificate') || 
               errorMessage.includes('SSL') ||
@@ -210,39 +212,37 @@ export function ViewEmbedder({
           setError(errorMessage);
           setLoading(false);
           onError?.(new Error(errorMessage));
-        });
-
-        // Monitor network errors via window error handler
-        const handleWindowError = (event: ErrorEvent) => {
-          const errorMsg = event.message || '';
-          if (errorMsg.includes('ERR_CERT') || 
-              errorMsg.includes('net::ERR_CERT_COMMON_NAME_INVALID') ||
-              errorMsg.includes('Failed to load resource')) {
-            const certErrorMsg = 'SSL Certificate Error: The Tableau server\'s SSL certificate is invalid or doesn\'t match the hostname. ' +
-              'This is a browser security restriction. Solutions: ' +
-              '1) Configure your Tableau server with a valid SSL certificate, ' +
-              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or ' +
-              '3) Access the application over HTTP if security allows.';
-            if (mounted) {
-              setError(certErrorMsg);
-              setLoading(false);
-              onError?.(new Error(certErrorMsg));
-            }
-          }
         };
 
-        window.addEventListener('error', handleWindowError);
+        viz.addEventListener('error', handleVizError);
 
-        // Set loading to false after a timeout as fallback
-        setTimeout(() => {
-          if (mounted) {
+        // Extended timeout - only show error if view never loaded
+        const extendedTimeout = setTimeout(() => {
+          if (mounted && !viewLoaded) {
+            const certErrorMsg = 'View failed to load after extended timeout. ' +
+              'If you see "ERR_CERT_COMMON_NAME_INVALID" in the browser console, this indicates an SSL certificate issue. ' +
+              'Solutions: 1) Configure your Tableau server with a valid SSL certificate matching the hostname, ' +
+              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or ' +
+              '3) Access the application over HTTP if security allows.';
+            setError(certErrorMsg);
+            setLoading(false);
+            onError?.(new Error(certErrorMsg));
+          }
+        }, 15000);
+
+        // Normal timeout - just hide loading spinner (view may still be loading)
+        const normalTimeout = setTimeout(() => {
+          if (mounted && !viewLoaded) {
             setLoading(false);
           }
         }, 5000);
 
-        // Cleanup error handler
         return () => {
-          window.removeEventListener('error', handleWindowError);
+          viz.removeEventListener('firstinteractive', markLoaded);
+          viz.removeEventListener('tabswitched', markLoaded);
+          viz.removeEventListener('error', handleVizError);
+          clearTimeout(extendedTimeout);
+          clearTimeout(normalTimeout);
         };
 
       } catch (err) {

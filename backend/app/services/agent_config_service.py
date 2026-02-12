@@ -162,52 +162,38 @@ class AgentConfigService:
             for config in configs
         ]
     
-    def update_version_config(
-        self,
-        agent_name: str,
-        version: str,
-        is_enabled: Optional[bool] = None,
-        is_default: Optional[bool] = None,
-        description: Optional[str] = None
-    ) -> AgentConfig:
-        """Update version configuration.
+    def set_active_version(self, agent_name: str, version: str) -> AgentConfig:
+        """Set the active version for an agent. Only one version can be active at a time.
         
         Args:
-            agent_name: Agent name
-            version: Version string
-            is_enabled: Optional enabled flag
-            is_default: Optional default flag (if True, unset other defaults for this agent)
-            description: Optional description
+            agent_name: Agent name (e.g., 'vizql', 'summary')
+            version: Version string to activate
             
         Returns:
-            Updated AgentConfig instance
+            Updated AgentConfig instance for the active version
         """
         config = self.db.query(AgentConfig).filter(
             and_(
                 AgentConfig.agent_name == agent_name,
-                AgentConfig.version == version
+                AgentConfig.version == version,
+                AgentConfig.version != 'settings'
             )
         ).first()
         
         if not config:
             raise ValueError(f"Agent config not found: {agent_name} {version}")
         
-        if is_enabled is not None:
-            config.is_enabled = is_enabled
+        # Disable all other versions for this agent
+        self.db.query(AgentConfig).filter(
+            and_(
+                AgentConfig.agent_name == agent_name,
+                AgentConfig.version != 'settings'
+            )
+        ).update({'is_enabled': False, 'is_default': False})
         
-        if is_default is not None:
-            if is_default:
-                # Unset other defaults for this agent
-                self.db.query(AgentConfig).filter(
-                    and_(
-                        AgentConfig.agent_name == agent_name,
-                        AgentConfig.is_default == True
-                    )
-                ).update({'is_default': False})
-            config.is_default = is_default
-        
-        if description is not None:
-            config.description = description
+        # Enable and set as default for selected version
+        config.is_enabled = True
+        config.is_default = True
         
         self.db.commit()
         self.db.refresh(config)

@@ -1356,14 +1356,13 @@ export const adminApi = {
     return response.data;
   },
 
-  updateAgentVersion: async (
+  setActiveVersion: async (
     agentName: string,
-    version: string,
-    config: AgentVersionUpdate
+    version: string
   ): Promise<AgentVersionResponse> => {
     const response = await apiClient.put<AgentVersionResponse>(
-      `/api/v1/admin/agents/${agentName}/versions/${version}`,
-      config
+      `/api/v1/admin/agents/${agentName}/active-version`,
+      { version }
     );
     return response.data;
   },

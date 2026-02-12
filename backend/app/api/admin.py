@@ -1178,6 +1178,81 @@ class AuthConfigUpdate(BaseModel):
     auth0_tableau_metadata_field: Optional[str] = None
 
 
+# Agent management
+@router.get("/admin/agents")
+async def list_agents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """List all agents with their versions."""
+    service = AgentConfigService(db)
+    agents = service.get_all_agents()
+    return agents
+
+
+@router.get("/admin/agents/{agent_name}/settings", response_model=AgentSettingsResponse)
+async def get_agent_settings(
+    agent_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Get agent-level settings (e.g. retry config for vizql)."""
+    service = AgentConfigService(db)
+    settings_dict = service.get_agent_settings(agent_name)
+    return AgentSettingsResponse(
+        agent_name=agent_name,
+        max_build_retries=settings_dict.get('max_build_retries'),
+        max_execution_retries=settings_dict.get('max_execution_retries')
+    )
+
+
+class ActiveVersionUpdate(BaseModel):
+    """Request model for setting active agent version."""
+    version: str
+
+
+@router.put("/admin/agents/{agent_name}/active-version", response_model=AgentVersionResponse)
+async def set_active_agent_version(
+    agent_name: str,
+    body: ActiveVersionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Set the active version for an agent. Only one version can be active at a time."""
+    service = AgentConfigService(db)
+    try:
+        updated = service.set_active_version(agent_name=agent_name, version=body.version)
+        return AgentVersionResponse(
+            version=updated.version,
+            is_enabled=updated.is_enabled,
+            is_default=updated.is_default,
+            description=updated.description
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.put("/admin/agents/{agent_name}/settings", response_model=AgentSettingsResponse)
+async def update_agent_settings(
+    agent_name: str,
+    settings_data: AgentSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Update agent-level settings (retry config)."""
+    service = AgentConfigService(db)
+    updated = service.update_agent_settings(
+        agent_name=agent_name,
+        max_build_retries=settings_data.max_build_retries,
+        max_execution_retries=settings_data.max_execution_retries
+    )
+    return AgentSettingsResponse(
+        agent_name=agent_name,
+        max_build_retries=updated.max_build_retries,
+        max_execution_retries=updated.max_execution_retries
+    )
+
+
 @router.get("/admin/auth-config", response_model=AuthConfigResponse)
 async def get_auth_config_endpoint(
     db: Session = Depends(get_db),
