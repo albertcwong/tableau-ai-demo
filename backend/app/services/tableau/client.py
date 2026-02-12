@@ -1658,7 +1658,7 @@ class TableauClient:
         Get view metadata.
         
         Args:
-            view_id: View ID (LUID)
+            view_id: View ID (LUID; commas/suffixes like ,1:1 are stripped)
             
         Returns:
             Dictionary with view information
@@ -1669,7 +1669,8 @@ class TableauClient:
         if not site_id:
             raise ValueError("Site ID not available.")
         
-        endpoint = f"sites/{site_id}/views/{view_id}"
+        clean_view_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        endpoint = f"sites/{site_id}/views/{clean_view_id}"
         response = await self._request("GET", endpoint)
         
         view_data = response.get("view", {})
@@ -1678,7 +1679,8 @@ class TableauClient:
     async def get_view_data(
         self,
         view_id: str,
-        max_rows: int = 1000
+        max_rows: int = 1000,
+        filters: Optional[Dict[str, str | List[str]]] = None
     ) -> Dict[str, Any]:
         """
         Get data from a view using Tableau Data API.
@@ -1686,10 +1688,13 @@ class TableauClient:
         Uses: GET /api/api-version/sites/site-id/views/view-id/data
         
         Note: This endpoint returns CSV format, not JSON, so we need to handle it specially.
+        Supports view filters via vf_fieldname=value query params.
         
         Args:
-            view_id: View ID
+            view_id: View ID (LUID; commas/suffixes like ,1:1 are stripped)
             max_rows: Maximum number of rows to return
+            filters: Optional dict of field_name -> value or list of values.
+                     e.g. {"Region": "West"} or {"Category": ["Technology", "Furniture"]}
             
         Returns:
             Dictionary with columns and data
@@ -1700,8 +1705,19 @@ class TableauClient:
         if not site_id:
             raise ValueError("Site ID not available.")
         
-        endpoint = f"sites/{site_id}/views/{view_id}/data"
-        params = {"maxAge": 0}  # Get fresh data
+        # Strip invalid suffixes (e.g. ,1:1) - Tableau LUIDs are alphanumeric
+        clean_view_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        
+        endpoint = f"sites/{site_id}/views/{clean_view_id}/data"
+        params: Dict[str, Any] = {"maxAge": 0}  # Get fresh data
+        
+        if filters:
+            for field_name, value in filters.items():
+                vf_key = f"vf_{field_name}"
+                if isinstance(value, list):
+                    params[vf_key] = ",".join(str(v) for v in value)
+                else:
+                    params[vf_key] = str(value)
         
         try:
             # The /views/{view_id}/data endpoint returns CSV, not JSON

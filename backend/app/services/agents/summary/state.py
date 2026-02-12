@@ -14,6 +14,9 @@ class SummaryAgentState(BaseAgentState):
     views_data: Optional[dict]  # Dict mapping view_id -> view_data
     views_metadata: Optional[dict]  # Dict mapping view_id -> view_metadata
     
+    # Embedded dashboard state (from client-side capture)
+    embedded_state: Optional[dict]  # Per-view: { view_id: { filters, active_sheet, summary_data, sheets_data, ... } }
+    
     # Analysis results
     column_stats: Optional[dict]  # Mean, median, std dev for numeric columns (can be dict of view_id -> stats for multiple views)
     trends: list[dict]  # Detected trends (includes view_id and view_name for multi-view)

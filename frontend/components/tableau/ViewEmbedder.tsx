@@ -156,7 +156,9 @@ export function ViewEmbedder({
 
         // Create new tableau-viz web component using Tableau Embedding API v3
         const viz = document.createElement('tableau-viz') as HTMLElement;
-        
+        viz.id = `tableau-viz-${viewId}`;
+        viz.setAttribute('data-view-id', viewId);
+
         // Set required attributes per Tableau Embedding API v3 documentation
         viz.setAttribute('src', embedInfo.url);
         if (embedInfo.token) {

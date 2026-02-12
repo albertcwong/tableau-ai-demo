@@ -1,5 +1,6 @@
 """Admin API endpoints."""
 import logging
+from pathlib import Path
 from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, HttpUrl
@@ -1251,6 +1252,46 @@ async def update_agent_settings(
         max_build_retries=updated.max_build_retries,
         max_execution_retries=updated.max_execution_retries
     )
+
+
+# Prompt file paths per agent (active version)
+_AGENT_SYSTEM_PROMPTS: Dict[str, List[str]] = {
+    "vizql": ["agents/vizql/query_construction.txt"],
+    "summary": ["agents/summary/system.txt", "agents/summary/insight_generation.txt", "agents/summary/final_summary.txt"],
+}
+
+
+class SystemPromptResponse(BaseModel):
+    """Response model for system prompt content."""
+    content: str
+
+
+@router.get("/admin/agents/{agent_name}/system-prompt", response_model=SystemPromptResponse)
+async def get_agent_system_prompt(
+    agent_name: str,
+    version: Optional[str] = Query(None, description="Version (uses active if omitted)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Get read-only system prompt content for an agent/version."""
+    prompts_dir = Path(__file__).parent.parent / "prompts"
+    paths = _AGENT_SYSTEM_PROMPTS.get(agent_name.lower())
+    if not paths:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No system prompts for agent: {agent_name}")
+
+    parts: List[str] = []
+    for rel_path in paths:
+        full_path = prompts_dir / rel_path
+        if full_path.exists():
+            try:
+                parts.append(f"# {rel_path}\n\n{full_path.read_text(encoding='utf-8')}")
+            except Exception as e:
+                logger.warning(f"Failed to read prompt {rel_path}: {e}")
+                parts.append(f"# {rel_path}\n\n(Error reading file)")
+        else:
+            parts.append(f"# {rel_path}\n\n(File not found)")
+
+    return SystemPromptResponse(content="\n\n---\n\n".join(parts) if parts else "(No prompts)")
 
 
 @router.get("/admin/auth-config", response_model=AuthConfigResponse)

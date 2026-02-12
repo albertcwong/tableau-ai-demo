@@ -29,6 +29,7 @@ export interface ChatInterfaceProps {
   context?: ChatContextObject[];
   onRemoveContext?: (objectId: string) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
+  onCaptureEmbeddedState?: (viewIds: string[]) => Promise<Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>>;
 }
 
 const DEFAULT_MODEL = 'gpt-4';
@@ -43,6 +44,7 @@ export function ChatInterface({
   context = [],
   onRemoveContext,
   onLoadQuery,
+  onCaptureEmbeddedState,
 }: ChatInterfaceProps) {
   const [conversationId, setConversationId] = useState<number | null>(
     initialConversationId || null
@@ -59,6 +61,7 @@ export function ChatInterface({
   const [reasoningTotalTimeMs, setReasoningTotalTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const previousAgentTypeRef = useRef<'vizql' | 'summary'>(agentType);
 
@@ -261,7 +264,20 @@ export function ChatInterface({
           setIsStreaming(false);
           return;
         }
-        
+
+        const viewIds = context.filter((c) => c.object_type === 'view').map((c) => c.object_id);
+        let embedded_state: Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState> | undefined;
+        if (agentType === 'summary' && viewIds.length > 0 && onCaptureEmbeddedState) {
+          try {
+            setIsCapturing(true);
+            embedded_state = await onCaptureEmbeddedState(viewIds);
+          } catch (e) {
+            console.warn('Could not capture embedded state:', e);
+          } finally {
+            setIsCapturing(false);
+          }
+        }
+
         await chatApi.sendMessageStream(
           {
             conversation_id: conversationId,
@@ -270,6 +286,7 @@ export function ChatInterface({
             provider: providerToUse,
             agent_type: agentType,
             stream: true,
+            embedded_state,
           },
           (chunk: string) => {
             // Legacy text chunk handler (for backward compatibility)
@@ -764,6 +781,13 @@ export function ChatInterface({
           onSend={handleSendMessage}
           onCancel={isStreaming ? handleCancelMessage : undefined}
           disabled={isLoading || !conversationId}
+          placeholder={
+            isCapturing
+              ? 'Capturing dashboard state...'
+              : agentType === 'summary' && context.some((c) => c.object_type === 'view')
+                ? 'Summarize current view (filters applied when available)'
+                : 'Type a message...'
+          }
         />
         <div className="flex gap-4 pt-1">
           {onAgentTypeChange && (

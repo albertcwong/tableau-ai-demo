@@ -797,7 +797,92 @@ class TestChatAPIErrorHandling:
             data = response.json()
             assert "message" in data
             assert len(data["message"]["content"]) > 0
-    
+
+    def test_summary_agent_with_embedded_state(
+        self, client, db_session, test_conversation,
+        test_view_context, mock_tableau_for_chat, mock_ai_client
+    ):
+        """Test Summary agent uses embedded_state when present (skips REST API)."""
+        # Use graph without checkpointer to avoid serializing tableau_client mock
+        from langgraph.graph import StateGraph, END
+        from app.services.agents.summary.state import SummaryAgentState
+        from app.services.agents.summary.nodes.data_fetcher import fetch_data_node
+        from app.services.agents.summary.nodes.analyzer import analyze_data_node
+        from app.services.agents.summary.nodes.insight_gen import generate_insights_node
+        from app.services.agents.summary.nodes.summarizer import summarize_node
+
+        def _create_no_checkpoint():
+            w = StateGraph(SummaryAgentState)
+            w.add_node("data_fetcher", fetch_data_node)
+            w.add_node("analyzer", analyze_data_node)
+            w.add_node("insight_gen", generate_insights_node)
+            w.add_node("summarizer", summarize_node)
+            w.set_entry_point("data_fetcher")
+            w.add_edge("data_fetcher", "analyzer")
+            w.add_edge("analyzer", "insight_gen")
+            w.add_edge("insight_gen", "summarizer")
+            w.add_edge("summarizer", END)
+            return w.compile()
+
+        with patch(
+            "app.services.agents.summary.graph.create_summary_graph",
+            side_effect=_create_no_checkpoint,
+        ):
+            insight_response = ChatResponse(
+                content=json.dumps({
+                    "insights": ["Data from embedded capture shows regional breakdown"],
+                    "recommendations": []
+                }),
+                model="gpt-4",
+                tokens_used=150,
+                prompt_tokens=100,
+                completion_tokens=50,
+                finish_reason="stop",
+                function_call=None
+            )
+            summary_response = ChatResponse(
+                content="Summary from embedded view data...",
+                model="gpt-4",
+                tokens_used=200,
+                prompt_tokens=120,
+                completion_tokens=80,
+                finish_reason="stop",
+                function_call=None
+            )
+            mock_ai_client.chat = AsyncMock(side_effect=[insight_response, summary_response])
+
+            embedded_state = {
+                "test-view-456": {
+                    "sheet_type": "worksheet",
+                    "summary_data": {
+                        "columns": ["Region", "Sales"],
+                        "data": [["West", "1500"], ["East", "2000"]],
+                        "row_count": 2,
+                    },
+                    "captured_at": "2024-01-01T00:00:00Z",
+                }
+            }
+
+            response = client.post(
+                "/api/v1/chat/message",
+                json={
+                    "conversation_id": test_conversation.id,
+                    "content": "summarize this view",
+                    "agent_type": "summary",
+                    "model": "gpt-4",
+                    "provider": "openai",
+                    "stream": False,
+                    "embedded_state": embedded_state,
+                }
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert "message" in data
+            assert len(data["message"]["content"]) > 0
+            # When embedded_state has summary_data, data_fetcher uses it; REST API not called
+            assert not mock_tableau_for_chat.get_view_data.called
+
     def test_summary_agent_with_missing_view(
         self, client, db_session, test_conversation,
         mock_tableau_client, mock_ai_client

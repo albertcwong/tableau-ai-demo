@@ -29,6 +29,7 @@ function HomeContent() {
   } | null>(null);
   const addToContextRef = useRef<((objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void) | null>(null);
   const loadQueryRef = useRef<((datasourceId: string, query: Record<string, any>) => void) | null>(null);
+  const captureEmbeddedStateRef = useRef<((viewIds: string[]) => Promise<Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>>) | null>(null);
 
   const handleLogout = async () => {
     await logout();
@@ -143,6 +144,7 @@ function HomeContent() {
               onAddToContext={handleAddToContext}
               contextObjects={contextObjects}
               onLoadQueryRef={loadQueryRef}
+              onCaptureEmbeddedStateRef={captureEmbeddedStateRef}
               onDatasourceSelect={setSelectedDatasource}
               activeThreadId={activeThreadId}
               onRenderedStateChange={setRenderedState}
@@ -161,6 +163,7 @@ function HomeContent() {
             selectedDatasource={selectedDatasource ? { id: selectedDatasource.id, name: selectedDatasource.name } : null}
             onActiveThreadChange={handleActiveThreadChange}
             renderedState={renderedState}
+            onCaptureEmbeddedState={async (viewIds) => captureEmbeddedStateRef.current?.(viewIds) ?? {}}
             onLoadQuery={(datasourceId, query) => {
               console.log('page.tsx onLoadQuery called:', { datasourceId, query, loadQueryRef: loadQueryRef.current });
               // Use the ref to call ThreePanelLayout's load query handler

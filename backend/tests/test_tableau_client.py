@@ -360,6 +360,49 @@ async def test_query_datasource_success(tableau_client, mock_httpx_client):
 
 
 @pytest.mark.asyncio
+async def test_get_view_data_with_filters(tableau_client, mock_httpx_client):
+    """Test get_view_data passes vf_ params for filters."""
+    tableau_client.auth_token = "test-token"
+    tableau_client.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    tableau_client.site_content_url = "test-site"
+
+    csv_response = Mock()
+    csv_response.text = "Region,Sales\nWest,100\n"
+    csv_response.headers = {"content-type": "text/csv"}
+    csv_response.raise_for_status = Mock()
+    mock_httpx_client.get = AsyncMock(return_value=csv_response)
+
+    result = await tableau_client.get_view_data("v-123", filters={"Region": "West"})
+
+    assert result["columns"] == ["Region", "Sales"]
+    assert result["row_count"] == 1
+    call_args = mock_httpx_client.get.call_args
+    assert call_args.kwargs["params"]["vf_Region"] == "West"
+
+
+@pytest.mark.asyncio
+async def test_get_view_data_with_multi_value_filters(tableau_client, mock_httpx_client):
+    """Test get_view_data passes vf_ params for multi-value filters as comma-separated."""
+    tableau_client.auth_token = "test-token"
+    tableau_client.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    tableau_client.site_content_url = "test-site"
+
+    csv_response = Mock()
+    csv_response.text = "Category,Sales\nTechnology,500\n"
+    csv_response.headers = {"content-type": "text/csv"}
+    csv_response.raise_for_status = Mock()
+    mock_httpx_client.get = AsyncMock(return_value=csv_response)
+
+    await tableau_client.get_view_data(
+        "v-456",
+        filters={"Category": ["Technology", "Furniture"]},
+    )
+
+    call_args = mock_httpx_client.get.call_args
+    assert call_args.kwargs["params"]["vf_Category"] == "Technology,Furniture"
+
+
+@pytest.mark.asyncio
 async def test_get_view_embed_url_success(tableau_client, mock_httpx_client):
     """Test successful get_view_embed_url call."""
     tableau_client.auth_token = "test-token"

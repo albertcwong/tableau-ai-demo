@@ -287,14 +287,14 @@ Return ONLY the JSON array, no other text."""
                 "processing_time": None,
                 "model": self.model,
                 "provider": self.provider,
-                "tableau_client": tableau_client,
             }
             
             # If we have query results from VizQL agent, use them
             if input_data and "query_results" in input_data:
                 state["view_data"] = input_data["query_results"]
             
-            result = await graph.ainvoke(state)
+            config = {"configurable": {"thread_id": f"summary-{id(self)}", "tableau_client": tableau_client}}
+            result = await graph.ainvoke(state, config=config)
             return {
                 "agent_type": "summary",
                 "result": result.get("final_answer"),

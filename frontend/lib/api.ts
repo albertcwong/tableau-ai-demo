@@ -249,6 +249,7 @@ export interface MessageRequest {
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  embedded_state?: Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>;
 }
 
 export const chatApi = {
@@ -1353,6 +1354,18 @@ export const adminApi = {
 
   getAgentSettings: async (agentName: string): Promise<AgentSettingsResponse> => {
     const response = await apiClient.get<AgentSettingsResponse>(`/api/v1/admin/agents/${agentName}/settings`);
+    return response.data;
+  },
+
+  getAgentSystemPrompt: async (
+    agentName: string,
+    version?: string
+  ): Promise<{ content: string }> => {
+    const params = version ? { version } : {};
+    const response = await apiClient.get<{ content: string }>(
+      `/api/v1/admin/agents/${agentName}/system-prompt`,
+      { params }
+    );
     return response.data;
   },
 

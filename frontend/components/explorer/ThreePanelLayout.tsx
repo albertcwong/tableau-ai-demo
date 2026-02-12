@@ -23,6 +23,8 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DatasourceSchema, ColumnSchema } from '@/types';
 import { WorkbookIcon, DatasourceIcon, ViewIcon } from '@/components/icons';
+import { captureEmbeddedStateForViews } from '@/lib/tableauEmbeddedState';
+import type { EmbeddedViewState } from '@/lib/tableauEmbeddedState';
 
 type SelectedObject =
   | { type: 'datasource'; data: TableauDatasource }
@@ -34,6 +36,7 @@ interface ThreePanelLayoutProps {
   onAddToContext?: (objectId: string, objectType: 'datasource' | 'view', objectName?: string) => void;
   contextObjects?: Array<{ object_id: string; object_type: 'datasource' | 'view' }>;
   onLoadQueryRef?: React.MutableRefObject<((datasourceId: string, query: Record<string, any>) => void) | null>;
+  onCaptureEmbeddedStateRef?: React.MutableRefObject<((viewIds: string[]) => Promise<Record<string, EmbeddedViewState>>) | null>;
   onDatasourceSelect?: (datasource: TableauDatasource | null) => void;
   activeThreadId?: number | null;
   onRenderedStateChange?: (state: {
@@ -46,7 +49,7 @@ const MIN_LEFT_PANEL_WIDTH = 250;
 const MAX_LEFT_PANEL_WIDTH = 600;
 const DEFAULT_LEFT_PANEL_WIDTH = 320;
 
-export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onDatasourceSelect, activeThreadId, onRenderedStateChange }: ThreePanelLayoutProps) {
+export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQueryRef, onCaptureEmbeddedStateRef, onDatasourceSelect, activeThreadId, onRenderedStateChange }: ThreePanelLayoutProps) {
   const { isAuthenticated } = useAuth();
   const [allDatasources, setAllDatasources] = useState<TableauDatasource[]>([]);
   const [allWorkbooks, setAllWorkbooks] = useState<TableauWorkbook[]>([]);
@@ -85,6 +88,16 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const datasourceAbortController = useRef<AbortController | null>(null);
   const workbookAbortController = useRef<AbortController | null>(null);
   const workbookViewsAbortControllers = useRef<Map<string, AbortController>>(new Map());
+
+  // Expose capture function for AgentPanel
+  useEffect(() => {
+    if (!onCaptureEmbeddedStateRef) return;
+    onCaptureEmbeddedStateRef.current = (viewIds: string[]) =>
+      captureEmbeddedStateForViews(viewIds);
+    return () => {
+      onCaptureEmbeddedStateRef!.current = null;
+    };
+  }, [onCaptureEmbeddedStateRef]);
 
   // Check initial connection state - only restore if configs are available AND token is valid
   useEffect(() => {
@@ -626,16 +639,6 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       setMultiViews(newViews);
     } else {
       setMultiViews([view]);
-    }
-    
-    // Add to context if not already there
-    if (onAddToContext) {
-      const isInContext = contextObjects.some(
-        (ctx) => ctx.object_id === view.id && ctx.object_type === 'view'
-      );
-      if (!isInContext) {
-        onAddToContext(view.id, 'view', view.name);
-      }
     }
   };
 

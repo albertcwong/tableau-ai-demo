@@ -1,23 +1,38 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { adminApi, AgentVersionResponse, AgentSettingsResponse, AgentSettingsUpdate } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Save, RefreshCw } from 'lucide-react';
+import { Loader2, Save, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { extractErrorMessage } from '@/lib/utils';
 
 export function AgentManagement() {
   const [agents, setAgents] = useState<Record<string, AgentVersionResponse[]>>({});
   const [settings, setSettings] = useState<Record<string, AgentSettingsResponse>>({});
+  const [systemPrompts, setSystemPrompts] = useState<Record<string, string>>({});
+  const [promptLoading, setPromptLoading] = useState<Record<string, boolean>>({});
+  const [promptExpanded, setPromptExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [editingSettings, setEditingSettings] = useState<Record<string, AgentSettingsUpdate>>({});
+
+  const loadSystemPrompt = useCallback(async (agentName: string, version: string) => {
+    setPromptLoading((prev) => ({ ...prev, [agentName]: true }));
+    try {
+      const { content } = await adminApi.getAgentSystemPrompt(agentName, version);
+      setSystemPrompts((prev) => ({ ...prev, [agentName]: content }));
+    } catch {
+      setSystemPrompts((prev) => ({ ...prev, [agentName]: '(Failed to load)' }));
+    } finally {
+      setPromptLoading((prev) => ({ ...prev, [agentName]: false }));
+    }
+  }, []);
 
   useEffect(() => {
     loadAgents();
@@ -30,15 +45,13 @@ export function AgentManagement() {
       setSuccess(null);
       const agentsData = await adminApi.listAgents();
       setAgents(agentsData);
-      
-      // Load settings for each agent
+
       const settingsData: Record<string, AgentSettingsResponse> = {};
       for (const agentName of Object.keys(agentsData)) {
         try {
           const agentSettings = await adminApi.getAgentSettings(agentName);
           settingsData[agentName] = agentSettings;
         } catch (err) {
-          // Some agents may not have settings (like summary)
           console.warn(`No settings for agent ${agentName}:`, err);
         }
       }
@@ -55,10 +68,15 @@ export function AgentManagement() {
       setSaving(`${agentName}-${version}`);
       setError(null);
       setSuccess(null);
-      
+
       await adminApi.setActiveVersion(agentName, version);
-      
+
       await loadAgents();
+      setSystemPrompts((prev) => {
+        const next = { ...prev };
+        delete next[agentName];
+        return next;
+      });
       setSuccess(`Active version set to ${version} for ${agentName}`);
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Failed to set active version'));
@@ -281,6 +299,54 @@ export function AgentManagement() {
                   )}
                 </div>
               )}
+
+              {/* System prompt (read-only) for active version */}
+              {(() => {
+                const activeVersion = versions.find((v) => v.is_default);
+                if (!activeVersion) return null;
+                const isExpanded = promptExpanded[agentName] ?? false;
+                const promptContent = systemPrompts[agentName];
+                const isLoading = promptLoading[agentName];
+                return (
+                  <div className="border-t pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const willExpand = !(promptExpanded[agentName] ?? false);
+                        setPromptExpanded((prev) => ({ ...prev, [agentName]: willExpand }));
+                        if (willExpand && !promptContent && !isLoading) {
+                          loadSystemPrompt(agentName, activeVersion.version);
+                        }
+                      }}
+                      className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+                    >
+                      {isExpanded ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                      System prompt ({activeVersion.version})
+                    </button>
+                    {isExpanded && (
+                      <div className="mt-2">
+                        {isLoading ? (
+                          <div className="flex items-center gap-2 py-4 text-sm text-gray-500">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Loading...
+                          </div>
+                        ) : (
+                          <textarea
+                            readOnly
+                            value={promptContent ?? ''}
+                            rows={12}
+                            className="w-full rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 font-mono text-xs text-gray-700 dark:text-gray-300 resize-y"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         );

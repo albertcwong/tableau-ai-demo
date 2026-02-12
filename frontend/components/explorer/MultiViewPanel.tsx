@@ -74,16 +74,6 @@ export function MultiViewPanel({
       newViews[index] = view;
     }
     onViewsChange(newViews);
-    
-    // Add to context if not already there
-    if (onAddToContext) {
-      const isInContext = contextObjects.some(
-        (ctx) => ctx.object_id === view.id && ctx.object_type === 'view'
-      );
-      if (!isInContext) {
-        onAddToContext(view.id, 'view', view.name);
-      }
-    }
   };
 
   const handleViewRemove = (index: number) => {

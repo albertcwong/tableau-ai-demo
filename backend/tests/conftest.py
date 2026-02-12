@@ -5,6 +5,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.core.database import Base, get_db
+from app.models.user import User, UserRole
 
 # Import all models to ensure they're registered with Base.metadata
 # This is necessary for Base.metadata.create_all() to create all tables
@@ -60,7 +61,17 @@ def db_session():
 
 
 @pytest.fixture(scope="function")
-def client(db_session):
+def test_user(db_session):
+    """Create a test user for auth bypass in integration tests."""
+    user = User(username="testuser", role=UserRole.USER, is_active=True)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture(scope="function")
+def client(db_session, test_user):
     """Create a test client with database session override."""
     # Import models BEFORE importing app to ensure they're registered
     # This is critical for Base.metadata.create_all() to work
@@ -72,7 +83,11 @@ def client(db_session):
     from app.main import app
     from fastapi.testclient import TestClient
     from app.core.database import get_db
-    
+    from app.api.auth import get_current_user
+
+    def override_get_current_user():
+        return test_user
+
     # Override get_db dependency to reuse the same test session
     # This ensures all API operations use the same database and see each other's commits
     def override_get_db():
@@ -86,7 +101,8 @@ def client(db_session):
             db_session.flush()
     
     app.dependency_overrides[get_db] = override_get_db
-    
+    app.dependency_overrides[get_current_user] = override_get_current_user
+
     test_client = TestClient(app)
     
     try:

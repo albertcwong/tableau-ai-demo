@@ -65,6 +65,7 @@ class MessageRequest(BaseModel):
     stream: bool = Field(default=False, description="Whether to stream the response")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
+    embedded_state: Optional[dict] = Field(None, description="Per-view embedded dashboard state (filters, summary_data, sheets_data) from client capture")
 
 
 class MessageResponse(BaseModel):
@@ -1471,7 +1472,7 @@ async def send_message(
                 # AI client configuration
                 "model": request.model,
                 "provider": provider_for_state,
-                "tableau_client": tableau_client,
+                "embedded_state": request.embedded_state or None,
             }
             
             if request.stream:
@@ -1484,8 +1485,8 @@ async def send_message(
                     stream_start_time = time.time()  # Track when streaming starts
                     stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
-                        # Provide config with thread_id for checkpointer
-                        config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
+                        # Provide config with thread_id + tableau_client (not in state - not msgpack serializable)
+                        config = {"configurable": {"thread_id": f"summary-{request.conversation_id}", "tableau_client": tableau_client}}
                         async for state_update in graph.astream(initial_state, config=config):
                             # LangGraph astream returns updates keyed by node name
                             # Each update contains the state dictionary for that node
@@ -1699,8 +1700,8 @@ async def send_message(
                 )
             else:
                 # Non-streaming: execute graph and return result
-                # Provide config with thread_id for checkpointer
-                config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
+                # Provide config with thread_id + tableau_client (not in state - not msgpack serializable)
+                config = {"configurable": {"thread_id": f"summary-{request.conversation_id}", "tableau_client": tableau_client}}
                 final_state = await graph.ainvoke(initial_state, config=config)
                 execution_time = time.time() - execution_start
                 

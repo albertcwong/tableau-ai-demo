@@ -28,12 +28,14 @@ async def generate_insights_node(state: SummaryAgentState) -> Dict[str, Any]:
         total_row_count = 0
         
         if views_metadata and views_data:
-            # Multiple views
-            for view_id in view_ids:
+            # Multiple views (includes dashboard sheets as view_id_sheet_N)
+            for view_id in views_data:
+                v_data = views_data.get(view_id)
+                if not v_data:
+                    continue
                 v_metadata = views_metadata.get(view_id, {})
-                v_data = views_data.get(view_id, {})
                 view_name = v_metadata.get("name") or v_metadata.get("id") or view_id
-                row_count = v_data.get("row_count", 0) if v_data else 0
+                row_count = v_data.get("row_count", 0)
                 total_row_count += row_count
                 view_info_list.append({
                     "id": view_id,

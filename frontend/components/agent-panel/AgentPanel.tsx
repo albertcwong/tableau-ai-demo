@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { X, GripVertical, Settings } from 'lucide-react';
 import type { ChatContextObject, ConversationResponse } from '@/types';
+import type { EmbeddedViewState } from '@/lib/tableauEmbeddedState';
 
 interface RenderedState {
   selectedObject: {
@@ -36,13 +37,14 @@ interface AgentPanelProps {
   selectedDatasource?: { id: string; name: string } | null;
   onActiveThreadChange?: (threadId: number | null) => void;
   renderedState?: RenderedState | null;
+  onCaptureEmbeddedState?: (viewIds: string[]) => Promise<Record<string, EmbeddedViewState>>;
 }
 
 const MIN_WIDTH = 384; // w-96 equivalent
 const MAX_WIDTH = 1200; // Maximum width
 const DEFAULT_WIDTH = 384;
 
-export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange, renderedState }: AgentPanelProps) {
+export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef, onContextChange, onWidthChange, onLoadQuery, selectedDatasource, onActiveThreadChange, renderedState, onCaptureEmbeddedState }: AgentPanelProps) {
   const [agentType, setAgentType] = useState<AgentType>('vizql');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4');
@@ -417,6 +419,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             context={context}
             onRemoveContext={handleRemoveContext}
             onLoadQuery={onLoadQuery}
+            onCaptureEmbeddedState={onCaptureEmbeddedState}
           />
         </div>
       )}
