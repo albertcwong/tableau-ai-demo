@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from app.models.user import AuthConfig
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db, safe_commit
 from app.services.pat_encryption import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def get_auth_config(db: Session, use_cache: bool = True) -> AuthConfig:
             enable_oauth_auth=False
         )
         db.add(config)
-        db.commit()
+        safe_commit(db)
         db.refresh(config)
     
     # Update cache
@@ -138,7 +138,7 @@ def update_auth_config(
     if updated_by is not None:
         config.updated_by = updated_by
 
-    db.commit()
+    safe_commit(db)
     db.refresh(config)
     
     # Invalidate cache

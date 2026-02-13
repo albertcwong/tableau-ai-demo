@@ -64,3 +64,20 @@ def check_database_health() -> bool:
         return True
     except Exception:
         return False
+
+
+def safe_commit(db: Session) -> None:
+    """
+    Safely commit a database transaction with rollback on error.
+    
+    Args:
+        db: SQLAlchemy session
+        
+    Raises:
+        Exception: Re-raises the original exception after rollback
+    """
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise

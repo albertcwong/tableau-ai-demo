@@ -69,6 +69,24 @@ export function AuthProvider({ children, oauthEnabled }: { children: ReactNode; 
     }
 
     const syncUser = async () => {
+      // Don't auto-sync on login page - let user explicitly log in
+      // This prevents auto-login after logout when redirected to /login
+      if (typeof window !== 'undefined' && window.location.pathname === '/login') {
+        // Check if there's a logout parameter (from Auth0 logout redirect)
+        const params = new URLSearchParams(window.location.search);
+        const isLogout = params.has('logout') || params.has('logged_out');
+        
+        if (isLogout || !auth0User) {
+          // Explicitly clear state on login page after logout
+          setBackendUser(null);
+          setLoading(false);
+          return;
+        }
+        // If on login page but no logout param and auth0User exists, still don't auto-sync
+        // User should explicitly click login button
+        return;
+      }
+
       // Check if user is already authenticated via password auth
       const hasPasswordAuthToken = typeof window !== 'undefined' && !!localStorage.getItem('auth_token');
       

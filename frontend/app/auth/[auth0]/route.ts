@@ -1,6 +1,7 @@
 import { Auth0Client } from '@auth0/nextjs-auth0/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuth0Config } from '@/lib/auth0-config';
+import { getBaseUrl } from '@/lib/base-url';
 import { cookies } from 'next/headers';
 import crypto from 'crypto';
 
@@ -21,10 +22,10 @@ async function getAuth0Client(): Promise<Auth0Client> {
   
   const configHash = getConfigHash(config);
   
-  // Get AUTH0_SECRET from environment (should be set in .env.local)
+  // Get AUTH0_SECRET from environment (should be set in .env or .env.local)
   const secret = process.env.AUTH0_SECRET || '';
   if (!secret) {
-    throw new Error('AUTH0_SECRET environment variable is not set. Please set it in your .env.local file.');
+    throw new Error('AUTH0_SECRET environment variable is not set. Set it in .env (or .env.local) and ensure it is passed to the frontend container in docker-compose.yml.');
   }
   
   // Create new client if config changed or client doesn't exist
@@ -62,7 +63,8 @@ export async function GET(req: NextRequest) {
       
       // For login endpoint, redirect to login page with message
       if (route === 'login') {
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_not_configured');
         loginUrl.searchParams.set('message', 'Auth0 authentication is not configured. Please configure Auth0 settings in the admin console.');
         return NextResponse.redirect(loginUrl);
@@ -97,9 +99,8 @@ export async function GET(req: NextRequest) {
       // Build authorization URL
       // Use /api/auth/callback which redirects to /auth/callback
       // This maintains compatibility with Auth0 configuration
-      // Get base URL from request to ensure it matches the actual URL being used
-      const requestUrl = new URL(req.url);
-      const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+      // Get base URL using helper function (prefers env vars, then headers, then req.url)
+      const baseUrl = getBaseUrl(req);
       const callbackUrl = `${baseUrl}/api/auth/callback`;
       
       const state = crypto.randomBytes(16).toString('base64url');
@@ -154,14 +155,16 @@ export async function GET(req: NextRequest) {
       
       // Check for errors from Auth0
       if (error) {
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_error');
         loginUrl.searchParams.set('message', searchParams.get('error_description') || 'Auth0 authentication failed');
         return NextResponse.redirect(loginUrl);
       }
       
       if (!code || !state) {
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_error');
         loginUrl.searchParams.set('message', 'Missing authorization code or state');
         return NextResponse.redirect(loginUrl);
@@ -173,14 +176,16 @@ export async function GET(req: NextRequest) {
       const codeVerifier = cookieStore.get('auth0_code_verifier')?.value;
       
       if (!storedState || storedState !== state) {
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_error');
         loginUrl.searchParams.set('message', 'Invalid state parameter');
         return NextResponse.redirect(loginUrl);
       }
       
       if (!codeVerifier) {
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_error');
         loginUrl.searchParams.set('message', 'Missing code verifier');
         return NextResponse.redirect(loginUrl);
@@ -188,9 +193,8 @@ export async function GET(req: NextRequest) {
       
       // Exchange authorization code for tokens
       // Use /api/auth/callback which is what Auth0 redirects to
-      // Get base URL from request to ensure it matches
-      const requestUrl = new URL(req.url);
-      const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+      // Get base URL using helper function (prefers env vars, then headers, then req.url)
+      const baseUrl = getBaseUrl(req);
       const callbackUrl = `${baseUrl}/api/auth/callback`;
       
       try {
@@ -280,10 +284,12 @@ export async function GET(req: NextRequest) {
         cookieStore.delete('auth0_state');
         
         // Redirect to home page
-        return NextResponse.redirect(new URL('/', req.url));
+        const baseUrl = getBaseUrl(req);
+        return NextResponse.redirect(`${baseUrl}/`);
       } catch (error: any) {
         console.error('Token exchange error:', error);
-        const loginUrl = new URL('/login', req.url);
+        const baseUrl = getBaseUrl(req);
+        const loginUrl = new URL('/login', baseUrl);
         loginUrl.searchParams.set('error', 'auth0_error');
         loginUrl.searchParams.set('message', error.message || 'Failed to exchange authorization code');
         return NextResponse.redirect(loginUrl);
@@ -294,22 +300,27 @@ export async function GET(req: NextRequest) {
         const cookieStore = await cookies();
         const sessionCookie = cookieStore.get('appSession');
         
+        // Get base URL using helper function (prefers env vars, then headers, then req.url)
+        const baseUrl = getBaseUrl(req);
+        
         if (sessionCookie?.value) {
           // User has Auth0 session, perform Auth0 logout
           // Clear the session cookie
           cookieStore.delete('appSession');
           
-          // Build Auth0 logout URL
-          const returnTo = encodeURIComponent(new URL('/login', req.url).toString());
+          // Build Auth0 logout URL with normalized returnTo URL
+          // Add logout parameter to prevent auto-login on redirect
+          const returnTo = encodeURIComponent(`${baseUrl}/login?logout=true`);
           const logoutUrl = `https://${config.domain}/v2/logout?client_id=${config.clientId}&returnTo=${returnTo}`;
           return NextResponse.redirect(logoutUrl);
         } else {
           // No Auth0 session, just redirect to login
-          return NextResponse.redirect(new URL('/login', req.url));
+          return NextResponse.redirect(`${baseUrl}/login`);
         }
       } catch {
         // Error checking session, just redirect to login
-        return NextResponse.redirect(new URL('/login', req.url));
+        const baseUrl = getBaseUrl(req);
+        return NextResponse.redirect(`${baseUrl}/login`);
       }
     } else if (route === 'profile') {
       // For profile, check if user is authenticated using our custom session format
@@ -363,7 +374,8 @@ export async function GET(req: NextRequest) {
     }
     
     // For other errors, redirect to login page with error message
-    const loginUrl = new URL('/login', req.url);
+    const baseUrl = getBaseUrl(req);
+    const loginUrl = new URL('/login', baseUrl);
     loginUrl.searchParams.set('error', 'auth0_error');
     loginUrl.searchParams.set('message', error.message || 'Auth0 configuration error');
     return NextResponse.redirect(loginUrl);

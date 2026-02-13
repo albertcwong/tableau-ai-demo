@@ -1,7 +1,7 @@
 """Bootstrap logic for initial setup."""
 import logging
 from sqlalchemy.orm import Session
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, safe_commit
 from app.core.auth import get_password_hash
 from app.models.user import User, UserRole
 
@@ -31,7 +31,7 @@ def bootstrap_admin_user() -> bool:
             is_active=True
         )
         db.add(admin_user)
-        db.commit()
+        safe_commit(db)
         logger.info("Created initial admin user (username: admin, password: admin)")
         return True
     except Exception as e:

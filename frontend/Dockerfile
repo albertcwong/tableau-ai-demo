@@ -34,20 +34,29 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 # Copy necessary files from standalone build
+# The standalone build includes its own server.js which we'll use
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Copy HTTPS wrapper server and entrypoint script (but NOT the custom server.js)
+# The standalone build has its own server.js that we'll use
+COPY --from=builder --chown=nextjs:nodejs /app/server-https.js ./server-https.js
+COPY --from=builder --chown=nextjs:nodejs /app/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x docker-entrypoint.sh
+
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 3000 3001
 
-ENV PORT=3000
+ENV PORT=3002
+ENV HTTPS_PORT=3000
+ENV HTTP_PORT=3001
 ENV HOSTNAME="0.0.0.0"
 
-# Health check
+# Health check - check HTTP port (always available)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 1
+    CMD node -e "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 1
 
-# Use Next.js standalone server
-CMD ["node", "server.js"]
+# Use entrypoint script (handles missing certificates gracefully)
+ENTRYPOINT ["./docker-entrypoint.sh"]

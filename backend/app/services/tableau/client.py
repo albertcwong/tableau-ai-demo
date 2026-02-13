@@ -564,7 +564,13 @@ class TableauClient:
                     summary_text = summary.text if summary is not None else ''
                     detail_text = detail.text if detail is not None else ''
                     error_detail = f"Code {code}: {summary_text} - {detail_text}"
-            except:
+            except (AttributeError, KeyError, TypeError) as e:
+                # Expected errors when parsing XML error response - continue with generic error
+                logger.debug(f"Could not parse XML error details: {e}")
+                pass
+            except Exception as e:
+                # Log unexpected errors but continue with generic error
+                logger.warning(f"Unexpected error parsing XML error response: {e}", exc_info=True)
                 pass
             
             # Log debug info (without exposing secrets)

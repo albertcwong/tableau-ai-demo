@@ -4,7 +4,7 @@ import logging.handlers
 import time
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, Request, status, Query, Depends
+from fastapi import FastAPI, Request, status, Query, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -110,10 +110,23 @@ async def startup_event():
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler that ensures CORS headers are set."""
+    # Let FastAPI handle HTTPException
+    if isinstance(exc, HTTPException):
+        raise
+    
+    # Log the full exception details for debugging
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    
+    # Build response content
+    content = {"detail": "Internal server error"}
+    
+    # Only include error details in DEBUG mode
+    if settings.DEBUG:
+        content["error"] = str(exc)
+    
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error", "error": str(exc)},
+        content=content,
         headers={
             "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
             "Access-Control-Allow-Credentials": "true",

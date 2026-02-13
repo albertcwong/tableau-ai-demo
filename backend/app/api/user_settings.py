@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
-from app.core.database import get_db
+from app.core.database import get_db, safe_commit
 from app.models.user import User, TableauServerConfig, UserTableauPAT, UserTableauPassword, UserTableauAuthPreference
 from app.services.pat_encryption import encrypt_pat
 
@@ -71,7 +71,7 @@ def _create_or_update_credential(
     if existing:
         setattr(existing, name_attr, name_value)
         setattr(existing, secret_attr, encrypted)
-        db.commit()
+        safe_commit(db)
         db.refresh(existing)
         return existing, config
     record = model_cls(
@@ -80,7 +80,7 @@ def _create_or_update_credential(
         **{name_attr: name_value, secret_attr: encrypted},
     )
     db.add(record)
-    db.commit()
+    safe_commit(db)
     db.refresh(record)
     return record, config
 
@@ -98,7 +98,7 @@ def _delete_credential(
     if not record:
         return False
     db.delete(record)
-    db.commit()
+    safe_commit(db)
     return True
 
 
@@ -330,4 +330,4 @@ async def update_tableau_auth_preference(
         )
         db.add(pref)
     
-    db.commit()
+    safe_commit(db)

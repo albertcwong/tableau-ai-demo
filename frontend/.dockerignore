@@ -24,8 +24,9 @@
 # Dependencies
 node_modules/
 
-# Build artifacts
-.next/
+# Build artifacts (but we need .next/standalone, so don't ignore .next/)
+# Note: .next/standalone is needed for Docker, but we exclude it here
+# and copy it explicitly in Dockerfile
 out/
 dist/
 build/

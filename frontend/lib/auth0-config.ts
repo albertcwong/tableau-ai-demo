@@ -31,7 +31,16 @@ export async function getAuth0Config(): Promise<Auth0Config> {
   }
   
   try {
-    const response = await fetch(`${API_URL}/api/v1/auth/auth0-config`, {
+    // Use relative paths for consistency
+    // - Client-side: Next.js rewrites proxy /api/v1/* to backend
+    // - Server-side: Next.js rewrites don't apply to fetch() calls, so we need the backend URL
+    //   In Docker, server-side code runs in the frontend container and must use the backend service name
+    const apiPath = '/api/v1/auth/auth0-config';
+    const fetchUrl = typeof window === 'undefined' && process.env.BACKEND_API_URL
+      ? `${process.env.BACKEND_API_URL}${apiPath}` // Server-side in Docker
+      : apiPath; // Client-side or dev - relative path works via rewrites
+    
+    const response = await fetch(fetchUrl, {
       cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',

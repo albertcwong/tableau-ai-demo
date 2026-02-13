@@ -7,7 +7,7 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db, safe_commit
 from app.core.auth import get_password_hash
 from app.api.auth import get_current_admin_user
 from app.models.user import User, UserRole, TableauServerConfig, ProviderConfig, ProviderType, UserTableauServerMapping, AuthConfig
@@ -279,7 +279,7 @@ async def create_user(
         is_active=True
     )
     db.add(new_user)
-    db.commit()
+    safe_commit(db)
     db.refresh(new_user)
     
     return UserResponse(
@@ -366,7 +366,7 @@ async def update_user(
     if user_data.is_active is not None:
         user.is_active = user_data.is_active
     
-    db.commit()
+    safe_commit(db)
     db.refresh(user)
     
     return UserResponse(
@@ -409,7 +409,7 @@ async def delete_user(
     # - tableau_server_mappings (cascade="all, delete-orphan")
     # Conversations will have user_id set to NULL (ondelete="SET NULL")
     db.delete(user)
-    db.commit()
+    safe_commit(db)
 
 
 # Tableau config management endpoints
@@ -517,7 +517,7 @@ async def create_tableau_config(
         created_by=current_user.id
     )
     db.add(new_config)
-    db.commit()
+    safe_commit(db)
     db.refresh(new_config)
     
     return TableauConfigResponse(
@@ -719,7 +719,7 @@ async def update_tableau_config(
             detail="allow_connected_app_oauth requires eas_issuer_url, eas_client_id, and eas_client_secret"
         )
 
-    db.commit()
+    safe_commit(db)
     db.refresh(config)
     
     return TableauConfigResponse(
@@ -763,7 +763,7 @@ async def delete_tableau_config(
         )
     
     config.is_active = False
-    db.commit()
+    safe_commit(db)
 
 
 # Provider config management endpoints
@@ -838,7 +838,7 @@ async def create_provider_config(
         created_by=current_user.id
     )
     db.add(new_config)
-    db.commit()
+    safe_commit(db)
     db.refresh(new_config)
     
     return ProviderConfigResponse(
@@ -960,7 +960,7 @@ async def update_provider_config(
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
     
-    db.commit()
+    safe_commit(db)
     db.refresh(config)
     
     return ProviderConfigResponse(
@@ -1002,7 +1002,7 @@ async def delete_provider_config(
         )
     
     config.is_active = False
-    db.commit()
+    safe_commit(db)
 
 
 # Feedback management models
@@ -1278,7 +1278,7 @@ async def create_user_tableau_mapping(
         tableau_username=mapping_data.tableau_username
     )
     db.add(new_mapping)
-    db.commit()
+    safe_commit(db)
     db.refresh(new_mapping)
     
     return UserTableauMappingResponse(
@@ -1314,7 +1314,7 @@ async def update_user_tableau_mapping(
     # Update tableau username
     # Note: site_id comes from the config, not from the update request
     mapping.tableau_username = mapping_data.tableau_username
-    db.commit()
+    safe_commit(db)
     db.refresh(mapping)
     
     return UserTableauMappingResponse(
@@ -1347,7 +1347,7 @@ async def delete_user_tableau_mapping(
         )
     
     db.delete(mapping)
-    db.commit()
+    safe_commit(db)
     
     return None
 

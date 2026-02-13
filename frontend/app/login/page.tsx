@@ -26,11 +26,17 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
     const errorParam = params.get('error');
     const messageParam = params.get('message');
+    const logoutParam = params.get('logout');
     
     if (errorParam && messageParam) {
       setError(messageParam);
-      // Clean up URL
-      window.history.replaceState({}, '', window.location.pathname);
+      // Clean up URL but preserve logout param
+      const newParams = new URLSearchParams();
+      if (logoutParam) newParams.set('logout', logoutParam);
+      window.history.replaceState({}, '', window.location.pathname + (newParams.toString() ? '?' + newParams.toString() : ''));
+    } else if (logoutParam) {
+      // Clean up URL but preserve logout param
+      window.history.replaceState({}, '', window.location.pathname + '?logout=true');
     }
     
     // Load auth config to determine available login methods
@@ -43,10 +49,17 @@ export default function LoginPage() {
       });
   }, []);
 
-  // Redirect if already authenticated
+  // Redirect if already authenticated (but NOT if we just logged out)
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const logoutParam = params.get('logout');
+    
+    // Don't auto-redirect if we just logged out - let user stay on login page
+    if (logoutParam) {
+      return;
+    }
+    
     if (!authLoading && isAuthenticated) {
-      const params = new URLSearchParams(window.location.search);
       const returnUrl = params.get('returnUrl');
       const target = returnUrl?.startsWith('/') ? decodeURIComponent(returnUrl) : '/';
       router.push(target);

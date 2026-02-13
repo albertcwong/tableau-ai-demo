@@ -115,7 +115,13 @@ class UnifiedAIClient:
                             error_msg = error_data.get("error", {}).get("message", error_msg)
                         else:
                             error_msg = f"{error_msg} - {response.text[:200]}"
-                    except:
+                    except (KeyError, TypeError, AttributeError) as e:
+                        # Expected errors when parsing error response JSON - use fallback
+                        logger.debug(f"Could not parse error response JSON: {e}")
+                        error_msg = f"{error_msg} - {response.text[:200]}"
+                    except Exception as e:
+                        # Log unexpected errors but use fallback
+                        logger.warning(f"Unexpected error parsing error response: {e}", exc_info=True)
                         error_msg = f"{error_msg} - {response.text[:200]}"
                     
                     # Don't retry on 4xx errors (client errors)

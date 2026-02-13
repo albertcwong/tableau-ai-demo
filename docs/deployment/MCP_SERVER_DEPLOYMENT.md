@@ -71,7 +71,7 @@ docker run -d \
   -p 8002:8002 \
   -e MCP_TRANSPORT=sse \
   -e DATABASE_URL=postgresql://user:pass@host:5432/db \
-  -e GATEWAY_BASE_URL=http://gateway:8001 \
+  -e GATEWAY_BASE_URL=http://backend:8000/api/v1/gateway \
   -v ./credentials:/app/credentials:ro \
   tableau-mcp-server
 ```
@@ -91,7 +91,7 @@ docker run -d \
       "env": {
         "PYTHONPATH": "/path/to/backend",
         "DATABASE_URL": "postgresql://user:pass@localhost:5432/tableau_demo",
-        "GATEWAY_BASE_URL": "http://localhost:8001",
+        "GATEWAY_BASE_URL": "http://localhost:8000/api/v1/gateway",
         "MCP_TRANSPORT": "stdio"
       }
     }
@@ -118,7 +118,7 @@ docker run -d \
       "env": {
         "PYTHONPATH": "/path/to/backend",
         "DATABASE_URL": "postgresql://user:pass@localhost:5432/tableau_demo",
-        "GATEWAY_BASE_URL": "http://localhost:8001"
+        "GATEWAY_BASE_URL": "http://localhost:8000/api/v1/gateway"
       }
     }
   }
@@ -131,7 +131,7 @@ docker run -d \
 
 ```bash
 DATABASE_URL=postgresql://user:pass@host:5432/db
-GATEWAY_BASE_URL=http://gateway:8001
+GATEWAY_BASE_URL=http://backend:8000/api/v1/gateway
 ```
 
 ### Optional

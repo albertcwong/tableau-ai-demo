@@ -151,11 +151,18 @@ async def authenticate_tableau(
             )
         try:
             pat_secret = decrypt_pat(pat_record.pat_secret)
+        except ValueError as e:
+            # decrypt_pat raises ValueError with descriptive message
+            logger.error(f"Failed to decrypt PAT: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
         except Exception as e:
             logger.error(f"Failed to decrypt PAT: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to decrypt stored PAT"
+                detail=f"Failed to decrypt stored PAT: {e}"
             )
         client = create_tableau_client_for_credential_signin(
             config, "pat", site_id_from_config(config)
@@ -206,11 +213,18 @@ async def authenticate_tableau(
             )
         try:
             password = decrypt_pat(pw_record.password_encrypted)
+        except ValueError as e:
+            # decrypt_pat raises ValueError with descriptive message
+            logger.error(f"Failed to decrypt password: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
         except Exception as e:
             logger.error(f"Failed to decrypt password: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to decrypt stored credentials",
+                detail=f"Failed to decrypt stored credentials: {e}"
             )
         client = create_tableau_client_for_credential_signin(
             config, "standard", site_id_from_config(config)

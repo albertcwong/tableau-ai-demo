@@ -62,7 +62,7 @@ class FeedbackManager:
             }
         )
         self.db.add(correction_message)
-        self.db.commit()
+        safe_commit(self.db)
         
         # Extract learning from correction
         learning = await self._extract_learning(
@@ -149,7 +149,7 @@ class FeedbackManager:
             }
         )
         self.db.add(preference_message)
-        self.db.commit()
+        safe_commit(self.db)
         
         return {
             "preferences_id": preference_message.id,

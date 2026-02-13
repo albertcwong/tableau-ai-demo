@@ -3,7 +3,7 @@ import base64
 import logging
 from typing import Optional
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
@@ -16,9 +16,23 @@ def _get_fernet_key() -> bytes:
     """Get or derive Fernet encryption key."""
     if settings.TABLEAU_PAT_ENCRYPTION_KEY:
         try:
-            return settings.TABLEAU_PAT_ENCRYPTION_KEY.encode() if isinstance(
-                settings.TABLEAU_PAT_ENCRYPTION_KEY, str
-            ) else settings.TABLEAU_PAT_ENCRYPTION_KEY
+            # TABLEAU_PAT_ENCRYPTION_KEY should be a base64-encoded Fernet key (32 bytes, base64 = 44 chars)
+            key_str = settings.TABLEAU_PAT_ENCRYPTION_KEY
+            if isinstance(key_str, str):
+                # Try to decode as base64 first (if it's already base64-encoded)
+                try:
+                    decoded = base64.urlsafe_b64decode(key_str)
+                    if len(decoded) == 32:
+                        # Valid Fernet key
+                        return base64.urlsafe_b64encode(decoded)
+                    else:
+                        logger.warning(f"TABLEAU_PAT_ENCRYPTION_KEY decoded to {len(decoded)} bytes, expected 32")
+                except Exception:
+                    # Not base64, treat as raw string and encode
+                    pass
+                return key_str.encode()
+            else:
+                return key_str
         except Exception as e:
             logger.error(f"Invalid TABLEAU_PAT_ENCRYPTION_KEY: {e}")
     # Derive key from SECRET_KEY if no dedicated key configured
@@ -35,16 +49,35 @@ def _get_fernet_key() -> bytes:
 
 def encrypt_pat(pat_secret: str) -> str:
     """Encrypt PAT secret for storage."""
-    cipher = Fernet(_get_fernet_key())
-    encrypted = cipher.encrypt(pat_secret.encode())
-    return encrypted.decode()
+    try:
+        cipher = Fernet(_get_fernet_key())
+        encrypted = cipher.encrypt(pat_secret.encode())
+        return encrypted.decode()
+    except Exception as e:
+        logger.error(f"Failed to encrypt PAT: {e}")
+        raise ValueError(f"PAT encryption failed: {e}") from e
 
 
 def decrypt_pat(encrypted_secret: str) -> str:
     """Decrypt PAT secret from storage."""
-    cipher = Fernet(_get_fernet_key())
-    decrypted = cipher.decrypt(encrypted_secret.encode())
-    return decrypted.decode()
+    try:
+        cipher = Fernet(_get_fernet_key())
+        decrypted = cipher.decrypt(encrypted_secret.encode())
+        return decrypted.decode()
+    except InvalidToken as e:
+        logger.error(
+            f"Failed to decrypt PAT: Invalid token. "
+            f"This usually means the encryption key changed (SECRET_KEY or TABLEAU_PAT_ENCRYPTION_KEY). "
+            f"Error: {e}"
+        )
+        raise ValueError(
+            "Failed to decrypt stored PAT. The encryption key may have changed. "
+            "If SECRET_KEY or TABLEAU_PAT_ENCRYPTION_KEY was modified, existing PATs cannot be decrypted. "
+            "Please reconfigure your PATs."
+        ) from e
+    except Exception as e:
+        logger.error(f"Failed to decrypt PAT: {e}")
+        raise ValueError(f"PAT decryption failed: {e}") from e
 
 
 def encrypt_secret(secret: str) -> str:

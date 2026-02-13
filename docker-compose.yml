@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -41,6 +39,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/tableau_demo
       - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - TABLEAU_SERVER_URL=${TABLEAU_SERVER_URL:-}
       - TABLEAU_SITE_ID=${TABLEAU_SITE_ID:-}
       - TABLEAU_CLIENT_ID=${TABLEAU_CLIENT_ID:-}
@@ -89,15 +88,29 @@ services:
       dockerfile: Dockerfile
     container_name: tableau-demo-frontend
     ports:
-      - "3000:3000"
+      - "3000:3000"  # HTTPS (if certificates are provided)
+      - "3001:3001"  # HTTP fallback
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - BACKEND_API_URL=http://backend:8000
+      - APP_BASE_URL=${APP_BASE_URL:-https://localhost:3000}
+      - AUTH0_BASE_URL=${AUTH0_BASE_URL:-https://localhost:3000}
+      - AUTH0_SECRET=${AUTH0_SECRET:-}
       - NODE_ENV=production
+      - HTTPS_PORT=3000
+      - HTTP_PORT=3001
+      - HOSTNAME=0.0.0.0
+    volumes:
+      # SSL certificates (optional - create them first with: cd frontend && ./generate-cert.sh)
+      # If certificates don't exist, the server will fall back to HTTP on port 3001
+      - ./frontend/localhost-key.pem:/app/localhost-key.pem:ro
+      - ./frontend/localhost.pem:/app/localhost.pem:ro
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      # Check HTTP port (always available, HTTPS is optional)
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
       timeout: 10s
       start_period: 10s

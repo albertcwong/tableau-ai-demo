@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel, Field, field_serializer, model_validator
-from app.core.database import get_db
+from app.core.database import get_db, safe_commit
 from app.models.chat import Conversation, Message, MessageRole, ChatContext
 from app.api.auth import get_current_user
 from app.models.user import User
@@ -120,7 +120,12 @@ def get_current_user_optional(
     """Get current user if authenticated, otherwise return None."""
     try:
         return get_current_user(request, db)
-    except:
+    except HTTPException:
+        # Authentication failed or user not found - return None
+        return None
+    except Exception as e:
+        # Log unexpected errors but still return None to allow unauthenticated access
+        logger.warning(f"Unexpected error in get_current_user_optional: {e}", exc_info=True)
         return None
 
 
@@ -134,7 +139,7 @@ async def create_conversation(
     """Create a new conversation with personalized greeting based on agent type."""
     conversation = Conversation(user_id=current_user.id if current_user else None)
     db.add(conversation)
-    db.commit()
+    safe_commit(db)
     db.refresh(conversation)
     
     # Personalized greetings per agent type
@@ -157,7 +162,7 @@ async def create_conversation(
         extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}  # Mark as greeting message
     )
     db.add(greeting_message)
-    db.commit()
+    safe_commit(db)
     db.refresh(conversation)
     
     # Compute message count (should be 1 after adding greeting)
@@ -199,7 +204,7 @@ async def create_greeting_message(
         extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}
     )
     db.add(greeting_message)
-    db.commit()
+    safe_commit(db)
     db.refresh(greeting_message)
     
     logger.info(f"Created greeting message {greeting_message.id} for conversation {conversation_id} with agent type: {agent_type_normalized}")
@@ -247,11 +252,24 @@ async def list_conversations(
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
+async def get_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
     """Get a conversation by ID."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Validate ownership: user must own the conversation (or conversation must be unauthenticated if user is None)
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to access this conversation")
+    else:
+        # Unauthenticated users can only access conversations with user_id=None
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to access this conversation")
     
     # Compute message count
     conversation.message_count = db.query(Message).filter(Message.conversation_id == conversation_id).count()
@@ -268,15 +286,24 @@ class ConversationRenameRequest(BaseModel):
 async def rename_conversation(
     conversation_id: int,
     request: ConversationRenameRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Rename a conversation."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
+    # Validate ownership
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to rename this conversation")
+    else:
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to rename this conversation")
+    
     conversation.name = request.name.strip()
-    db.commit()
+    safe_commit(db)
     db.refresh(conversation)
     
     # Compute message count
@@ -287,11 +314,23 @@ async def rename_conversation(
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=List[MessageResponse])
-async def get_conversation_messages(conversation_id: int, db: Session = Depends(get_db)):
+async def get_conversation_messages(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
     """Get all messages for a conversation."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Validate ownership
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to access this conversation")
+    else:
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to access this conversation")
     
     messages = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at).all()
     # Return messages with uppercase roles (as stored in database)
@@ -447,7 +486,7 @@ async def send_message(
             truncated = name.rsplit(" ", 1)[0]
             name = truncated if len(truncated) > 30 else name
         conversation.name = name
-    db.commit()
+    safe_commit(db)
 
     ctx = prepare_chat_context(db, request.conversation_id)
     conversation = ctx["conversation"]
@@ -587,7 +626,7 @@ async def send_message(
                         )
                         db.add(assistant_message)
                         conversation.updated_at = conversation.updated_at
-                        db.commit()
+                        safe_commit(db)
                         
                     except Exception as e:
                         logger.error(f"Error in multi-agent workflow: {e}", exc_info=True)
@@ -636,7 +675,7 @@ async def send_message(
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
-                db.commit()
+                safe_commit(db)
                 db.refresh(assistant_message)
                 
                 return ChatResponse(
@@ -1148,7 +1187,7 @@ async def send_message(
                                 )
                                 db.add(assistant_message)
                                 conversation.updated_at = conversation.updated_at
-                                db.commit()
+                                safe_commit(db)
                                 logger.info(f"Saved assistant message with {len(full_content)} chars, total_time_ms: {total_time_ms:.2f}")
                             except Exception as e:
                                 logger.error(f"Failed to save assistant message: {e}", exc_info=True)
@@ -1186,7 +1225,13 @@ async def send_message(
                                                 error_vizql_query = result.get("query") or result.get("query_draft")
                                                 if error_vizql_query:
                                                     break
-                        except:
+                        except (KeyError, AttributeError, TypeError) as e:
+                            # Expected errors when extracting query from result - continue silently
+                            logger.debug(f"Could not extract query from result: {e}")
+                            pass
+                        except Exception as e:
+                            # Log unexpected errors but continue
+                            logger.warning(f"Unexpected error extracting query from result: {e}", exc_info=True)
                             pass
                         
                         # Send query as metadata even on error if available and not already sent
@@ -1391,7 +1436,13 @@ async def send_message(
                                 if key in final_state and final_state.get(key):
                                     vizql_query = final_state.get(key)
                                     break
-                    except:
+                    except (KeyError, AttributeError, TypeError) as e:
+                        # Expected errors when extracting query from state - continue silently
+                        logger.debug(f"Could not extract query from final_state: {e}")
+                        pass
+                    except Exception as e:
+                        # Log unexpected errors but continue
+                        logger.warning(f"Unexpected error extracting query from final_state: {e}", exc_info=True)
                         pass
                 
                 # Save assistant message
@@ -1408,7 +1459,7 @@ async def send_message(
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
-                db.commit()
+                safe_commit(db)
                 db.refresh(assistant_message)
                 
                 return ChatResponse(
@@ -1645,7 +1696,7 @@ async def send_message(
                                 )
                                 db.add(assistant_message)
                                 conversation.updated_at = conversation.updated_at
-                                db.commit()
+                                safe_commit(db)
                                 logger.info(f"Saved assistant message with {len(full_content)} chars, total_time_ms: {total_time_ms:.2f}")
                             except Exception as e:
                                 logger.error(f"Failed to save assistant message: {e}", exc_info=True)
@@ -1669,7 +1720,13 @@ async def send_message(
                                     if key in last_state and last_state.get(key):
                                         error_vizql_query = last_state.get(key)
                                         break
-                        except:
+                        except (KeyError, AttributeError, TypeError) as e:
+                            # Expected errors when extracting query from state - continue silently
+                            logger.debug(f"Could not extract query from last_state: {e}")
+                            pass
+                        except Exception as e:
+                            # Log unexpected errors but continue
+                            logger.warning(f"Unexpected error extracting query from last_state: {e}", exc_info=True)
                             pass
                         
                         # Send error chunk
@@ -1735,7 +1792,7 @@ async def send_message(
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
-                db.commit()
+                safe_commit(db)
                 db.refresh(assistant_message)
                 
                 return ChatResponse(
@@ -1812,7 +1869,7 @@ async def send_message(
                             )
                             db.add(assistant_message)
                             conversation.updated_at = conversation.updated_at  # Trigger update
-                            db.commit()
+                            safe_commit(db)
                         
                         # Send completion marker
                         done_chunk = AgentMessageChunk(
@@ -1921,7 +1978,13 @@ async def send_message(
                 try:
                     if 'execution_start' in locals():
                         total_time_ms = (time.time() - execution_start) * 1000
-                except:
+                except (NameError, TypeError) as e:
+                    # Expected if execution_start not defined or invalid - continue silently
+                    logger.debug(f"Could not calculate execution time: {e}")
+                    pass
+                except Exception as e:
+                    # Log unexpected errors but continue
+                    logger.warning(f"Unexpected error calculating execution time: {e}", exc_info=True)
                     pass
                 
                 # Save assistant message
@@ -1940,7 +2003,7 @@ async def send_message(
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at  # Trigger update
-                db.commit()
+                safe_commit(db)
                 db.refresh(assistant_message)
                 
                 return ChatResponse(
@@ -1988,7 +2051,8 @@ class MessageFeedbackRequest(BaseModel):
 async def update_message_feedback(
     message_id: int,
     request: MessageFeedbackRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Update feedback for a message."""
     message = db.query(Message).filter(Message.id == message_id).first()
@@ -1997,6 +2061,16 @@ async def update_message_feedback(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Message not found"
         )
+    
+    # Validate ownership via conversation
+    conversation = db.query(Conversation).filter(Conversation.id == message.conversation_id).first()
+    if conversation:
+        if current_user:
+            if conversation.user_id is not None and conversation.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="You don't have permission to modify this message")
+        else:
+            if conversation.user_id is not None:
+                raise HTTPException(status_code=403, detail="Authentication required to modify this message")
     
     # Validate feedback value if provided
     if request.feedback is not None and request.feedback not in ['thumbs_up', 'thumbs_down']:
@@ -2007,7 +2081,7 @@ async def update_message_feedback(
     
     message.feedback = request.feedback
     message.feedback_text = request.feedback_text
-    db.commit()
+    safe_commit(db)
     db.refresh(message)
     
     return MessageResponse(
@@ -2026,14 +2100,26 @@ async def update_message_feedback(
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(conversation_id: int, db: Session = Depends(get_db)):
+async def delete_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
     """Delete a conversation and all its messages."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
+    # Validate ownership
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to delete this conversation")
+    else:
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to delete this conversation")
+    
     db.delete(conversation)
-    db.commit()
+    safe_commit(db)
     logger.info(f"Deleted conversation {conversation_id}")
 
 
@@ -2050,12 +2136,21 @@ from app.api.models import (
 async def add_context_object(
     request: AddContextRequest,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Add an object (datasource or view) to chat context."""
     # Verify conversation exists
     conversation = db.query(Conversation).filter(Conversation.id == request.conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Validate ownership
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to modify this conversation")
+    else:
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to modify this conversation")
     
     # Validate object type
     if request.object_type not in ["datasource", "view"]:
@@ -2072,7 +2167,7 @@ async def add_context_object(
         # Update existing context object
         if request.object_name:
             existing.object_name = request.object_name
-        db.commit()
+        safe_commit(db)
         db.refresh(existing)
         logger.info(f"Updated context object {request.object_id} for conversation {request.conversation_id}")
         return ChatContextObject(
@@ -2090,7 +2185,7 @@ async def add_context_object(
         object_name=request.object_name,
     )
     db.add(context_obj)
-    db.commit()
+    safe_commit(db)
     db.refresh(context_obj)
     
     logger.info(f"Added context object {request.object_id} ({request.object_type}) to conversation {request.conversation_id}")
@@ -2108,12 +2203,21 @@ async def remove_context_object(
     conversation_id: int = Query(..., description="Conversation ID"),
     object_id: str = Query(..., description="Object ID to remove"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """Remove an object from chat context."""
     # Verify conversation exists
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Validate ownership
+    if current_user:
+        if conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to modify this conversation")
+    else:
+        if conversation.user_id is not None:
+            raise HTTPException(status_code=403, detail="Authentication required to modify this conversation")
     
     # Find and delete context object
     context_obj = db.query(ChatContext).filter(
@@ -2125,7 +2229,7 @@ async def remove_context_object(
         raise HTTPException(status_code=404, detail="Context object not found")
     
     db.delete(context_obj)
-    db.commit()
+    safe_commit(db)
     
     logger.info(f"Removed context object {object_id} from conversation {conversation_id}")
 

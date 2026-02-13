@@ -88,7 +88,7 @@ def get_or_create_user_from_auth0(db: Session, auth0_claims: dict) -> User:
         # Update Tableau username if it changed or wasn't set before
         if tableau_username and user.tableau_username != tableau_username:
             user.tableau_username = tableau_username
-            db.commit()
+            safe_commit(db)
             db.refresh(user)
             logger.info(f"Updated Tableau username for user {user.username}: {tableau_username}")
         logger.debug(f"Found existing user for Auth0 ID: {auth0_user_id} (username: {user.username}, tableau_username: {user.tableau_username})")
@@ -120,7 +120,7 @@ def get_or_create_user_from_auth0(db: Session, auth0_claims: dict) -> User:
     )
     
     db.add(user)
-    db.commit()
+    safe_commit(db)
     db.refresh(user)
     
     logger.info(f"Created new user from Auth0: {username} (Auth0 ID: {auth0_user_id}, Tableau username: {tableau_username})")

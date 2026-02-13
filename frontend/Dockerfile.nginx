@@ -1,0 +1,55 @@
+# Frontend Dockerfile with nginx for HTTPS (Alternative approach)
+FROM node:20-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Set environment variables for build
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# Build Next.js application
+RUN npm run build
+
+# Production image with nginx
+FROM nginx:alpine AS runner
+WORKDIR /app
+
+# Install Node.js to run Next.js standalone server
+RUN apk add --no-cache nodejs
+
+# Copy Next.js standalone build
+COPY --from=builder /app/public /app/public
+COPY --from=builder /app/.next/standalone /app
+COPY --from=builder /app/.next/static /app/.next/static
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# SSL certificates will be mounted as volume
+# Create directory for certificates
+RUN mkdir -p /app
+
+EXPOSE 3000 3001
+
+ENV PORT=3002
+ENV HOSTNAME="0.0.0.0"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3001 || exit 1
+
+# Start Next.js server in background and nginx in foreground
+CMD sh -c "cd /app && node server.js & nginx -g 'daemon off;'"

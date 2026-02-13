@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "tableau-analyst-agent": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "tableau-demo-mcp-server",
+        "python",
+        "-m",
+        "mcp_server.server"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}

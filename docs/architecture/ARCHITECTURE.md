@@ -37,17 +37,16 @@ The application consists of four main services plus supporting infrastructure:
        │ HTTP             │ HTTP             │ Internal
        ▼                  ▼                  ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   Gateway    │   │  PostgreSQL  │   │    Redis     │
-│  Port 8001   │   │  Port 5432   │   │  Port 6379   │
-└──────┬───────┘   └──────────────┘   └──────────────┘
-       │
-       │ HTTP (OpenAI-compatible API)
-       ▼
-┌─────────────────────────────────────┐
-│  External LLM Providers              │
-│  (OpenAI, Anthropic, Salesforce,     │
-│   Vertex AI, Apple Endor)            │
-└─────────────────────────────────────┘
+│  PostgreSQL  │   │    Redis     │   │   Gateway    │
+│  Port 5432   │   │  Port 6379   │   │ (Integrated) │
+└──────────────┘   └──────────────┘   └──────┬───────┘
+                                              │
+                                              │ HTTP (OpenAI-compatible API)
+                                              ▼
+                              ┌─────────────────────────────────────┐
+                              │  External LLM Providers              │
+                              │  (OpenAI, Apple Endor)               │
+                              └─────────────────────────────────────┘
 ```
 
 ## Service Responsibilities
@@ -90,9 +89,9 @@ The application consists of four main services plus supporting infrastructure:
 
 #### Communication
 - **From Frontend**: Receives HTTPS requests, returns JSON/SSE responses
-- **To Gateway**: HTTP requests to `http://gateway:8001`
+- **Gateway Integration**: Gateway endpoints exposed at `/api/v1/gateway/*` (integrated, not separate service)
 - **To PostgreSQL**: SQLAlchemy ORM for database operations
-- **To Redis**: Token caching (via gateway service)
+- **To Redis**: Token caching (via gateway integration)
 - **To MCP Server**: Imports MCP tools/resources (same process)
 
 #### Key Components
@@ -116,23 +115,22 @@ Frontend.post("/api/v1/chat/message")
 ---
 
 ### 3. Gateway (Unified LLM Gateway)
-**Port:** 8001  
+**Port:** Integrated into Backend (8000)  
+**Endpoints:** `/api/v1/gateway/*`  
 **Technology:** FastAPI, Python 3.11, httpx
 
 #### Primary Responsibilities
 - **Provider Abstraction**: Single OpenAI-compatible interface for all LLM providers
 - **Model Routing**: Resolves model names to providers (e.g., "gpt-4" → OpenAI)
 - **Authentication Handling**: Manages different auth strategies:
-  - Direct (API keys for OpenAI/Anthropic)
-  - JWT OAuth (Salesforce)
-  - Service Account (Vertex AI)
+  - Direct (API keys for OpenAI)
   - Private Key (Apple Endor)
 - **Request Translation**: Converts OpenAI format to provider-specific formats
 - **Response Normalization**: Converts all responses to OpenAI format
 - **Token Caching**: Caches OAuth tokens in Redis (5min TTL buffer)
 
 #### Communication
-- **From Backend**: Receives HTTP requests at `/v1/chat/completions`
+- **From Backend**: Receives HTTP requests at `/api/v1/gateway/v1/chat/completions`
 - **To Redis**: Token caching for OAuth flows
 - **To External LLM APIs**: HTTP requests to provider APIs
 
@@ -246,8 +244,8 @@ Frontend → connects to Backend:/mcp/sse
 
 2. Backend saves user message to PostgreSQL
 
-3. Backend → Gateway
-   POST http://gateway:8001/v1/chat/completions
+3. Backend → Gateway (internal call)
+   POST http://localhost:8000/api/v1/gateway/v1/chat/completions
    {
      "model": "gpt-4",
      "messages": [...history...]
@@ -418,8 +416,7 @@ Each service has focused responsibilities:
 
 ### 4. Internal Communication
 Services communicate via HTTP on internal Docker network:
-- `http://backend:8000` - Backend service
-- `http://gateway:8001` - Gateway service
+- `http://backend:8000` - Backend service (includes integrated Gateway)
 - `postgresql://postgres:5432` - Database
 - `redis://redis:6379` - Cache
 
@@ -442,12 +439,13 @@ Gateway caches OAuth tokens in Redis:
 | Service | Port | Protocol | Purpose |
 |---------|------|----------|---------|
 | Frontend | 3000 | HTTP | Next.js web application |
-| Backend | 8000 | HTTP/SSE | FastAPI main API server |
-| Gateway | 8001 | HTTP | Unified LLM Gateway |
+| Backend | 8000 | HTTP/SSE | FastAPI main API server (includes Gateway and MCP SSE) |
 | PostgreSQL | 5432 | TCP | Database |
 | Redis | 6379 | TCP | Token cache |
 
-**Note:** MCP Server doesn't have its own port in SSE mode; it's integrated into the Backend service and accessed via `/mcp/sse` on port 8000.
+**Note:** 
+- Gateway is integrated into the Backend service and accessed via `/api/v1/gateway/*` on port 8000
+- MCP Server SSE endpoints are integrated into the Backend service and accessed via `/mcp/sse` on port 8000
 
 ---
 
@@ -455,12 +453,12 @@ Gateway caches OAuth tokens in Redis:
 
 ### External Access
 - Frontend: `http://localhost:3000` (public)
-- Backend API: `http://localhost:8000` (public)
-- Gateway: `http://localhost:8001` (internal, proxied via backend)
+- Backend API: `http://localhost:8000` (public, includes Gateway endpoints at `/api/v1/gateway/*`)
 
 ### Internal Docker Network
 All services communicate on internal Docker network:
-- Service discovery via service names (`backend`, `gateway`, `postgres`, `redis`)
+- Service discovery via service names (`backend`, `postgres`, `redis`)
+- Gateway is integrated into backend, no separate service
 - No external network required for inter-service communication
 - Ports exposed only for external access
 

@@ -195,7 +195,7 @@ class AgentConfigService:
         config.is_enabled = True
         config.is_default = True
         
-        self.db.commit()
+        safe_commit(self.db)
         self.db.refresh(config)
         return config
     
@@ -242,6 +242,6 @@ class AgentConfigService:
             if max_execution_retries is not None:
                 settings_config.max_execution_retries = max_execution_retries
         
-        self.db.commit()
+        safe_commit(self.db)
         self.db.refresh(settings_config)
         return settings_config

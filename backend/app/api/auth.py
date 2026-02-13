@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from app.core.database import get_db
+from app.core.database import get_db, safe_commit
 from app.core.auth import verify_password, create_access_token, decode_access_token, validate_auth0_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.models.user import User, UserRole
 from app.services.auth0_user_service import get_or_create_user_from_auth0
@@ -275,7 +275,7 @@ async def update_user_preferences(
     if preferences.preferred_tableau_auth_type is not None:
         current_user.preferred_tableau_auth_type = preferences.preferred_tableau_auth_type
 
-    db.commit()
+    safe_commit(db)
     db.refresh(current_user)
 
     return UserResponse(

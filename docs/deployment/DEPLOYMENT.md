@@ -7,7 +7,7 @@ This guide covers deploying the Tableau AI Demo application using Docker and Doc
 - Docker Engine 20.10+
 - Docker Compose 2.0+
 - 4GB+ RAM available
-- Ports 3000, 5432, 6379, 8000, 8001, 8002 available
+- Ports 3000, 5432, 6379, 8000 available
 
 ## Quick Start
 
@@ -42,22 +42,22 @@ This guide covers deploying the Tableau AI Demo application using Docker and Doc
 
 6. **Check health endpoints**
    ```bash
-   curl http://localhost:8000/health      # Backend
+   curl http://localhost:8000/api/v1/health      # Backend
+   curl http://localhost:8000/api/v1/gateway/health  # Gateway (integrated)
    curl http://localhost:3000             # Frontend
-   curl http://localhost:8001/gateway/health  # Gateway
-   curl http://localhost:8002/mcp/debug/tools # MCP Server
    ```
 
 ## Architecture
 
 The application consists of the following services:
 
-- **postgres**: PostgreSQL 15 database
-- **redis**: Redis 7 cache for OAuth tokens
-- **gateway**: Unified LLM Gateway (port 8001)
+- **postgres**: PostgreSQL 15 database (port 5432)
+- **redis**: Redis 7 cache for OAuth tokens (port 6379)
 - **backend**: FastAPI backend (port 8000)
-- **mcp-server**: MCP Server (port 8002, SSE transport)
+  - Includes integrated Gateway endpoints at `/api/v1/gateway/*`
+  - Includes integrated MCP SSE endpoints at `/mcp/sse`
 - **frontend**: Next.js frontend (port 3000)
+- **mcp-server**: MCP Server (optional, for stdio mode only)
 
 ## Environment Variables
 
@@ -76,8 +76,8 @@ TABLEAU_SITE_ID=your-site-id
 TABLEAU_CLIENT_ID=your-connected-app-client-id
 TABLEAU_CLIENT_SECRET=your-connected-app-secret
 
-# Gateway
-GATEWAY_BASE_URL=http://gateway:8001
+# Gateway (integrated into backend, no separate service needed)
+# Gateway endpoints are accessible at /api/v1/gateway/* on port 8000
 
 # AI Provider Credentials (at least one required)
 OPENAI_API_KEY=your-openai-key
@@ -159,10 +159,9 @@ docker-compose down -v
 
 All services include health checks:
 
-- **Backend**: `http://localhost:8000/health`
+- **Backend**: `http://localhost:8000/api/v1/health`
+- **Gateway** (integrated): `http://localhost:8000/api/v1/gateway/health`
 - **Frontend**: `http://localhost:3000`
-- **Gateway**: `http://localhost:8001/gateway/health`
-- **MCP Server**: `http://localhost:8002/mcp/debug/tools`
 
 Check health status:
 ```bash

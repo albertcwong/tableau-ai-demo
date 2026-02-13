@@ -1,4 +1,5 @@
 """Gateway API endpoints for unified LLM gateway."""
+import json
 import logging
 from typing import Dict, Any, Optional
 import httpx
@@ -299,7 +300,16 @@ async def chat_completions(
                     f"Please select a different model that supports function calling. "
                     f"Error: {error_data.get('error', {}).get('message', error_text[:200])}"
                 )
-            except:
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                # Expected errors when parsing error response JSON - use fallback
+                logger.debug(f"Could not parse error response JSON: {e}")
+                error_detail = (
+                    f"The selected model '{request.model}' does not support function calling. "
+                    f"Please select a different model. Error: {error_text[:200]}"
+                )
+            except Exception as e:
+                # Log unexpected errors but use fallback
+                logger.warning(f"Unexpected error parsing error response: {e}", exc_info=True)
                 error_detail = (
                     f"The selected model '{request.model}' does not support function calling. "
                     f"Please select a different model. Error: {error_text[:200]}"

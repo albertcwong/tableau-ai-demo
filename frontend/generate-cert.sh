@@ -1,35 +1,55 @@
 #!/bin/bash
+# Generate self-signed SSL certificate for localhost with SANs (Subject Alternative Names)
 
-# Generate self-signed SSL certificate for local development
-# This creates certificates that browsers will need to trust
+set -e
 
-echo "Generating SSL certificate for localhost..."
+echo "Generating SSL certificate for localhost with SANs..."
 
-# Create certificate
-openssl req -x509 -out localhost.pem -keyout localhost-key.pem \
-  -newkey rsa:2048 -nodes -sha256 \
-  -subj '/CN=localhost' -extensions EXT -config <( \
-   printf "[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
+# Create OpenSSL config file for SANs
+cat > /tmp/openssl.conf <<EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
 
+[req_distinguished_name]
+CN = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = *.localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+
+# Generate private key
+openssl genrsa -out localhost-key.pem 2048
+
+# Generate certificate signing request with SANs
+openssl req -new -key localhost-key.pem -out localhost.csr -config /tmp/openssl.conf
+
+# Generate self-signed certificate with SANs (valid for 365 days)
+openssl x509 -req -days 365 -in localhost.csr -signkey localhost-key.pem -out localhost.pem -extensions v3_req -extfile /tmp/openssl.conf
+
+# Clean up temporary files
+rm localhost.csr
+rm /tmp/openssl.conf
+
+echo "✅ SSL certificates generated with SANs:"
+echo "   - localhost-key.pem (private key)"
+echo "   - localhost.pem (certificate)"
 echo ""
-echo "✅ Certificate generated!"
+echo "   Certificate includes:"
+echo "   - localhost"
+echo "   - *.localhost"
+echo "   - 127.0.0.1"
+echo "   - ::1"
 echo ""
-echo "⚠️  IMPORTANT: You need to trust this certificate in your browser:"
-echo ""
-echo "macOS:"
-echo "  1. Open Keychain Access"
-echo "  2. Drag localhost.pem into 'login' keychain"
-echo "  3. Double-click the certificate"
-echo "  4. Expand 'Trust' and set to 'Always Trust'"
-echo ""
-echo "Chrome/Edge:"
-echo "  - Visit chrome://settings/certificates"
-echo "  - Click 'Authorities' tab"
-echo "  - Click 'Import' and select localhost.pem"
-echo "  - Check 'Trust this certificate for identifying websites'"
-echo ""
-echo "Firefox:"
-echo "  - Visit about:preferences#privacy"
-echo "  - Click 'View Certificates' → 'Authorities' → 'Import'"
-echo "  - Select localhost.pem and check 'Trust this CA to identify websites'"
-echo ""
+echo "⚠️  Note: You'll need to trust this certificate in your browser."
+echo "   See docs/deployment/HTTPS_SETUP.md for instructions."
