@@ -67,6 +67,7 @@ class MessageRequest(BaseModel):
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
     embedded_state: Optional[dict] = Field(None, description="Per-view embedded dashboard state (filters, summary_data, sheets_data) from client capture")
     summary_mode: Optional[str] = Field(None, description="'brief', 'full', or 'custom'. Only used when agent_type is 'summary'")
+    invalidate_cache: Optional[bool] = Field(None, description="If true, invalidate cached view data for this conversation before processing. Used when view data may have changed (e.g., filters applied).")
 
 
 class MessageResponse(BaseModel):
@@ -1516,6 +1517,21 @@ async def send_message(
             metrics = get_metrics()
             conversation_memory = get_conversation_memory(request.conversation_id)
             
+            # Handle invalidate_cache flag
+            if request.invalidate_cache:
+                from app.services.view_data_cache import invalidate
+                invalidate(request.conversation_id)
+                logger.info(f"Cache invalidated for conversation {request.conversation_id} due to invalidate_cache flag")
+            
+            # Build message history from conversation messages
+            message_history = []
+            for msg in history_messages:
+                msg_dict = {
+                    "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
+                    "content": msg.content
+                }
+                message_history.append(msg_dict)
+            
             graph = AgentGraphFactory.create_summary_graph()
             
             # Initialize state for Summary agent
@@ -1525,7 +1541,7 @@ async def send_message(
                 "agent_type": "summary",
                 "context_datasources": datasource_ids,
                 "context_views": view_ids,
-                "messages": [],
+                "messages": message_history,
                 "tool_calls": [],
                 "tool_results": [],
                 "current_thought": None,
@@ -1538,6 +1554,8 @@ async def send_message(
                 "provider": provider_for_state,
                 "embedded_state": request.embedded_state or None,
                 "summary_mode": summary_mode,
+                "conversation_id": request.conversation_id,
+                "invalidate_cache": request.invalidate_cache or False,
             }
             
             if request.stream:

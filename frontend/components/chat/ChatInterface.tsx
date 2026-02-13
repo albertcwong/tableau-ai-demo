@@ -31,6 +31,7 @@ export interface ChatInterfaceProps {
   onRemoveContext?: (objectId: string) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   onCaptureEmbeddedState?: (viewIds: string[]) => Promise<Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>>;
+  onViewDataChanged?: () => void; // Callback to notify when view data may have changed (e.g., filters applied)
 }
 
 const DEFAULT_MODEL = 'gpt-4';
@@ -46,6 +47,7 @@ export function ChatInterface({
   onRemoveContext,
   onLoadQuery,
   onCaptureEmbeddedState,
+  onViewDataChanged,
 }: ChatInterfaceProps) {
   const [conversationId, setConversationId] = useState<number | null>(
     initialConversationId || null
@@ -64,9 +66,15 @@ export function ChatInterface({
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const [summaryMode, setSummaryMode] = useState<SummaryMode>('full');
+  const [viewDataMayHaveChanged, setViewDataMayHaveChanged] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messageInputRef = useRef<import('./MessageInput').MessageInputRef>(null);
   const previousAgentTypeRef = useRef<'vizql' | 'summary'>(agentType);
+
+  // Note: Event listeners for Embedding API events (filterChanged, marksSelectionChanged, etc.)
+  // should be set up in the component that renders the Tableau viz elements (e.g., ViewEmbedder).
+  // When those events fire, the parent should call setViewDataMayHaveChanged(true) or
+  // use a callback prop to notify this component.
 
   // Sync selectedModel when defaultModel prop changes
   useEffect(() => {
@@ -297,6 +305,11 @@ export function ChatInterface({
               setIsStreaming(false);
               return;
             }
+            
+            // Reset viewDataMayHaveChanged after successful capture
+            if (embedded_state) {
+              setViewDataMayHaveChanged(false);
+            }
           } catch (e) {
             const errorMsg = e instanceof Error ? e.message : 'Could not capture embedded state';
             console.error('[ChatInterface] Error capturing embedded state:', e);
@@ -319,6 +332,7 @@ export function ChatInterface({
             stream: true,
             embedded_state,
             ...(agentType === 'summary' && { summary_mode: summaryModeOverride ?? summaryMode }),
+            ...(agentType === 'summary' && viewDataMayHaveChanged && { invalidate_cache: true }),
           },
           (chunk: string) => {
             // Legacy text chunk handler (for backward compatibility)

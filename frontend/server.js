@@ -9,13 +9,14 @@ const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOSTNAME || '0.0.0.0';
 const httpsPort = parseInt(process.env.HTTPS_PORT || '3000', 10);
 const httpPort = parseInt(process.env.HTTP_PORT || '3001', 10);
+const useHttpOnly = process.env.USE_HTTP_ONLY === '1';
 
-// SSL certificate paths - check if files exist, fallback to HTTP if not
+// SSL certificate paths - skip HTTPS when USE_HTTP_ONLY=1 (fixes HMR WebSocket with custom server)
 let httpsOptions = null;
 const keyPath = path.join(__dirname, 'localhost-key.pem');
 const certPath = path.join(__dirname, 'localhost.pem');
 
-if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+if (!useHttpOnly && fs.existsSync(keyPath) && fs.existsSync(certPath)) {
   try {
     httpsOptions = {
       key: fs.readFileSync(keyPath),
@@ -24,7 +25,7 @@ if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
   } catch (err) {
     console.warn('Failed to load SSL certificates, HTTPS will be disabled:', err.message);
   }
-} else {
+} else if (!useHttpOnly) {
   console.warn('SSL certificates not found, HTTPS will be disabled');
 }
 

@@ -257,6 +257,7 @@ export interface MessageRequest {
   max_tokens?: number;
   embedded_state?: Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>;
   summary_mode?: SummaryMode;
+  invalidate_cache?: boolean;
 }
 
 export const chatApi = {

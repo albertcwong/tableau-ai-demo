@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node server.js",
     "dev:http": "next dev",
-    "dev:http-only": "HTTP_PORT=3000 node server.js",
+    "dev:http-only": "USE_HTTP_ONLY=1 node server.js",
+    "dev:https": "next dev --experimental-https --experimental-https-key ./localhost-key.pem --experimental-https-cert ./localhost.pem -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

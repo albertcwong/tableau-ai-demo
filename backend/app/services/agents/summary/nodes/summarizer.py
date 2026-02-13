@@ -5,6 +5,7 @@ from typing import Dict, Any
 from app.services.agents.summary.state import SummaryAgentState
 
 MAX_DATA_ROWS = 50  # Limit rows per view to avoid token overflow
+MAX_WORDS_CUSTOM = 300  # Hard limit for custom mode (failsafe if API ignores max_tokens)
 
 
 def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]) -> str:
@@ -114,15 +115,47 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         if not v_meta and state.get("view_metadata"):
             v_meta = {"single": state.get("view_metadata", {})}
         view_data_str = _format_view_data(v_data, v_meta)
+        
+        # Format message history for prompt (last 10 messages)
+        messages = state.get("messages", [])
+        message_history_str = None
+        if messages:
+            # Take last 10 messages (user + assistant pairs)
+            recent_messages = messages[-10:]
+            history_lines = []
+            for msg in recent_messages:
+                role = msg.get("role", "unknown") if isinstance(msg, dict) else "unknown"
+                content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                if role in ("user", "assistant"):
+                    role_label = "User" if role == "user" else "Assistant"
+                    history_lines.append(f"{role_label}: {content}")
+            if history_lines:
+                message_history_str = "\n".join(history_lines)
+        
+        # Detect if user asked a specific question (for answer placement)
+        user_query = state.get("user_query", "summarize this view")
+        generic_phrases = ['summarize', 'summarize this view', 'summary', 'overview', 'brief summary']
+        is_specific_question = (
+            user_query and 
+            (user_query.strip().lower() not in generic_phrases or 
+             any(w in user_query.lower() for w in ['what', 'which', 'how', 'how much', 'how many', 'when', 'where', 'who', '?']))
+        )
+        
         prompt_vars = {
             "view_name": view_names,
             "row_count": total_row_count,
             "view_data": view_data_str,
             "insights": state.get("key_insights", []),
             "recommendations": state.get("recommendations", []),
-            "user_query": state.get("user_query", "summarize this view")
+            "user_query": user_query,
+            "message_history": message_history_str or "",
+            "is_specific_question": is_specific_question
         }
-        if summary_mode == "brief":
+        # When user typed their own question (not Brief/Full buttons), use custom template for concise answer
+        if is_specific_question:
+            template_file = "agents/summary/final_summary_custom.txt"
+            user_message = state.get("user_query", "summarize this view")
+        elif summary_mode == "brief":
             template_file = "agents/summary/final_summary_brief.txt"
             user_message = "Generate a 2-3 sentence executive summary."
         elif summary_mode == "custom":
@@ -147,13 +180,23 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             {"role": "user", "content": user_message}
         ]
         
+        apply_word_limit = is_specific_question
+        
         response = await ai_client.chat(
             model=model,
             provider=provider,
             messages=messages
         )
         
-        summary_text = response.content.strip()
+        summary_text = (response.content or "").strip()
+        if not summary_text:
+            raise ValueError("AI returned empty response")
+        # Failsafe: truncate to 300 words if API ignored max_tokens
+        if apply_word_limit:
+            words = summary_text.split()
+            if len(words) > MAX_WORDS_CUSTOM:
+                summary_text = " ".join(words[:MAX_WORDS_CUSTOM]) + "..."
+                logger.warning(f"Summarizer: truncated response from {len(words)} to {MAX_WORDS_CUSTOM} words (API may have ignored max_tokens)")
         
         return {
             **state,
@@ -164,10 +207,11 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Error generating summary: {e}", exc_info=True)
+        err_msg = str(e)
         return {
             **state,
-            "error": f"Failed to generate summary: {str(e)}",
+            "error": f"Failed to generate summary: {err_msg}",
             "executive_summary": None,
             "detailed_analysis": None,
-            "final_answer": "Summary generation failed. Please try again."
+            "final_answer": f"Summary generation failed: {err_msg}"
         }

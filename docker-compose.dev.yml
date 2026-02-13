@@ -21,15 +21,13 @@ services:
     environment:
       - NODE_ENV=development
       - HOSTNAME=0.0.0.0
-      - HTTPS_PORT=3000
-      - HTTP_PORT=3001
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       - BACKEND_API_URL=http://backend:8000
       - APP_BASE_URL=${APP_BASE_URL:-https://localhost:3000}
       - AUTH0_BASE_URL=${AUTH0_BASE_URL:-https://localhost:3000}
       - AUTH0_SECRET=${AUTH0_SECRET:-}
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD", "node", "-e", "require('https').get('https://localhost:3000', {rejectUnauthorized:false}, (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules

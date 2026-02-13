@@ -1,9 +1,10 @@
-"""Data fetcher node for retrieving view data from embedded_state only."""
+"""Data fetcher node for retrieving view data from embedded_state or cache."""
 import logging
 from typing import Dict, Any
 
 from app.services.agents.summary.state import SummaryAgentState
 from app.services.metrics import track_node_execution
+from app.services.view_data_cache import get_cached, set_cached
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,14 @@ def _extract_from_embedded(
 @track_node_execution("summary", "data_fetcher")
 async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
     """
-    Fetch view data from embedded_state only. Requires views to be visible in the explorer
-    so the Embedding API can capture their data.
+    Fetch view data from embedded_state or cache. If embedded_state is empty and cache is available,
+    use cached data. If invalidate_cache is true and embedded_state is empty, return error.
     """
     try:
         view_ids = state.get("context_views", [])
         embedded_state = state.get("embedded_state") or {}
+        conversation_id = state.get("conversation_id")
+        invalidate_cache = state.get("invalidate_cache", False)
 
         if not view_ids:
             return {
@@ -78,7 +81,10 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         successful_fetches = 0
         failed_views = []
         tool_calls = list(state.get("tool_calls", []))
+        used_cache = False
 
+        # Check if we have embedded_state data for any views
+        has_embedded_data = False
         for view_id in view_ids:
             clean_view_id = _sanitize_view_id(view_id)
             emb = (
@@ -86,65 +92,141 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 if isinstance(embedded_state, dict)
                 else None
             )
+            if emb and not emb.get("capture_error") and (emb.get("summary_data") or emb.get("sheets_data")):
+                has_embedded_data = True
+                break
 
-            if not emb:
-                error_msg = f"View {view_id} not found in embedded_state. Ensure the view is visible in the explorer."
-                logger.warning(error_msg)
-                failed_views.append({"view_id": view_id, "error": "View not found in embedded_state"})
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "source": "embedded_state"},
-                    "result": "error",
-                    "error": error_msg,
-                })
-                continue
-
-            # Check for capture errors
-            if emb.get("capture_error"):
-                error_msg = f"Capture failed for {view_id}: {emb.get('capture_error')}"
-                logger.warning(error_msg)
-                failed_views.append({"view_id": view_id, "error": emb.get("capture_error")})
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "source": "embedded_state"},
-                    "result": "error",
-                    "error": error_msg,
-                })
-                continue
-
-            # Extract data from embedded_state
-            rows = _extract_from_embedded(view_id, emb, views_data, views_metadata)
-            if rows > 0:
-                total_rows += rows
-                successful_fetches += 1
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "source": "embedded_state"},
-                    "result": f"success - {rows} rows (embedded)",
-                })
-            else:
-                # Embedded state exists but has no data
-                error_msg = f"View {view_id} has no summary_data or sheets_data. Ensure the view is visible and try again."
-                logger.warning(error_msg)
-                failed_views.append({"view_id": view_id, "error": "No data in embedded_state"})
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "source": "embedded_state"},
-                    "result": "error",
-                    "error": error_msg,
-                })
-
-        if successful_fetches == 0:
-            error_details = "; ".join([f"{v['view_id']}: {v['error']}" for v in failed_views]) if failed_views else "No views captured"
+        # If invalidate_cache is true and no embedded_state, return error
+        if invalidate_cache and not has_embedded_data:
+            error_msg = "View data may have changed. Please ensure the view is visible in the explorer and try again."
+            logger.warning(f"invalidate_cache=true but no embedded_state for views {view_ids}")
             return {
                 **state,
-                "error": f"Could not get view data from embedded capture. {error_details}. Ensure the views are visible in the explorer and try again.",
+                "error": error_msg,
                 "view_data": None,
                 "view_metadata": None,
                 "views_data": {},
                 "views_metadata": {},
                 "tool_calls": tool_calls,
             }
+
+        # If no embedded_state data, try cache
+        if not has_embedded_data and conversation_id:
+            cached_result = get_cached(conversation_id, view_ids)
+            if cached_result:
+                cached_views_data, cached_views_metadata = cached_result
+                views_data = cached_views_data.copy()
+                views_metadata = cached_views_metadata.copy()
+                total_rows = sum(v.get("row_count", 0) for v in views_data.values() if v)
+                successful_fetches = len([v for v in views_data.values() if v])
+                used_cache = True
+                logger.info(f"Using cached view data for conversation {conversation_id}, views {view_ids}")
+                for view_id in view_ids:
+                    tool_calls.append({
+                        "tool": "get_view_data",
+                        "args": {"view_id": view_id, "source": "cache"},
+                        "result": f"success - cached data ({views_data.get(view_id, {}).get('row_count', 0)} rows)",
+                    })
+            else:
+                # Cache miss - add to failed_views for better error message
+                for view_id in view_ids:
+                    failed_views.append({"view_id": view_id, "error": "No embedded_state and cache miss"})
+                    tool_calls.append({
+                        "tool": "get_view_data",
+                        "args": {"view_id": view_id, "source": "cache"},
+                        "result": "error",
+                        "error": "Cache miss - no cached data available",
+                    })
+        elif not has_embedded_data and not conversation_id:
+            # No conversation_id means we can't use cache
+            for view_id in view_ids:
+                failed_views.append({"view_id": view_id, "error": "No embedded_state and no conversation_id for cache"})
+                tool_calls.append({
+                    "tool": "get_view_data",
+                    "args": {"view_id": view_id, "source": "embedded_state"},
+                    "result": "error",
+                    "error": "No embedded_state provided",
+                })
+
+        # Process embedded_state if available
+        if has_embedded_data:
+            for view_id in view_ids:
+                clean_view_id = _sanitize_view_id(view_id)
+                emb = (
+                    embedded_state.get(view_id) or embedded_state.get(clean_view_id)
+                    if isinstance(embedded_state, dict)
+                    else None
+                )
+
+                if not emb:
+                    # Skip if we already have cache data for this view
+                    if used_cache and view_id in views_data:
+                        continue
+                    error_msg = f"View {view_id} not found in embedded_state. Ensure the view is visible in the explorer."
+                    logger.warning(error_msg)
+                    failed_views.append({"view_id": view_id, "error": "View not found in embedded_state"})
+                    tool_calls.append({
+                        "tool": "get_view_data",
+                        "args": {"view_id": view_id, "source": "embedded_state"},
+                        "result": "error",
+                        "error": error_msg,
+                    })
+                    continue
+
+                # Check for capture errors
+                if emb.get("capture_error"):
+                    # Skip if we already have cache data for this view
+                    if used_cache and view_id in views_data:
+                        continue
+                    error_msg = f"Capture failed for {view_id}: {emb.get('capture_error')}"
+                    logger.warning(error_msg)
+                    failed_views.append({"view_id": view_id, "error": emb.get("capture_error")})
+                    tool_calls.append({
+                        "tool": "get_view_data",
+                        "args": {"view_id": view_id, "source": "embedded_state"},
+                        "result": "error",
+                        "error": error_msg,
+                    })
+                    continue
+
+                # Extract data from embedded_state
+                rows = _extract_from_embedded(view_id, emb, views_data, views_metadata)
+                if rows > 0:
+                    total_rows += rows
+                    successful_fetches += 1
+                    tool_calls.append({
+                        "tool": "get_view_data",
+                        "args": {"view_id": view_id, "source": "embedded_state"},
+                        "result": f"success - {rows} rows (embedded)",
+                    })
+                else:
+                    # Embedded state exists but has no data
+                    if not (used_cache and view_id in views_data):
+                        error_msg = f"View {view_id} has no summary_data or sheets_data. Ensure the view is visible and try again."
+                        logger.warning(error_msg)
+                        failed_views.append({"view_id": view_id, "error": "No data in embedded_state"})
+                        tool_calls.append({
+                            "tool": "get_view_data",
+                            "args": {"view_id": view_id, "source": "embedded_state"},
+                            "result": "error",
+                            "error": error_msg,
+                        })
+
+        if successful_fetches == 0:
+            error_details = "; ".join([f"{v['view_id']}: {v['error']}" for v in failed_views]) if failed_views else "No views captured"
+            return {
+                **state,
+                "error": f"Could not get view data. {error_details}. Ensure the views are visible in the explorer and try again.",
+                "view_data": None,
+                "view_metadata": None,
+                "views_data": {},
+                "views_metadata": {},
+                "tool_calls": tool_calls,
+            }
+
+        # Cache the data if we got it from embedded_state
+        if has_embedded_data and conversation_id and views_data:
+            set_cached(conversation_id, view_ids, views_data, views_metadata)
 
         first_view_id = view_ids[0]
         primary_view_data = views_data.get(first_view_id)
@@ -157,8 +239,20 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
             primary_view_metadata = views_metadata.get(first_key, {})
 
         thought = f"Fetched data from {successful_fetches}/{len(view_ids)} view(s), total {total_rows} rows"
+        if used_cache:
+            thought = f"Using cached view data from previous summary ({successful_fetches} view(s), {total_rows} rows)"
         if failed_views:
             thought += f" ({len(failed_views)} view(s) failed)"
+        
+        first_view_id = view_ids[0]
+        primary_view_data = views_data.get(first_view_id)
+        primary_view_metadata = views_metadata.get(first_view_id, {})
+
+        # For dashboard embedded_state, first view may be a sheet key; use first available
+        if not primary_view_data and views_data:
+            first_key = next(iter(views_data))
+            primary_view_data = views_data[first_key]
+            primary_view_metadata = views_metadata.get(first_key, {})
         
         return {
             **state,

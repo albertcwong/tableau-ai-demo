@@ -16,5 +16,5 @@ ENV NODE_ENV=development
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME="0.0.0.0"
 
-# server.js has WebSocket upgrade handler for HMR + HTTPS
-CMD ["npm", "run", "dev"]
+# Use dev:https - Next.js built-in HTTPS handles HMR WebSocket (custom server breaks it)
+CMD ["npm", "run", "dev:https"]

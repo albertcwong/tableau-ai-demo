@@ -132,7 +132,7 @@ async def chat_completions(
     Routes requests to appropriate provider based on model name.
     """
     try:
-        logger.info(f"Gateway received chat completion request: provider={request.provider}, model={request.model}, messages={len(request.messages)}, stream={request.stream}, has_functions={bool(request.functions)}")
+        logger.info(f"Gateway received chat completion request: provider={request.provider}, model={request.model}, messages={len(request.messages)}, stream={request.stream}, has_functions={bool(request.functions)}, max_tokens={request.max_tokens}")
         # Resolve provider context
         context = resolve_context(request.model, request.provider)
         logger.info(f"Resolved context: provider={context.provider}, auth_type={context.auth_type}, model_name={context.model_name}, endpoint={context.endpoint}")

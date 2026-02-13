@@ -16,7 +16,7 @@ docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 **URLs:**
-- Frontend: https://localhost:3000 (HTTPS) or http://localhost:3001 (HTTP fallback)
+- Frontend: https://localhost:3000 (HTTPS; required for Tableau embed; HMR works with Next.js built-in server)
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 
@@ -69,8 +69,8 @@ cd frontend && npm run dev
 - Reset node_modules volume: `docker volume ls` to find it, then `docker volume rm <volume_name>` and `up --build`
 
 ### Certificates / HTTPS
-- Generate certs: `cd frontend && ./generate-cert.sh`
-- Without certs, server falls back to HTTP on port 3001
+- Generate certs: `cd frontend && ./generate-cert.sh` (required for Docker dev; Tableau embed needs HTTPS)
+- Docker dev uses `next dev --experimental-https` with your certs—HMR WebSocket works
 
 ### Port conflicts
 - Ensure ports 3000, 3001, 5432, 6379, 8000 are free

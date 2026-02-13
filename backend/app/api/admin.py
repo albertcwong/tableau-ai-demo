@@ -1480,7 +1480,11 @@ async def update_agent_settings(
 # Prompt file paths per agent (active version)
 _AGENT_SYSTEM_PROMPTS: Dict[str, List[str]] = {
     "vizql": ["agents/vizql/query_construction.txt"],
-    "summary": ["agents/summary/system.txt", "agents/summary/insight_generation.txt", "agents/summary/final_summary.txt"],
+    "summary": [
+        "agents/summary/final_summary_brief.txt",
+        "agents/summary/final_summary_custom.txt",
+        "agents/summary/final_summary.txt",
+    ],
 }
 
 
