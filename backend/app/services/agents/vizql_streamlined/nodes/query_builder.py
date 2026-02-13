@@ -550,7 +550,7 @@ async def build_query_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         
         # Call LLM to build query
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         
         response = await ai_client.chat(

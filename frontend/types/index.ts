@@ -20,7 +20,7 @@ export interface Message {
   content: string;
   createdAt: Date;
   modelUsed?: string;
-  feedback?: string | null;
+  feedback?: 'thumbs_up' | 'thumbs_down' | null;
   feedbackText?: string | null;
   totalTimeMs?: number | null;
   vizqlQuery?: Record<string, any> | null;  // VizQL query used to generate the answer (for vizql agent)

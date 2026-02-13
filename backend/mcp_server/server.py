@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Create MCP server instance
 # FastMCP automatically discovers tools and resources via decorators
 mcp = FastMCP(
-    name=getattr(settings, 'MCP_SERVER_NAME', 'tableau-analyst-agent'),
+    name=getattr(settings, 'MCP_SERVER_NAME', 'tableau-ai-demo-mcp'),
     version="1.0.0"
 )
 

@@ -42,11 +42,11 @@ class UnifiedAIClient:
         """Initialize unified AI client.
         
         Args:
-            gateway_url: Gateway base URL (defaults to settings.GATEWAY_BASE_URL)
+            gateway_url: Gateway base URL (defaults to settings.BACKEND_API_URL; gateway is embedded)
             timeout: Request timeout in seconds
             max_retries: Maximum number of retry attempts
         """
-        self.gateway_url = (gateway_url or settings.GATEWAY_BASE_URL).rstrip('/')
+        self.gateway_url = (gateway_url or settings.BACKEND_API_URL).rstrip('/')
         self.timeout = timeout
         self.max_retries = max_retries
         

@@ -35,6 +35,7 @@ export function TableauConfigManagement() {
     eas_token_endpoint: '',
     eas_sub_claim_field: 'email',
     skip_ssl_verify: false,
+    ssl_cert_path: '',
   });
 
   useEffect(() => {
@@ -71,8 +72,9 @@ export function TableauConfigManagement() {
       eas_client_secret: '',
       eas_authorization_endpoint: '',
       eas_token_endpoint: '',
-      eas_sub_claim_field: 'email',
-      skip_ssl_verify: false,
+    eas_sub_claim_field: 'email',
+    skip_ssl_verify: false,
+    ssl_cert_path: '',
     });
     setEditingConfigId(null);
     setShowCreateForm(false);
@@ -95,8 +97,9 @@ export function TableauConfigManagement() {
       eas_client_secret: '',
       eas_authorization_endpoint: config.eas_authorization_endpoint ?? '',
       eas_token_endpoint: config.eas_token_endpoint ?? '',
-      eas_sub_claim_field: config.eas_sub_claim_field ?? 'email',
-      skip_ssl_verify: config.skip_ssl_verify || false,
+    eas_sub_claim_field: config.eas_sub_claim_field ?? 'email',
+    skip_ssl_verify: config.skip_ssl_verify || false,
+    ssl_cert_path: config.ssl_cert_path ?? '',
     });
     setEditingConfigId(config.id);
     setShowCreateForm(true);
@@ -142,6 +145,7 @@ export function TableauConfigManagement() {
           eas_token_endpoint: formData.eas_token_endpoint || undefined,
           eas_sub_claim_field: formData.eas_sub_claim_field || undefined,
           skip_ssl_verify: formData.skip_ssl_verify,
+          ssl_cert_path: formData.ssl_cert_path || undefined,
         };
         await adminApi.updateTableauConfig(editingConfigId, updateData);
       } else {
@@ -152,6 +156,7 @@ export function TableauConfigManagement() {
           allow_standard_auth: formData.allow_standard_auth || false,
           allow_connected_app_oauth: formData.allow_connected_app_oauth || false,
           skip_ssl_verify: formData.skip_ssl_verify || false,
+          ssl_cert_path: formData.ssl_cert_path || undefined,
         });
       }
       resetForm();
@@ -179,11 +184,26 @@ export function TableauConfigManagement() {
   return (
     <div className="space-y-4">
       {error && (
-        <Alert variant="destructive">{error}</Alert>
+        <Alert variant="destructive">
+          {error.includes('already exists') ? (
+            <div>
+              <p className="font-semibold">Duplicate Server URL</p>
+              <p>{error}</p>
+              <p className="text-sm mt-2">Server URL is the unique identifier for a Tableau server. Each server can only have one configuration.</p>
+            </div>
+          ) : (
+            error
+          )}
+        </Alert>
       )}
 
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Tableau Connected Apps</h2>
+        <div>
+          <h2 className="text-xl font-semibold">Tableau Server Configurations</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Manage Tableau server configurations. Server URL is the unique identifier for each server.
+          </p>
+        </div>
         <Button 
           onClick={() => {
             if (showCreateForm) {
@@ -216,14 +236,18 @@ export function TableauConfigManagement() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="server_url">Server URL</Label>
+                <Label htmlFor="server_url">Server URL <span className="text-red-500">*</span></Label>
                 <Input
                   id="server_url"
                   value={formData.server_url}
                   onChange={(e) => setFormData({ ...formData, server_url: e.target.value })}
                   placeholder="https://tableau.example.com"
                   required
+                  className="font-mono"
                 />
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Unique identifier for this Tableau server. Will be normalized (lowercase, trailing slash removed).
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="site_id">Site ID (optional)</Label>
@@ -401,6 +425,20 @@ export function TableauConfigManagement() {
                 </>
               )}
               <div className="space-y-2">
+                <Label htmlFor="ssl_cert_path">SSL Certificate Path (optional)</Label>
+                <Input
+                  id="ssl_cert_path"
+                  value={formData.ssl_cert_path || ''}
+                  onChange={(e) => setFormData({ ...formData, ssl_cert_path: e.target.value })}
+                  placeholder="./credentials/server.crt"
+                  className="font-mono"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Path to SSL certificate file (.pem or .crt) for verifying this Tableau server's certificate.
+                  Relative paths are resolved from the backend directory.
+                </p>
+              </div>
+              <div className="space-y-2">
                 <div className="flex items-center space-x-2">
                   <input
                     id="skip_ssl_verify"
@@ -415,6 +453,7 @@ export function TableauConfigManagement() {
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Use for self-signed certs or internal servers. Not recommended for production.
+                  If SSL certificate path is provided, it will be used instead of skipping verification.
                 </p>
               </div>
               <div className="flex gap-2">
@@ -442,7 +481,6 @@ export function TableauConfigManagement() {
         <table className="w-full min-w-full">
           <thead className="bg-gray-100 dark:bg-gray-800">
             <tr>
-              <th className="px-4 py-2 text-left">ID</th>
               <th className="px-4 py-2 text-left">Name</th>
               <th className="px-4 py-2 text-left">Server URL</th>
               <th className="px-4 py-2 text-left">Site ID</th>
@@ -454,11 +492,12 @@ export function TableauConfigManagement() {
           <tbody>
             {configs.map((config) => (
               <tr key={config.id} className="border-t">
-                <td className="px-4 py-2">{config.id}</td>
-                <td className="px-4 py-2">{config.name}</td>
-                <td className="px-4 py-2 break-words max-w-xs">
+                <td className="px-4 py-2 font-medium">{config.name}</td>
+                <td className="px-4 py-2">
                   <div className="flex items-center gap-2">
-                    <span>{config.server_url}</span>
+                    <code className="text-sm bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded break-all">
+                      {config.server_url}
+                    </code>
                     {typeof window !== 'undefined' && window.location.protocol === 'https:' && config.server_url.startsWith('http://') && (
                       <span className="text-xs text-red-600 dark:text-red-400" title="Mixed Content Warning: HTTP server URL with HTTPS frontend">
                         ⚠️
@@ -469,7 +508,7 @@ export function TableauConfigManagement() {
                 <td className="px-4 py-2">{config.site_id || '(default)'}</td>
                 <td className="px-4 py-2">{config.api_version || '3.15'}</td>
                 <td className="px-4 py-2">
-                  <span className={config.is_active ? 'text-green-600' : 'text-red-600'}>
+                  <span className={config.is_active ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                     {config.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>

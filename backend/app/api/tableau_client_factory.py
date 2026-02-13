@@ -51,6 +51,7 @@ def create_tableau_client_from_token(
         "client_id": cid,
         "client_secret": csec,
         "verify_ssl": not getattr(config, "skip_ssl_verify", False),
+        "ssl_cert_path": getattr(config, "ssl_cert_path", None),
         "initial_token": token_entry.token,
         "initial_site_id": token_entry.site_id,
         "initial_site_content_url": token_entry.site_content_url,
@@ -84,6 +85,7 @@ def create_tableau_client_for_credential_signin(
         client_id=cid,
         client_secret=csec,
         verify_ssl=not getattr(config, "skip_ssl_verify", False),
+        ssl_cert_path=getattr(config, "ssl_cert_path", None),
     )
 
 

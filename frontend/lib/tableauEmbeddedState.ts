@@ -59,13 +59,20 @@ function extractFilters(filters: unknown[]): EmbeddedFilter[] {
     const appliedValues = x.appliedValues ?? x.applied_values;
     const minValue = x.minValue ?? x.min_value;
     const maxValue = x.maxValue ?? x.max_value;
-    return {
+    const result: Partial<EmbeddedFilter> = {
       fieldName,
       filterType,
-      ...(appliedValues && { appliedValues: appliedValues as EmbeddedFilter['appliedValues'] }),
-      ...(minValue != null && { minValue: String(minValue) }),
-      ...(maxValue != null && { maxValue: String(maxValue) }),
     };
+    if (appliedValues && typeof appliedValues === 'object') {
+      result.appliedValues = appliedValues as EmbeddedFilter['appliedValues'];
+    }
+    if (minValue != null) {
+      result.minValue = String(minValue);
+    }
+    if (maxValue != null) {
+      result.maxValue = String(maxValue);
+    }
+    return result as EmbeddedFilter;
   });
 }
 
@@ -74,7 +81,7 @@ export async function captureEmbeddedState(
   vizElement: HTMLElement | null,
   viewId: string
 ): Promise<EmbeddedViewState | null> {
-  if (!vizElement || typeof (vizElement as Record<string, unknown>).workbook !== 'object') {
+  if (!vizElement || typeof (vizElement as unknown as Record<string, unknown>).workbook !== 'object') {
     return null;
   }
 

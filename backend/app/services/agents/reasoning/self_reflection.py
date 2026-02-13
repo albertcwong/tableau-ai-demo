@@ -20,7 +20,7 @@ class SelfReflectionCritic:
         self.api_key = api_key
         self.model = model
         self.ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
+            gateway_url=settings.BACKEND_API_URL,
             api_key=api_key
         )
     

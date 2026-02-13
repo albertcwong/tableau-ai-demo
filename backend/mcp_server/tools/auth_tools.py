@@ -18,8 +18,10 @@ try:
 except ImportError:
     from mcp_server.server import mcp
 
-# Credential storage path
-CREDENTIALS_DIR = PROJECT_ROOT / "credentials"
+# Credential storage path - MCP-specific credentials stored in mcp_server directory
+# This keeps MCP credentials separate from service account files (vertex-sa.json, etc.)
+MCP_SERVER_ROOT = Path(__file__).parent.parent
+CREDENTIALS_DIR = MCP_SERVER_ROOT / "credentials"
 CREDENTIALS_FILE = CREDENTIALS_DIR / ".mcp_auth.json"
 ENCRYPTION_KEY_FILE = CREDENTIALS_DIR / ".mcp_key.key"
 

@@ -25,7 +25,7 @@ class FeedbackManager:
         self.model = model
         self.provider = provider
         self.ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
     
     async def record_correction(

@@ -71,28 +71,40 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
 )
 
-
-@app.on_event("startup")
-async def startup_event():
-    """Run bootstrap logic on startup."""
-    from app.core.bootstrap import bootstrap_admin_user
+# CORS must be added at app creation (cannot add after startup)
+def _get_cors_origins() -> list:
+    from app.core.database import SessionLocal
+    from app.services.auth_config_service import get_resolved_cors_origins
     try:
-        bootstrap_admin_user()
+        db = SessionLocal()
+        try:
+            return get_resolved_cors_origins(db)
+        finally:
+            db.close()
     except Exception as e:
-        logger.error(f"Error during startup bootstrap: {e}")
+        logger.warning(f"CORS: DB not ready, using env fallback: {e}")
+        return settings.cors_origins_list
 
-# Configure CORS - must be added before other middleware
-cors_origins = settings.cors_origins_list
-logger.info(f"CORS origins configured: {cors_origins}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
     max_age=3600,
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Run bootstrap logic on startup."""
+    from app.core.bootstrap import bootstrap_admin_user
+
+    try:
+        bootstrap_admin_user()
+    except Exception as e:
+        logger.error(f"Error during startup bootstrap: {e}")
 
 # Global exception handler to ensure CORS headers on errors
 @app.exception_handler(Exception)
@@ -188,6 +200,8 @@ async def gateway_health_check(
     db=Depends(get_db),
 ):
     """Gateway health check endpoint."""
+    from app.services.auth_config_service import get_resolved_gateway_enabled
+
     try:
         provider_configs = get_configured_providers(db)
         models = []
@@ -199,7 +213,7 @@ async def gateway_health_check(
             "service": "gateway",
             "providers": [p["provider"] for p in provider_configs],  # Backward compatibility
             "model_count": len(models),
-            "enabled": settings.GATEWAY_ENABLED,
+            "enabled": get_resolved_gateway_enabled(db),
         }
         
         if include_models:

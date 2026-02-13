@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse } from '@/lib/api';
+import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse, type SiteInfo } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -61,7 +61,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
   }>({ connected: false });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sites, setSites] = useState<{ id?: string; name?: string; contentUrl?: string }[]>([]);
+  const [sites, setSites] = useState<SiteInfo[]>([]);
   const [switchingSite, setSwitchingSite] = useState(false);
 
   // Load configs on mount
@@ -154,7 +154,9 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
       if (configId) setSelectedConfigId(configId);
       const found = configId ? configsList.find((c) => c.id === configId) : undefined;
       const cfg = found != null ? found : null;
-      const perServerPref = configId ? (perServerPrefs[configId] as AuthType | null) : null;
+      const perServerPref = configId && typeof perServerPrefs === 'object' && configId in perServerPrefs 
+        ? (perServerPrefs as Record<number, AuthType>)[configId] as AuthType | null 
+        : null;
       const resolved = resolveAuthType(cfg, pref as AuthType | null, perServerPref, pats.map((p) => p.tableau_server_config_id), passwords.map((p) => p.tableau_server_config_id), configId);
       setAuthType(resolved);
     } catch (err) {

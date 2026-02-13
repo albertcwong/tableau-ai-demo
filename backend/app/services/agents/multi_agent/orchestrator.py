@@ -76,7 +76,7 @@ class MultiAgentOrchestrator:
         from app.core.config import settings
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         
         planning_prompt = f"""Analyze this user query and determine if it requires multiple agents to complete.
@@ -308,7 +308,7 @@ Return ONLY the JSON array, no other text."""
             from app.core.config import settings
             
             ai_client = UnifiedAIClient(
-                gateway_url=settings.GATEWAY_BASE_URL
+                gateway_url=settings.BACKEND_API_URL
             )
             
             messages = [{"role": "user", "content": action}]

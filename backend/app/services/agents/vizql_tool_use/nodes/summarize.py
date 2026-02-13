@@ -78,7 +78,7 @@ Please format this data into a clear, natural language response that answers the
         
         # Call LLM
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         response = await ai_client.chat(
             model=model,

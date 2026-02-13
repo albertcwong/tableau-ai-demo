@@ -26,7 +26,7 @@ export interface MessageListProps {
   className?: string;
   onEdit?: (messageId: string, newContent: string) => void;
   onDelete?: (messageId: string) => void;
-  onFeedbackChange?: (messageId: string, feedback: string | null, feedbackText?: string | null) => void;
+  onFeedbackChange?: (messageId: string, feedback: 'thumbs_up' | 'thumbs_down' | null, feedbackText?: string | null) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   editable?: boolean;
   streamingMessageId?: string;
@@ -44,7 +44,7 @@ function MessageItem({
   message: Message;
   onEdit?: (messageId: string, newContent: string) => void;
   onDelete?: (messageId: string) => void;
-  onFeedbackChange?: (messageId: string, feedback: string | null, feedbackText?: string | null) => void;
+  onFeedbackChange?: (messageId: string, feedback: 'thumbs_up' | 'thumbs_down' | null, feedbackText?: string | null) => void;
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   editable?: boolean;
   isStreaming?: boolean;

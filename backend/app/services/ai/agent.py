@@ -353,7 +353,7 @@ class Agent:
                     from app.services.ai.client import UnifiedAIClient
                     from app.core.config import settings
                     self.ai_client = UnifiedAIClient(
-                        gateway_url=settings.GATEWAY_BASE_URL,
+                        gateway_url=settings.BACKEND_API_URL,
                         api_key=self.api_key
                     )
                 
@@ -417,7 +417,7 @@ class Agent:
             from app.services.ai.client import UnifiedAIClient
             from app.core.config import settings
             self.ai_client = UnifiedAIClient(
-                gateway_url=settings.GATEWAY_BASE_URL,
+                gateway_url=settings.BACKEND_API_URL,
                 api_key=self.api_key
             )
         

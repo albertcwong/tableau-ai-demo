@@ -35,6 +35,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
 
+def normalize_server_url(server_url: str) -> str:
+    """
+    Normalize Tableau server URL for unique identification.
+    - Convert to lowercase
+    - Remove trailing slash
+    - Remove trailing /api if present (for consistency)
+    """
+    url = server_url.strip().lower()
+    # Remove trailing slash
+    url = url.rstrip('/')
+    # Remove /api suffix if present (some users might include it)
+    if url.endswith('/api'):
+        url = url[:-4]
+    return url
+
+
 # User management models
 class UserCreate(BaseModel):
     """User creation model."""
@@ -87,6 +103,7 @@ class TableauConfigCreate(BaseModel):
     eas_token_endpoint: Optional[str] = None
     eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = False
+    ssl_cert_path: Optional[str] = None
 
 
 class TableauConfigUpdate(BaseModel):
@@ -108,6 +125,7 @@ class TableauConfigUpdate(BaseModel):
     eas_token_endpoint: Optional[str] = None
     eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = None
+    ssl_cert_path: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -131,6 +149,7 @@ class TableauConfigResponse(BaseModel):
     eas_token_endpoint: Optional[str] = None
     eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = False
+    ssl_cert_path: Optional[str] = None
     is_active: bool
     created_by: Optional[int]
     created_at: str
@@ -420,6 +439,7 @@ async def list_tableau_configs(
         eas_token_endpoint=getattr(c, 'eas_token_endpoint', None),
         eas_sub_claim_field=getattr(c, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(c, 'skip_ssl_verify', False),
+        ssl_cert_path=getattr(c, 'ssl_cert_path', None),
         is_active=c.is_active,
         created_by=c.created_by,
         created_at=c.created_at.isoformat()
@@ -432,7 +452,25 @@ async def create_tableau_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user)
 ):
-    """Create a new Tableau server configuration."""
+    """Create a new Tableau server configuration.
+    
+    Server URL is the unique identifier for a Tableau server.
+    It will be normalized (lowercase, trailing slash removed) before storage.
+    """
+    # Normalize server URL for unique identification
+    normalized_url = normalize_server_url(config_data.server_url)
+    
+    # Check if a configuration already exists for this server URL
+    existing_config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.server_url == normalized_url
+    ).first()
+    
+    if existing_config:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A configuration already exists for Tableau server: {existing_config.server_url} (ID: {existing_config.id}, Name: {existing_config.name})"
+        )
+    
     allow_pat = config_data.allow_pat_auth or False
     allow_standard = config_data.allow_standard_auth or False
     allow_oauth = config_data.allow_connected_app_oauth or False
@@ -457,7 +495,7 @@ async def create_tableau_config(
         eas_secret = encrypt_secret(eas_secret)
     new_config = TableauServerConfig(
         name=config_data.name,
-        server_url=config_data.server_url.rstrip('/'),
+        server_url=normalized_url,  # Use normalized URL
         site_id=config_data.site_id or "",
         api_version=config_data.api_version or "3.15",
         client_id=(config_data.client_id or "").strip() or None,
@@ -473,6 +511,8 @@ async def create_tableau_config(
         eas_token_endpoint=(config_data.eas_token_endpoint or "").strip() or None,
         eas_sub_claim_field=(config_data.eas_sub_claim_field or "").strip() or None,
         skip_ssl_verify=config_data.skip_ssl_verify or False,
+        # ssl_cert_path will be available after migration runs
+        # ssl_cert_path=(config_data.ssl_cert_path or "").strip() or None if config_data.ssl_cert_path else None,
         is_active=True,
         created_by=current_user.id
     )
@@ -499,6 +539,7 @@ async def create_tableau_config(
         eas_token_endpoint=getattr(new_config, 'eas_token_endpoint', None),
         eas_sub_claim_field=getattr(new_config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(new_config, 'skip_ssl_verify', False),
+        ssl_cert_path=getattr(new_config, 'ssl_cert_path', None),
         is_active=new_config.is_active,
         created_by=new_config.created_by,
         created_at=new_config.created_at.isoformat()
@@ -537,6 +578,53 @@ async def get_tableau_config(
         eas_token_endpoint=getattr(config, 'eas_token_endpoint', None),
         eas_sub_claim_field=getattr(config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
+        ssl_cert_path=getattr(config, 'ssl_cert_path', None),
+        is_active=config.is_active,
+        created_by=config.created_by,
+        created_at=config.created_at.isoformat()
+    )
+
+
+@router.get("/admin/tableau-configs/by-url", response_model=TableauConfigResponse)
+async def get_tableau_config_by_url(
+    server_url: str = Query(..., description="Tableau server URL (will be normalized)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Get Tableau server configuration by server URL.
+    
+    Server URL is normalized (lowercase, trailing slash removed) before lookup.
+    This is the primary way to identify a Tableau server configuration.
+    """
+    normalized_url = normalize_server_url(server_url)
+    config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.server_url == normalized_url
+    ).first()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Configuration not found for server URL: {server_url}"
+        )
+    return TableauConfigResponse(
+        id=config.id,
+        name=config.name,
+        server_url=config.server_url,
+        site_id=config.site_id,
+        api_version=getattr(config, 'api_version', None) or "3.15",
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        secret_id=config.secret_id,
+        allow_pat_auth=getattr(config, 'allow_pat_auth', False),
+        allow_standard_auth=getattr(config, 'allow_standard_auth', False),
+        allow_connected_app_oauth=getattr(config, 'allow_connected_app_oauth', False),
+        eas_issuer_url=getattr(config, 'eas_issuer_url', None),
+        eas_client_id=getattr(config, 'eas_client_id', None),
+        eas_client_secret=getattr(config, 'eas_client_secret', None),
+        eas_authorization_endpoint=getattr(config, 'eas_authorization_endpoint', None),
+        eas_token_endpoint=getattr(config, 'eas_token_endpoint', None),
+        eas_sub_claim_field=getattr(config, 'eas_sub_claim_field', None),
+        skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
+        ssl_cert_path=getattr(config, 'ssl_cert_path', None),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat()
@@ -561,7 +649,18 @@ async def update_tableau_config(
     if config_data.name is not None:
         config.name = config_data.name
     if config_data.server_url is not None:
-        config.server_url = config_data.server_url.rstrip('/')
+        # Normalize server URL and check for duplicates (excluding current config)
+        normalized_url = normalize_server_url(config_data.server_url)
+        existing_config = db.query(TableauServerConfig).filter(
+            TableauServerConfig.server_url == normalized_url,
+            TableauServerConfig.id != config_id
+        ).first()
+        if existing_config:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A configuration already exists for Tableau server: {existing_config.server_url} (ID: {existing_config.id}, Name: {existing_config.name})"
+            )
+        config.server_url = normalized_url
     if config_data.site_id is not None:
         config.site_id = config_data.site_id
     if config_data.api_version is not None:
@@ -594,6 +693,9 @@ async def update_tableau_config(
         config.eas_sub_claim_field = (config_data.eas_sub_claim_field or "").strip() or None
     if config_data.skip_ssl_verify is not None:
         config.skip_ssl_verify = config_data.skip_ssl_verify
+    # ssl_cert_path will be available after migration runs
+    # if config_data.ssl_cert_path is not None:
+    #     config.ssl_cert_path = (config_data.ssl_cert_path or "").strip() or None
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
 
@@ -639,6 +741,7 @@ async def update_tableau_config(
         eas_token_endpoint=getattr(config, 'eas_token_endpoint', None),
         eas_sub_claim_field=getattr(config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
+        ssl_cert_path=getattr(config, 'ssl_cert_path', None),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat()
@@ -1264,6 +1367,16 @@ class AuthConfigResponse(BaseModel):
     backend_api_url: Optional[str] = None
     tableau_oauth_frontend_redirect: Optional[str] = None
     eas_jwt_key_configured: bool = False  # True if key in DB or EAS_JWT_KEY_PATH set; never expose key
+    cors_origins: Optional[str] = None
+    mcp_server_name: Optional[str] = None
+    mcp_transport: Optional[str] = None
+    mcp_log_level: Optional[str] = None
+    redis_token_ttl: Optional[int] = None
+    resolved_cors_origins: Optional[str] = None  # Effective value (DB or env)
+    resolved_mcp_server_name: Optional[str] = None
+    resolved_mcp_transport: Optional[str] = None
+    resolved_mcp_log_level: Optional[str] = None
+    resolved_redis_token_ttl: Optional[int] = None
     updated_by: Optional[int] = None
     updated_at: str
     created_at: str
@@ -1282,6 +1395,11 @@ class AuthConfigUpdate(BaseModel):
     backend_api_url: Optional[str] = None
     tableau_oauth_frontend_redirect: Optional[str] = None
     eas_jwt_key_pem: Optional[str] = None  # PEM content; empty string to clear
+    cors_origins: Optional[str] = None
+    mcp_server_name: Optional[str] = None
+    mcp_transport: Optional[str] = None
+    mcp_log_level: Optional[str] = None
+    redis_token_ttl: Optional[int] = None
 
 
 # Agent management
@@ -1405,9 +1523,17 @@ async def get_auth_config_endpoint(
     current_user: User = Depends(get_current_admin_user)
 ):
     """Get current authentication configuration."""
-    from app.services.auth_config_service import get_resolved_eas_jwt_key_content
+    from app.services.auth_config_service import (
+        get_resolved_eas_jwt_key_content,
+        get_resolved_cors_origins,
+        get_resolved_mcp_server_name,
+        get_resolved_mcp_transport,
+        get_resolved_mcp_log_level,
+        get_resolved_redis_token_ttl,
+    )
     config = get_auth_config(db)
     has_key = bool(config.eas_jwt_key_pem_encrypted) or bool(getattr(settings, "EAS_JWT_KEY_PATH", None))
+    cors_list = get_resolved_cors_origins(db)
     return AuthConfigResponse(
         id=config.id,
         enable_password_auth=config.enable_password_auth,
@@ -1421,6 +1547,16 @@ async def get_auth_config_endpoint(
         backend_api_url=config.backend_api_url,
         tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
         eas_jwt_key_configured=has_key,
+        cors_origins=config.cors_origins,
+        mcp_server_name=config.mcp_server_name,
+        mcp_transport=config.mcp_transport,
+        mcp_log_level=config.mcp_log_level,
+        redis_token_ttl=config.redis_token_ttl,
+        resolved_cors_origins=", ".join(cors_list) if cors_list else None,
+        resolved_mcp_server_name=get_resolved_mcp_server_name(db),
+        resolved_mcp_transport=get_resolved_mcp_transport(db),
+        resolved_mcp_log_level=get_resolved_mcp_log_level(db),
+        resolved_redis_token_ttl=get_resolved_redis_token_ttl(db),
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()
@@ -1479,11 +1615,24 @@ async def update_auth_config_endpoint(
         backend_api_url=config_data.backend_api_url,
         tableau_oauth_frontend_redirect=config_data.tableau_oauth_frontend_redirect,
         eas_jwt_key_pem=config_data.eas_jwt_key_pem,
+        cors_origins=config_data.cors_origins,
+        mcp_server_name=config_data.mcp_server_name,
+        mcp_transport=config_data.mcp_transport,
+        mcp_log_level=config_data.mcp_log_level,
+        redis_token_ttl=config_data.redis_token_ttl,
         updated_by=current_user.id
     )
 
-    from app.services.auth_config_service import get_resolved_eas_jwt_key_content
+    from app.services.auth_config_service import (
+        get_resolved_eas_jwt_key_content,
+        get_resolved_cors_origins,
+        get_resolved_mcp_server_name,
+        get_resolved_mcp_transport,
+        get_resolved_mcp_log_level,
+        get_resolved_redis_token_ttl,
+    )
     has_key = bool(config.eas_jwt_key_pem_encrypted) or bool(getattr(settings, "EAS_JWT_KEY_PATH", None))
+    cors_list = get_resolved_cors_origins(db)
     return AuthConfigResponse(
         id=config.id,
         enable_password_auth=config.enable_password_auth,
@@ -1497,6 +1646,16 @@ async def update_auth_config_endpoint(
         backend_api_url=config.backend_api_url,
         tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
         eas_jwt_key_configured=has_key,
+        cors_origins=config.cors_origins,
+        mcp_server_name=config.mcp_server_name,
+        mcp_transport=config.mcp_transport,
+        mcp_log_level=config.mcp_log_level,
+        redis_token_ttl=config.redis_token_ttl,
+        resolved_cors_origins=", ".join(cors_list) if cors_list else None,
+        resolved_mcp_server_name=get_resolved_mcp_server_name(db),
+        resolved_mcp_transport=get_resolved_mcp_transport(db),
+        resolved_mcp_log_level=get_resolved_mcp_log_level(db),
+        resolved_redis_token_ttl=get_resolved_redis_token_ttl(db),
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()

@@ -86,7 +86,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         
         messages = [

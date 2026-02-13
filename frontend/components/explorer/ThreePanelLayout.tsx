@@ -175,7 +175,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
     // Only load if connected AND we have a connected config
     // This prevents loading on initial mount when isConnected might be false
     if (isConnected && connectedConfig) {
-      loadDatasourcesAndWorkbooks(1, false);
+      loadDatasourcesAndWorkbooks();
     } else if (!isConnected) {
       // Clear data when disconnected
       setAllDatasources([]);
@@ -552,7 +552,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
               pageNumber: workbooksResult.pagination.page_number,
               totalAvailable: workbooksResult.pagination.total_available,
             });
-            console.log('Loaded datasources:', datasources.length);
+            console.log('Loaded datasources:', datasourcesResult.datasources.length);
             // Try again after loading
             datasource = datasourcesResult.datasources.find(ds => ds.id === datasourceId);
             console.log('After loading, found datasource:', datasource ? datasource.name : 'still not found');

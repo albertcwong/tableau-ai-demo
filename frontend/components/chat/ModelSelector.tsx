@@ -36,8 +36,9 @@ export function ModelSelector({
   // Fetch providers on mount
   useEffect(() => {
     const fetchProviders = async () => {
+      let providerList: Array<{ provider: string; name: string }> = [];
       try {
-        const providerList = await gatewayApi.getProviders();
+        providerList = await gatewayApi.getProviders();
         setProviders(providerList);
         
         // Create a map of provider -> display name for quick lookup

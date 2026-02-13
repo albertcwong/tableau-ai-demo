@@ -134,6 +134,10 @@ class TableauServerConfig(Base):
     eas_token_endpoint = Column(String(500), nullable=True, comment="EAS token endpoint (optional, from discovery)")
     eas_sub_claim_field = Column(String(100), nullable=True, comment="Auth0 claim/field for JWT sub (e.g. email, tableau_username, name). Passed to authorize URL.")
     skip_ssl_verify = Column(Boolean, default=False, nullable=False, comment="Skip SSL certificate verification for Tableau API calls")
+    # ssl_cert_path will be added by migration ae_add_unique_server_url_and_ssl_cert_path
+    # Temporarily commented out until migration runs to avoid SQLAlchemy errors
+    # Uncomment after running: alembic upgrade head
+    # ssl_cert_path = Column(String(500), nullable=True, comment="Path to SSL certificate file (.pem or .crt) for verifying Tableau server certificate")
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
@@ -146,10 +150,13 @@ class TableauServerConfig(Base):
     user_passwords = relationship("UserTableauPassword", back_populates="tableau_config", cascade="all, delete-orphan")
     user_auth_preferences = relationship("UserTableauAuthPreference", back_populates="tableau_config", cascade="all, delete-orphan")
 
-    # Indexes
+    # Indexes and constraints
     __table_args__ = (
         Index("idx_tableau_config_server_site", "server_url", "site_id"),
         Index("idx_tableau_config_active", "is_active"),
+        # Unique constraint: server_url is the unique identifier for a Tableau server
+        # Normalized to lowercase with trailing slash removed
+        UniqueConstraint("server_url", name="uq_tableau_server_config_server_url"),
     )
 
     def __repr__(self):
@@ -320,6 +327,14 @@ class AuthConfig(Base):
     backend_api_url = Column(String(500), nullable=True, comment="Backend API URL for OAuth callback and EAS issuer")
     tableau_oauth_frontend_redirect = Column(String(500), nullable=True, comment="Frontend URL for OAuth redirect after connect")
     eas_jwt_key_pem_encrypted = Column(Text(), nullable=True, comment="Encrypted RSA private key PEM for EAS JWT signing")
+
+    # App config (CORS, gateway, MCP, Redis)
+    cors_origins = Column(String(500), nullable=True, comment="CORS allowed origins (comma-separated)")
+    gateway_enabled = Column(Boolean, nullable=True, comment="Enable embedded gateway")
+    mcp_server_name = Column(String(100), nullable=True, comment="MCP server name (default: tableau-ai-demo-mcp)")
+    mcp_transport = Column(String(20), nullable=True, comment="MCP transport: stdio or sse")
+    mcp_log_level = Column(String(20), nullable=True, comment="MCP log level")
+    redis_token_ttl = Column(Integer, nullable=True, comment="Redis token cache TTL in seconds")
 
     # Metadata
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)

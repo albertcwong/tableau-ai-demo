@@ -1,7 +1,7 @@
 """Authentication configuration service with caching."""
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from sqlalchemy.orm import Session
 from app.models.user import AuthConfig
 from app.core.config import settings
@@ -79,6 +79,11 @@ def update_auth_config(
     backend_api_url: Optional[str] = None,
     tableau_oauth_frontend_redirect: Optional[str] = None,
     eas_jwt_key_pem: Optional[str] = None,
+    cors_origins: Optional[str] = None,
+    mcp_server_name: Optional[str] = None,
+    mcp_transport: Optional[str] = None,
+    mcp_log_level: Optional[str] = None,
+    redis_token_ttl: Optional[int] = None,
     updated_by: Optional[int] = None
 ) -> AuthConfig:
     """
@@ -120,6 +125,16 @@ def update_auth_config(
         config.tableau_oauth_frontend_redirect = (tableau_oauth_frontend_redirect or "").strip() or None
     if eas_jwt_key_pem is not None:
         config.eas_jwt_key_pem_encrypted = encrypt_secret(eas_jwt_key_pem) if eas_jwt_key_pem.strip() else None
+    if cors_origins is not None:
+        config.cors_origins = (cors_origins or "").strip() or None
+    if mcp_server_name is not None:
+        config.mcp_server_name = (mcp_server_name or "").strip() or None
+    if mcp_transport is not None:
+        config.mcp_transport = (mcp_transport or "").strip() or None
+    if mcp_log_level is not None:
+        config.mcp_log_level = (mcp_log_level or "").strip() or None
+    if redis_token_ttl is not None:
+        config.redis_token_ttl = redis_token_ttl
     if updated_by is not None:
         config.updated_by = updated_by
 
@@ -145,6 +160,52 @@ def get_resolved_tableau_oauth_frontend_redirect(db: Session) -> str:
     config = get_auth_config(db, use_cache=False)
     url = (config.tableau_oauth_frontend_redirect or "").strip() if config else ""
     return url or (settings.TABLEAU_OAUTH_FRONTEND_REDIRECT or "http://localhost:3000")
+
+
+def get_resolved_cors_origins(db: Session) -> List[str]:
+    """CORS origins: DB overrides settings."""
+    config = get_auth_config(db, use_cache=True)
+    val = (config.cors_origins or "").strip() if config and config.cors_origins else ""
+    if val:
+        return [o.strip() for o in val.split(",") if o.strip()]
+    raw = settings.CORS_ORIGINS or ""
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return ["http://localhost:3000", "https://localhost:3000", "http://localhost:3001"]
+
+
+def get_resolved_gateway_enabled(db: Session) -> bool:
+    """Gateway is always enabled (embedded in backend)."""
+    return True
+
+
+def get_resolved_mcp_server_name(db: Session) -> str:
+    """MCP server name: DB overrides settings."""
+    config = get_auth_config(db, use_cache=True)
+    val = (config.mcp_server_name or "").strip() if config and config.mcp_server_name else ""
+    return val or getattr(settings, "MCP_SERVER_NAME", "tableau-ai-demo-mcp")
+
+
+def get_resolved_mcp_transport(db: Session) -> str:
+    """MCP transport: DB overrides settings."""
+    config = get_auth_config(db, use_cache=True)
+    val = (config.mcp_transport or "").strip() if config and config.mcp_transport else ""
+    return val or getattr(settings, "MCP_TRANSPORT", "stdio")
+
+
+def get_resolved_mcp_log_level(db: Session) -> str:
+    """MCP log level: DB overrides settings."""
+    config = get_auth_config(db, use_cache=True)
+    val = (config.mcp_log_level or "").strip() if config and config.mcp_log_level else ""
+    return val or getattr(settings, "MCP_LOG_LEVEL", "info")
+
+
+def get_resolved_redis_token_ttl(db: Session) -> int:
+    """Redis token TTL: DB overrides settings."""
+    config = get_auth_config(db, use_cache=True)
+    if config and config.redis_token_ttl is not None:
+        return config.redis_token_ttl
+    return getattr(settings, "REDIS_TOKEN_TTL", 3600)
 
 
 def get_resolved_eas_jwt_key_content(db: Session) -> Optional[str]:

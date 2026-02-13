@@ -152,9 +152,11 @@ export function ViewEmbedder({
         }
 
         // Get container height for initial sizing
+        if (!containerRef.current) return;
         const height = containerRef.current.clientHeight || containerHeight || 600;
 
         // Create new tableau-viz web component using Tableau Embedding API v3
+        if (!containerRef.current) return;
         const viz = document.createElement('tableau-viz') as HTMLElement;
         viz.id = `tableau-viz-${viewId}`;
         viz.setAttribute('data-view-id', viewId);

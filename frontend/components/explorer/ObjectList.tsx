@@ -119,8 +119,8 @@ export function ObjectList({
                   size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!isInContext) {
-                      onAddToContext(item.id, item.type, item.name);
+                    if (!isInContext && (item.type === 'datasource' || item.type === 'view')) {
+                      onAddToContext?.(item.id, item.type, item.name);
                     }
                   }}
                   disabled={isInContext}

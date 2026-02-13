@@ -86,7 +86,7 @@ async def format_results_node(state: StreamlinedVizQLState) -> Dict[str, Any]:
         logger.info(f"Generating natural language answer for query results ({row_count} rows)")
         from app.core.config import settings
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         
         messages = [

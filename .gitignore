@@ -10,11 +10,16 @@ env/
 .env.*.local
 
 # Credentials
-credentials/*.json
-credentials/*.pem
-credentials/*.key
+credentials/
 !credentials/.gitkeep
 !credentials/*.example
+backend/credentials/
+!backend/credentials/.gitkeep
+!backend/credentials/*.example
+
+# MCP Server credentials (MCP-specific, stored in mcp_server directory)
+backend/mcp_server/credentials/
+!backend/mcp_server/credentials/.gitkeep
 
 # Python
 __pycache__/

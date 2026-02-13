@@ -28,9 +28,6 @@ jobs:
           - name: frontend
             dockerfile: frontend/Dockerfile
             context: frontend
-          - name: gateway
-            dockerfile: backend/Dockerfile.gateway
-            context: backend
           - name: mcp-server
             dockerfile: backend/Dockerfile.mcp
             context: backend

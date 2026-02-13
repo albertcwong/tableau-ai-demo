@@ -15,7 +15,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { X, GripVertical, Settings } from 'lucide-react';
-import type { ChatContextObject, ConversationResponse } from '@/types';
+import type { ChatContextObject } from '@/types';
+import type { ConversationResponse } from '@/lib/api';
 import type { EmbeddedViewState } from '@/lib/tableauEmbeddedState';
 
 interface RenderedState {

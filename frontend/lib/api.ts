@@ -18,6 +18,7 @@ import type {
   TableauProject,
   TableauWorkbook,
   ProjectContents,
+  ChatContextObject,
   DatasourceSchema,
   DatasourceSample,
   ChatContext,
@@ -31,6 +32,9 @@ import type {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_TIMEOUT = 30000; // 30 seconds
 const LONG_OPERATION_TIMEOUT = 180000; // 3 minutes for schema enrichment, etc.
+
+// Auth0 token cache (for client-side token management)
+let auth0TokenCache: { token: string | null; expiresAt: number } = { token: null, expiresAt: 0 };
 
 export const apiClient = axios.create({
   baseURL: API_URL,
@@ -226,7 +230,7 @@ export interface MessageResponse {
   content: string;
   model_used?: string;
   tokens_used?: number;
-  feedback?: string | null;
+  feedback?: 'thumbs_up' | 'thumbs_down' | null;
   feedback_text?: string | null;
   total_time_ms?: number | null;
   extra_metadata?: Record<string, any> | null;  // Additional metadata (e.g., is_greeting flag)
@@ -688,6 +692,18 @@ export const tableauExplorerApi = {
     return response.data;
   },
 
+  // List projects (stub - projects endpoint not yet implemented)
+  listProjects: async (): Promise<TableauProject[]> => {
+    // TODO: Implement projects endpoint in backend
+    return [];
+  },
+
+  // Get project contents (stub - endpoint not yet implemented)
+  getProjectContents: async (projectId: string): Promise<ProjectContents> => {
+    // TODO: Implement project contents endpoint in backend
+    return { project_id: projectId, datasources: [], workbooks: [], projects: [] };
+  },
+
   // Get datasource schema (enrichment pipeline: VizQL + Metadata API - can be slow)
   getDatasourceSchema: async (datasourceId: string, forceRefresh = false): Promise<DatasourceSchema> => {
     const response = await apiClient.get<DatasourceSchema>(`/api/v1/tableau/datasources/${datasourceId}/schema`, {
@@ -1013,6 +1029,7 @@ export interface TableauConfigCreate {
   eas_token_endpoint?: string;
   eas_sub_claim_field?: string;
   skip_ssl_verify?: boolean;
+  ssl_cert_path?: string;
 }
 
 export interface TableauConfigUpdate {
@@ -1033,6 +1050,7 @@ export interface TableauConfigUpdate {
   eas_token_endpoint?: string;
   eas_sub_claim_field?: string;
   skip_ssl_verify?: boolean;
+  ssl_cert_path?: string;
   is_active?: boolean;
 }
 
@@ -1055,6 +1073,7 @@ export interface TableauConfigResponse {
   eas_token_endpoint?: string | null;
   eas_sub_claim_field?: string | null;
   skip_ssl_verify?: boolean;
+  ssl_cert_path?: string | null;
   is_active: boolean;
   created_by?: number | null;
   created_at: string;
@@ -1175,6 +1194,16 @@ export interface AuthConfigResponse {
   backend_api_url?: string | null;
   tableau_oauth_frontend_redirect?: string | null;
   eas_jwt_key_configured: boolean;
+  cors_origins?: string | null;
+  mcp_server_name?: string | null;
+  mcp_transport?: string | null;
+  mcp_log_level?: string | null;
+  redis_token_ttl?: number | null;
+  resolved_cors_origins?: string | null;
+  resolved_mcp_server_name?: string | null;
+  resolved_mcp_transport?: string | null;
+  resolved_mcp_log_level?: string | null;
+  resolved_redis_token_ttl?: number | null;
   updated_by?: number | null;
   updated_at: string;
   created_at: string;
@@ -1192,6 +1221,11 @@ export interface AuthConfigUpdate {
   backend_api_url?: string;
   tableau_oauth_frontend_redirect?: string;
   eas_jwt_key_pem?: string;
+  cors_origins?: string;
+  mcp_server_name?: string;
+  mcp_transport?: string;
+  mcp_log_level?: string;
+  redis_token_ttl?: number;
 }
 
 // Agent Configuration interfaces

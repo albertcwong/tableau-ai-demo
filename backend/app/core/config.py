@@ -52,10 +52,8 @@ class Settings(BaseSettings):
     TABLEAU_USERNAME: Optional[str] = None  # Optional: Username for JWT 'sub' claim (defaults to client_id)
     TABLEAU_API_VERSION: str = "3.21"  # Tableau REST API version (e.g., "3.21", "3.27")
     
-    # Gateway
+    # Gateway (embedded in backend; uses BACKEND_API_URL)
     GATEWAY_ENABLED: bool = True
-    GATEWAY_BASE_URL: str = "http://localhost:8001"
-    GATEWAY_PORT: int = 8001
     MODEL_MAPPING: Optional[str] = None  # JSON string for custom model-to-provider mapping
     
     # SSL/TLS Configuration
@@ -82,7 +80,7 @@ class Settings(BaseSettings):
     APPLE_ENDOR_ENDPOINT: str = ""
     
     # MCP Server
-    MCP_SERVER_NAME: str = "tableau-analyst-agent"
+    MCP_SERVER_NAME: str = "tableau-ai-demo-mcp"
     MCP_TRANSPORT: str = "stdio"  # stdio or sse
     MCP_LOG_LEVEL: str = "info"
     
@@ -124,14 +122,6 @@ class Settings(BaseSettings):
                 urlparse(v)
             except Exception as e:
                 raise ValueError(f'Invalid TABLEAU_SERVER_URL format: {e}')
-        return v
-    
-    @field_validator('GATEWAY_BASE_URL')
-    @classmethod
-    def validate_gateway_url(cls, v: str) -> str:
-        """Validate Gateway base URL format."""
-        if v and not v.startswith(('http://', 'https://')):
-            raise ValueError('GATEWAY_BASE_URL must start with http:// or https://')
         return v
     
     @field_validator('DATABASE_URL')

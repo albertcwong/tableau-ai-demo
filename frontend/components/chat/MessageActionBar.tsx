@@ -10,11 +10,11 @@ import { chatApi } from '@/lib/api';
 interface MessageActionBarProps {
   messageId: number;
   content: string;
-  feedback?: string | null;
+  feedback?: 'thumbs_up' | 'thumbs_down' | null;
   feedbackText?: string | null;
   totalTimeMs?: number | null;
   vizqlQuery?: Record<string, any> | null;
-  onFeedbackChange?: (feedback: string | null, feedbackText?: string | null) => void;
+  onFeedbackChange?: (feedback: 'thumbs_up' | 'thumbs_down' | null, feedbackText?: string | null) => void;
   onLoadQuery?: (query: Record<string, any>) => void;
 }
 
@@ -30,7 +30,7 @@ export function MessageActionBar({
 }: MessageActionBarProps) {
   const [isCopying, setIsCopying] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [feedback, setFeedback] = useState<string | null | undefined>(initialFeedback);
+  const [feedback, setFeedback] = useState<'thumbs_up' | 'thumbs_down' | null | undefined>(initialFeedback);
   const [feedbackText, setFeedbackText] = useState<string | null | undefined>(initialFeedbackText);
   const [feedbackSaved, setFeedbackSaved] = useState(false);
   

@@ -148,16 +148,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       
-      - name: Build gateway image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile.gateway
-          push: false
-          tags: tableau-demo-gateway:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
       - name: Build MCP server image
         uses: docker/build-push-action@v5
         with:

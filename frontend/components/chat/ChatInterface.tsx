@@ -110,7 +110,7 @@ export function ChatInterface({
           content: msg.content,
           createdAt: new Date(msg.created_at),
           modelUsed: msg.model_used,
-          feedback: msg.feedback,
+          feedback: msg.feedback as 'thumbs_up' | 'thumbs_down' | null | undefined,
           feedbackText: msg.feedback_text,
           totalTimeMs: msg.total_time_ms,
           vizqlQuery: msg.vizql_query,

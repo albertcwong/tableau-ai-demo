@@ -30,9 +30,8 @@ export function ConditionalAuth0Provider({ children }: { children: ReactNode }) 
 
   // Always render Auth0Provider so useAuth0User hook works (React hooks rules)
   // When OAuth is disabled, AuthProvider will ignore Auth0 results
-  // Configure basePath to match our route structure
   return (
-    <Auth0Provider basePath="/auth">
+    <Auth0Provider>
       <AuthProvider oauthEnabled={oauthEnabled && !loading}>
         {children}
       </AuthProvider>

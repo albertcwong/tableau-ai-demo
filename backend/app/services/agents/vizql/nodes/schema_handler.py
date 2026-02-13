@@ -225,7 +225,7 @@ async def handle_schema_query_node(state: VizQLAgentState) -> Dict[str, Any]:
         provider = state.get("provider", "openai")
         
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL
+            gateway_url=settings.BACKEND_API_URL
         )
         
         # Call LLM to generate answer

@@ -14,6 +14,7 @@ import { TableauConfigManagement } from '@/components/admin/TableauConfigManagem
 import { ProviderConfigManagement } from '@/components/admin/ProviderConfigManagement';
 import { FeedbackManagement } from '@/components/admin/FeedbackManagement';
 import { AuthConfigManagement } from '@/components/admin/AuthConfigManagement';
+import { SettingsManagement } from '@/components/admin/SettingsManagement';
 import { AgentManagement } from '@/components/admin/AgentManagement';
 import { Home, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -106,8 +107,9 @@ function AdminDashboardContent() {
           </p>
         </div>
 
-        <Tabs defaultValue="users" className="space-y-4">
+        <Tabs defaultValue="settings" className="space-y-4">
           <TabsList>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="auth">Authentication</TabsTrigger>
@@ -154,6 +156,20 @@ function AdminDashboardContent() {
               </CardHeader>
               <CardContent>
                 <AuthConfigManagement />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <Card>
+              <CardHeader>
+                <CardTitle>General Settings</CardTitle>
+                <CardDescription>
+                  CORS, MCP server, and Redis token cache. Override .env defaults.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <SettingsManagement />
               </CardContent>
             </Card>
           </TabsContent>

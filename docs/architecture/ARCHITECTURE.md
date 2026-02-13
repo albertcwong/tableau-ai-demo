@@ -552,7 +552,6 @@ LLM Provider Error
 
 ## References
 
-- [Deployment Guide](./DEPLOYMENT.md) - How to deploy the application
-- [MCP Server Deployment](./MCP_SERVER_DEPLOYMENT.md) - MCP-specific deployment
-- [Testing Instructions](./TESTING_INSTRUCTIONS.md) - How to test the system
-- [Plan](./PLAN.md) - Implementation plan and phases
+- [Deployment Guide](../deployment/DEPLOYMENT.md) - How to deploy the application
+- [MCP Server Deployment](../deployment/MCP_SERVER_DEPLOYMENT.md) - MCP-specific deployment
+- [Main README](../../README.md) - Project overview and getting started

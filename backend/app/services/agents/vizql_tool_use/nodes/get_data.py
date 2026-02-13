@@ -151,7 +151,7 @@ Your action: Use filter with ["Houston", "Philadelphia", "Seattle"]"""
         # Call LLM with tools
         # Use longer timeout (5 minutes) for processing large data to avoid timeouts
         ai_client = UnifiedAIClient(
-            gateway_url=settings.GATEWAY_BASE_URL,
+            gateway_url=settings.BACKEND_API_URL,
             timeout=300  # 5 minutes for large data processing
         )
         tool_calls_made = []

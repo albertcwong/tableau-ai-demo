@@ -239,7 +239,7 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
     if (hasToolResultSummary) {
       return stepTiming.toolResultSummary;
     }
-    if (hasToolCalls) {
+    if (hasToolCalls && stepTiming?.toolCalls) {
       return `Tools used: ${stepTiming.toolCalls.join(', ')}`;
     }
     return '';

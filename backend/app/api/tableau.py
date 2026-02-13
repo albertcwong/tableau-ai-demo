@@ -252,6 +252,7 @@ async def get_tableau_client(
                     username=tableau_username,
                     secret_id=config.secret_id or config.client_id,
                     verify_ssl=not getattr(config, "skip_ssl_verify", False),
+                    ssl_cert_path=getattr(config, "ssl_cert_path", None),
                     on_401_invalidate=invalidate_cb,
                 )
                 await client.sign_in()

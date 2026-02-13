@@ -49,6 +49,7 @@ class TableauClient:
         timeout: int = 30,
         max_retries: int = 3,
         verify_ssl: Optional[bool] = None,
+        ssl_cert_path: Optional[str] = None,
         initial_token: Optional[str] = None,
         initial_site_id: Optional[str] = None,
         initial_site_content_url: Optional[str] = None,
@@ -117,26 +118,30 @@ class TableauClient:
                 self._eas_oauth_auth = True
         
         # SSL verification setting
+        # Priority: verify_ssl parameter > config ssl_cert_path > global TABLEAU_SSL_CERT_PATH > default
         # If verify_ssl=False (from config skip_ssl_verify), skip verification
         if verify_ssl is False:
             self.verify_ssl = False
-        elif settings.TABLEAU_SSL_CERT_PATH:
-            cert_path = Path(settings.TABLEAU_SSL_CERT_PATH).expanduser()
-            if not cert_path.is_absolute():
-                cert_path = PROJECT_ROOT / cert_path
-            cert_path = cert_path.resolve()
-            if cert_path.exists():
-                ssl_context = ssl.create_default_context(cafile=str(cert_path))
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_REQUIRED
-                self.verify_ssl = ssl_context
-            else:
-                raise ValueError(
-                    f"Tableau SSL certificate file not found: {cert_path} "
-                    f"(resolved from: {settings.TABLEAU_SSL_CERT_PATH})"
-                )
         else:
-            self.verify_ssl = settings.TABLEAU_VERIFY_SSL if verify_ssl is None else verify_ssl
+            # Use per-config ssl_cert_path if provided, otherwise fall back to global setting
+            cert_path_to_use = ssl_cert_path or settings.TABLEAU_SSL_CERT_PATH
+            if cert_path_to_use:
+                cert_path = Path(cert_path_to_use).expanduser()
+                if not cert_path.is_absolute():
+                    cert_path = PROJECT_ROOT / cert_path
+                cert_path = cert_path.resolve()
+                if cert_path.exists():
+                    ssl_context = ssl.create_default_context(cafile=str(cert_path))
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_REQUIRED
+                    self.verify_ssl = ssl_context
+                else:
+                    raise ValueError(
+                        f"Tableau SSL certificate file not found: {cert_path} "
+                        f"(resolved from: {cert_path_to_use})"
+                    )
+            else:
+                self.verify_ssl = settings.TABLEAU_VERIFY_SSL if verify_ssl is None else verify_ssl
         
         # HTTP client with SSL configuration
         self._client = httpx.AsyncClient(
