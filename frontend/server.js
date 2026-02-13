@@ -44,9 +44,23 @@ async function requestHandler(req, res) {
 }
 
 app.prepare().then(() => {
-  // Create HTTPS server if certificates are available
+  const upgradeHandler = app.getUpgradeHandler?.() || (() => {});
+
+  function attachUpgrade(server) {
+    if (server && upgradeHandler) {
+      server.on('upgrade', (req, socket, head) => {
+        upgradeHandler(req, socket, head).catch((err) => {
+          console.error('Upgrade error:', err);
+          socket.destroy();
+        });
+      });
+    }
+  }
+
   if (httpsOptions) {
-    createHttpsServer(httpsOptions, requestHandler).listen(httpsPort, hostname, (err) => {
+    const httpsServer = createHttpsServer(httpsOptions, requestHandler);
+    attachUpgrade(httpsServer);
+    httpsServer.listen(httpsPort, hostname, (err) => {
       if (err) throw err;
       console.log(`> HTTPS server ready on https://${hostname}:${httpsPort}`);
     });
@@ -54,8 +68,9 @@ app.prepare().then(() => {
     console.log(`> HTTPS server skipped (no certificates)`);
   }
 
-  // Create HTTP server (always available as fallback)
-  createHttpServer(requestHandler).listen(httpPort, hostname, (err) => {
+  const httpServer = createHttpServer(requestHandler);
+  attachUpgrade(httpServer);
+  httpServer.listen(httpPort, hostname, (err) => {
     if (err) throw err;
     console.log(`> HTTP server ready on http://${hostname}:${httpPort}`);
   });

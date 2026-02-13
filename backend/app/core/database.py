@@ -2,7 +2,7 @@
 import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError, DisconnectionError
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 from app.core.config import settings
 

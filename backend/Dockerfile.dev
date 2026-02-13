@@ -1,0 +1,28 @@
+# Backend development Dockerfile - code mounted via volumes, hot reload
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies (same as production)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install dependencies only
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy config files (app/ and mcp_server/ mounted as volumes)
+COPY alembic.ini .
+COPY alembic/ ./alembic/
+COPY pytest.ini .
+
+# Create directories for mounts
+RUN mkdir -p /app/app /app/mcp_server /app/credentials /app/logs
+
+EXPOSE 8000
+
+# Hot reload - watch app/ and mcp_server/ (mounted volumes)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

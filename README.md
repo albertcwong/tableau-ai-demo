@@ -243,6 +243,19 @@ Frontend will be available at: http://localhost:3000
 
 ## Development
 
+### Docker Development (Recommended for Docker parity)
+
+Develop entirely in Docker with hot reload to catch Docker-specific issues early:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+- Frontend: https://localhost:3000 or http://localhost:3001
+- Backend: http://localhost:8000
+
+See [Docker Development Guide](./docs/development/DOCKER_DEV.md) for details, troubleshooting, and when to use Docker vs local development.
+
 ### Running Tests
 
 ```bash
@@ -386,6 +399,7 @@ These are future phases beyond the current demo scope.
 - [Deployment Guide](./docs/deployment/DEPLOYMENT.md) - Deployment instructions
 - [MCP Server Deployment](./docs/deployment/MCP_SERVER_DEPLOYMENT.md) - MCP-specific deployment
 - [HTTPS Setup](./docs/deployment/HTTPS_SETUP.md) - Frontend HTTPS configuration
+- [Docker Development](./docs/development/DOCKER_DEV.md) - Docker-first development with hot reload
 - [Auth0 Setup](./docs/AUTH0_TABLEAU_METADATA_SETUP.md) - Auth0 metadata configuration
 - [OAuth Setup](./docs/OAUTH_2_0_TRUST_SETUP.md) - OAuth 2.0 Connected App setup
 

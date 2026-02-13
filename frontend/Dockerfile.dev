@@ -1,0 +1,20 @@
+# Frontend development Dockerfile - code mounted via volumes, dev server with hot reload
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Install dependencies (node_modules used via named volume to avoid host overwrite)
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Source code mounted as volume; node_modules excluded via named volume in docker-compose
+EXPOSE 3000 3001
+
+ENV NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME="0.0.0.0"
+
+# server.js has WebSocket upgrade handler for HMR + HTTPS
+CMD ["npm", "run", "dev"]

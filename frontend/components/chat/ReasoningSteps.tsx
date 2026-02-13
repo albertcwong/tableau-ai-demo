@@ -437,16 +437,24 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
     return null;
   }
 
-  // Calculate total time - when streaming use live elapsed; when done use totalTimeMs or sum of steps
+  // Calculate total time - when streaming use live elapsed; when done use sum of steps so total matches breakdown
+  const stepSum = useMemo(
+    () => organizedSteps.reduce((sum, step) => sum + (step.duration || 0), 0),
+    [organizedSteps]
+  );
   const totalTime = useMemo(() => {
     if (isReasoningActive && liveTotalMs !== null) {
       return liveTotalMs;
     }
-    if (totalTimeMs !== null && totalTimeMs !== undefined) {
+    // Prefer sum of steps when we have step timings so total matches the breakdown
+    if (stepTimings && stepTimings.length > 0 && stepSum > 0) {
+      return stepSum;
+    }
+    if (totalTimeMs != null) {
       return totalTimeMs;
     }
-    return organizedSteps.reduce((sum, step) => sum + (step.duration || 0), 0);
-  }, [organizedSteps, totalTimeMs, isReasoningActive, liveTotalMs]);
+    return stepSum;
+  }, [organizedSteps, totalTimeMs, isReasoningActive, liveTotalMs, stepTimings, stepSum]);
 
   return (
     <Card className={cn('border-gray-200 dark:border-gray-800', className)}>

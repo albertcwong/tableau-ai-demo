@@ -434,11 +434,8 @@ export function ChatInterface({
             // Handle structured message chunks
             console.log('Received structured chunk:', structuredChunk);
             
-            // Convert backend timestamp (seconds) to milliseconds, or use current time
-            const chunkTimestamp = structuredChunk.timestamp 
-              ? (structuredChunk.timestamp * 1000) // Convert seconds to milliseconds
-              : Date.now();
-            const elapsedTime = chunkTimestamp - startTime;
+            // Use client-side elapsed for consistent step timing (backend timestamp can have clock skew)
+            const elapsedTime = Date.now() - startTime;
             
             if (structuredChunk.message_type === 'reasoning') {
               // Track when first reasoning step arrives
