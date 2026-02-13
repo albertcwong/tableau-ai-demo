@@ -6,6 +6,8 @@ This guide explains how to configure Auth0 to include custom metadata (Tableau u
 
 When users authenticate via Auth0, the application can automatically extract their Tableau username from custom metadata fields in the Auth0 token. This eliminates the need for manual Tableau username mapping in the admin panel.
 
+**Note:** `tableau_username` is used for **Connected App (Direct Trust)** sign-in and main app user mapping. **OAuth 2.0 Trust** uses the admin-configured **EAS JWT Sub Claim** (e.g. `email` for Tableau OIDC, `tableau_username` for direct mapping) – see [OAuth 2.0 Trust Setup](./OAUTH_2_0_TRUST_SETUP.md).
+
 ## Step 1: Configure Custom Metadata in Auth0
 
 ### Option A: Using Auth0 Dashboard (Recommended for Testing)

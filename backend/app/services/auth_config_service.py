@@ -1,9 +1,12 @@
 """Authentication configuration service with caching."""
 import logging
+from pathlib import Path
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.models.user import AuthConfig
+from app.core.config import settings
 from app.core.database import get_db
+from app.services.pat_encryption import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,9 @@ def update_auth_config(
     auth0_audience: Optional[str] = None,
     auth0_issuer: Optional[str] = None,
     auth0_tableau_metadata_field: Optional[str] = None,
+    backend_api_url: Optional[str] = None,
+    tableau_oauth_frontend_redirect: Optional[str] = None,
+    eas_jwt_key_pem: Optional[str] = None,
     updated_by: Optional[int] = None
 ) -> AuthConfig:
     """
@@ -108,9 +114,15 @@ def update_auth_config(
         config.auth0_issuer = auth0_issuer
     if auth0_tableau_metadata_field is not None:
         config.auth0_tableau_metadata_field = auth0_tableau_metadata_field
+    if backend_api_url is not None:
+        config.backend_api_url = (backend_api_url or "").strip() or None
+    if tableau_oauth_frontend_redirect is not None:
+        config.tableau_oauth_frontend_redirect = (tableau_oauth_frontend_redirect or "").strip() or None
+    if eas_jwt_key_pem is not None:
+        config.eas_jwt_key_pem_encrypted = encrypt_secret(eas_jwt_key_pem) if eas_jwt_key_pem.strip() else None
     if updated_by is not None:
         config.updated_by = updated_by
-    
+
     db.commit()
     db.refresh(config)
     
@@ -119,3 +131,39 @@ def update_auth_config(
     
     logger.info(f"Auth config updated: password={config.enable_password_auth}, oauth={config.enable_oauth_auth}")
     return config
+
+
+def get_resolved_backend_api_url(db: Session) -> str:
+    """Backend API URL: DB overrides settings."""
+    config = get_auth_config(db, use_cache=False)
+    url = (config.backend_api_url or "").strip() if config else ""
+    return url or (settings.BACKEND_API_URL or "http://localhost:8000")
+
+
+def get_resolved_tableau_oauth_frontend_redirect(db: Session) -> str:
+    """Frontend redirect URL: DB overrides settings."""
+    config = get_auth_config(db, use_cache=False)
+    url = (config.tableau_oauth_frontend_redirect or "").strip() if config else ""
+    return url or (settings.TABLEAU_OAUTH_FRONTEND_REDIRECT or "http://localhost:3000")
+
+
+def get_resolved_eas_jwt_key_content(db: Session) -> Optional[str]:
+    """EAS JWT key PEM content: from DB (decrypted) or from file. Never expose to API."""
+    config = get_auth_config(db, use_cache=False)
+    if config and config.eas_jwt_key_pem_encrypted:
+        try:
+            return decrypt_secret(config.eas_jwt_key_pem_encrypted)
+        except Exception as e:
+            logger.error("Failed to decrypt EAS JWT key from DB: %s", e)
+            return None
+    key_path = getattr(settings, "EAS_JWT_KEY_PATH", None)
+    if key_path:
+        path = Path(key_path)
+        if not path.is_absolute():
+            path = Path(__file__).parent.parent.parent / key_path
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.error("Failed to read EAS JWT key from file: %s", e)
+    return None

@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pencil, Trash2, Plus, X } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { extractErrorMessage } from '@/lib/utils';
 
 export function TableauConfigManagement() {
@@ -26,6 +27,13 @@ export function TableauConfigManagement() {
     secret_id: '',
     allow_pat_auth: false,
     allow_standard_auth: false,
+    allow_connected_app_oauth: false,
+    eas_issuer_url: '',
+    eas_client_id: '',
+    eas_client_secret: '',
+    eas_authorization_endpoint: '',
+    eas_token_endpoint: '',
+    eas_sub_claim_field: 'email',
     skip_ssl_verify: false,
   });
 
@@ -57,6 +65,13 @@ export function TableauConfigManagement() {
       secret_id: '',
       allow_pat_auth: false,
       allow_standard_auth: false,
+      allow_connected_app_oauth: false,
+      eas_issuer_url: '',
+      eas_client_id: '',
+      eas_client_secret: '',
+      eas_authorization_endpoint: '',
+      eas_token_endpoint: '',
+      eas_sub_claim_field: 'email',
       skip_ssl_verify: false,
     });
     setEditingConfigId(null);
@@ -70,10 +85,17 @@ export function TableauConfigManagement() {
       site_id: config.site_id || '',
       api_version: config.api_version || '3.15',
       client_id: config.client_id ?? '',
-      client_secret: '', // Don't pre-populate secret for security
+      client_secret: '',
       secret_id: config.secret_id || '',
       allow_pat_auth: config.allow_pat_auth || false,
       allow_standard_auth: config.allow_standard_auth || false,
+      allow_connected_app_oauth: config.allow_connected_app_oauth || false,
+      eas_issuer_url: config.eas_issuer_url ?? '',
+      eas_client_id: config.eas_client_id ?? '',
+      eas_client_secret: '',
+      eas_authorization_endpoint: config.eas_authorization_endpoint ?? '',
+      eas_token_endpoint: config.eas_token_endpoint ?? '',
+      eas_sub_claim_field: config.eas_sub_claim_field ?? 'email',
       skip_ssl_verify: config.skip_ssl_verify || false,
     });
     setEditingConfigId(config.id);
@@ -112,6 +134,13 @@ export function TableauConfigManagement() {
           secret_id: formData.secret_id || undefined,
           allow_pat_auth: formData.allow_pat_auth,
           allow_standard_auth: formData.allow_standard_auth,
+          allow_connected_app_oauth: formData.allow_connected_app_oauth,
+          eas_issuer_url: formData.eas_issuer_url || undefined,
+          eas_client_id: formData.eas_client_id || undefined,
+          ...(formData.eas_client_secret ? { eas_client_secret: formData.eas_client_secret } : {}),
+          eas_authorization_endpoint: formData.eas_authorization_endpoint || undefined,
+          eas_token_endpoint: formData.eas_token_endpoint || undefined,
+          eas_sub_claim_field: formData.eas_sub_claim_field || undefined,
           skip_ssl_verify: formData.skip_ssl_verify,
         };
         await adminApi.updateTableauConfig(editingConfigId, updateData);
@@ -121,6 +150,7 @@ export function TableauConfigManagement() {
           ...formData,
           allow_pat_auth: formData.allow_pat_auth || false,
           allow_standard_auth: formData.allow_standard_auth || false,
+          allow_connected_app_oauth: formData.allow_connected_app_oauth || false,
           skip_ssl_verify: formData.skip_ssl_verify || false,
         });
       }
@@ -283,6 +313,93 @@ export function TableauConfigManagement() {
                   If enabled, users can authenticate with Tableau username and password
                 </p>
               </div>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    id="allow_connected_app_oauth"
+                    type="checkbox"
+                    checked={formData.allow_connected_app_oauth || false}
+                    onChange={(e) => setFormData({ ...formData, allow_connected_app_oauth: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="allow_connected_app_oauth" className="cursor-pointer">
+                    Allow Connected App OAuth Trust (EAS-issued JWT)
+                  </Label>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  If enabled, users authenticate via External Authorization Server (EAS) OAuth flow
+                </p>
+              </div>
+              {(formData.allow_connected_app_oauth || false) && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_issuer_url">EAS Issuer URL</Label>
+                    <Input
+                      id="eas_issuer_url"
+                      value={formData.eas_issuer_url ?? ''}
+                      onChange={(e) => setFormData({ ...formData, eas_issuer_url: e.target.value })}
+                      placeholder="https://tenant.auth0.com/"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_client_id">EAS Client ID</Label>
+                    <Input
+                      id="eas_client_id"
+                      value={formData.eas_client_id ?? ''}
+                      onChange={(e) => setFormData({ ...formData, eas_client_id: e.target.value })}
+                      placeholder="OAuth client ID at EAS"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_client_secret">EAS Client Secret</Label>
+                    <Input
+                      id="eas_client_secret"
+                      type="password"
+                      value={formData.eas_client_secret ?? ''}
+                      onChange={(e) => setFormData({ ...formData, eas_client_secret: e.target.value })}
+                      placeholder={editingConfigId ? 'Leave empty to keep existing' : 'OAuth client secret'}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_authorization_endpoint">EAS Authorization Endpoint (optional)</Label>
+                    <Input
+                      id="eas_authorization_endpoint"
+                      value={formData.eas_authorization_endpoint ?? ''}
+                      onChange={(e) => setFormData({ ...formData, eas_authorization_endpoint: e.target.value })}
+                      placeholder="Auto-discovered from issuer if empty"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_token_endpoint">EAS Token Endpoint (optional)</Label>
+                    <Input
+                      id="eas_token_endpoint"
+                      value={formData.eas_token_endpoint ?? ''}
+                      onChange={(e) => setFormData({ ...formData, eas_token_endpoint: e.target.value })}
+                      placeholder="Auto-discovered from issuer if empty"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="eas_sub_claim_field">EAS JWT Sub Claim</Label>
+                    <Select
+                      value={formData.eas_sub_claim_field ?? 'email'}
+                      onValueChange={(v) => setFormData({ ...formData, eas_sub_claim_field: v })}
+                    >
+                      <SelectTrigger id="eas_sub_claim_field">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="email">email</SelectItem>
+                        <SelectItem value="tableau_username">tableau_username</SelectItem>
+                        <SelectItem value="name">name</SelectItem>
+                        <SelectItem value="sub">sub (Auth0 default)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Claim/field from Auth0 user that becomes the JWT &apos;sub&apos; sent to Tableau. Use &apos;email&apos; for Tableau OIDC; &apos;tableau_username&apos; for direct mapping.
+                    </p>
+                  </div>
+                </>
+              )}
               <div className="space-y-2">
                 <div className="flex items-center space-x-2">
                   <input

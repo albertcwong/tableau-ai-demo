@@ -29,6 +29,8 @@ This directory contains all project documentation organized by category.
 
 ## 📚 Additional Documentation
 
+- **[Auth0 Tableau Metadata Setup](./AUTH0_TABLEAU_METADATA_SETUP.md)** - Auth0 metadata for Tableau username mapping
+- **[OAuth 2.0 Trust Setup](./OAUTH_2_0_TRUST_SETUP.md)** - Test OAuth 2.0 Connected App (EAS-issued JWT)
 - **[Code Review Notes](./CODE_REVIEW.md)** - Code review findings and improvements
 - **[Testing Instructions](./TESTING_INSTRUCTIONS.md)** - How to run tests
 - **[Cookie Issue Notes](./COOKIE-ISSUE.md)** - Cookie-related troubleshooting

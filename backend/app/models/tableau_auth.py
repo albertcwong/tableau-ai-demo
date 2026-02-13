@@ -7,4 +7,4 @@ class TableauAuthType(str, Enum):
     CONNECTED_APP = "connected_app"  # Direct Trust JWT
     PAT = "pat"  # Personal Access Token
     STANDARD = "standard"  # Future: username/password
-    CONNECTED_APP_OAUTH = "connected_app_oauth"  # Future: OAuth flow
+    CONNECTED_APP_OAUTH = "connected_app_oauth"  # OAuth 2.0 Trust (EAS-issued JWT)

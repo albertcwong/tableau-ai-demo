@@ -766,6 +766,7 @@ export interface UserResponse {
   preferred_provider?: string | null;
   preferred_model?: string | null;
   preferred_agent_type?: string | null;
+  preferred_tableau_auth_type?: string | null;
   tableau_username?: string | null;
 }
 
@@ -796,12 +797,18 @@ export interface TableauConfigOption {
   site_id?: string | null;
   allow_pat_auth?: boolean;
   allow_standard_auth?: boolean;
+  allow_connected_app_oauth?: boolean;
   has_connected_app?: boolean;
+  has_connected_app_oauth?: boolean;
 }
 
 export interface TableauAuthRequest {
   config_id: number;
-  auth_type?: 'connected_app' | 'pat' | 'standard';
+  auth_type?: 'connected_app' | 'pat' | 'standard' | 'connected_app_oauth';
+}
+
+export interface OAuthAuthorizeUrlResponse {
+  authorize_url: string;
 }
 
 export interface SwitchSiteRequest {
@@ -864,6 +871,7 @@ export const authApi = {
     preferred_provider?: string;
     preferred_model?: string;
     preferred_agent_type?: string;
+    preferred_tableau_auth_type?: string;
   }): Promise<UserResponse> => {
     const response = await apiClient.put<UserResponse>('/api/v1/auth/preferences', preferences);
     return response.data;
@@ -871,6 +879,14 @@ export const authApi = {
 
   listTableauConfigs: async (): Promise<TableauConfigOption[]> => {
     const response = await apiClient.get<TableauConfigOption[]>('/api/v1/tableau-auth/configs');
+    return response.data;
+  },
+
+  getOAuthAuthorizeUrl: async (configId: number): Promise<OAuthAuthorizeUrlResponse> => {
+    const response = await apiClient.get<OAuthAuthorizeUrlResponse>(
+      `/api/v1/tableau-auth/oauth/authorize-url?config_id=${configId}`,
+      { withCredentials: true }
+    );
     return response.data;
   },
 
@@ -951,6 +967,18 @@ export const userSettingsApi = {
   deleteTableauPassword: async (configId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/user/tableau-passwords/${configId}`);
   },
+
+  getTableauAuthPreferences: async (): Promise<Record<number, string>> => {
+    const response = await apiClient.get<Record<number, string>>('/api/v1/user/tableau-auth-preferences');
+    return response.data;
+  },
+
+  updateTableauAuthPreference: async (configId: number, preferredAuthType: string): Promise<void> => {
+    await apiClient.put('/api/v1/user/tableau-auth-preferences', {
+      config_id: configId,
+      preferred_auth_type: preferredAuthType,
+    });
+  },
 };
 
 // Admin API functions
@@ -977,6 +1005,13 @@ export interface TableauConfigCreate {
   secret_id?: string;
   allow_pat_auth?: boolean;
   allow_standard_auth?: boolean;
+  allow_connected_app_oauth?: boolean;
+  eas_issuer_url?: string;
+  eas_client_id?: string;
+  eas_client_secret?: string;
+  eas_authorization_endpoint?: string;
+  eas_token_endpoint?: string;
+  eas_sub_claim_field?: string;
   skip_ssl_verify?: boolean;
 }
 
@@ -990,6 +1025,13 @@ export interface TableauConfigUpdate {
   secret_id?: string;
   allow_pat_auth?: boolean;
   allow_standard_auth?: boolean;
+  allow_connected_app_oauth?: boolean;
+  eas_issuer_url?: string;
+  eas_client_id?: string;
+  eas_client_secret?: string;
+  eas_authorization_endpoint?: string;
+  eas_token_endpoint?: string;
+  eas_sub_claim_field?: string;
   skip_ssl_verify?: boolean;
   is_active?: boolean;
 }
@@ -1005,6 +1047,13 @@ export interface TableauConfigResponse {
   secret_id?: string | null;
   allow_pat_auth?: boolean;
   allow_standard_auth?: boolean;
+  allow_connected_app_oauth?: boolean;
+  eas_issuer_url?: string | null;
+  eas_client_id?: string | null;
+  eas_client_secret?: string | null;
+  eas_authorization_endpoint?: string | null;
+  eas_token_endpoint?: string | null;
+  eas_sub_claim_field?: string | null;
   skip_ssl_verify?: boolean;
   is_active: boolean;
   created_by?: number | null;
@@ -1123,6 +1172,9 @@ export interface AuthConfigResponse {
   auth0_audience?: string | null;
   auth0_issuer?: string | null;
   auth0_tableau_metadata_field?: string | null;
+  backend_api_url?: string | null;
+  tableau_oauth_frontend_redirect?: string | null;
+  eas_jwt_key_configured: boolean;
   updated_by?: number | null;
   updated_at: string;
   created_at: string;
@@ -1137,6 +1189,9 @@ export interface AuthConfigUpdate {
   auth0_audience?: string;
   auth0_issuer?: string;
   auth0_tableau_metadata_field?: string;
+  backend_api_url?: string;
+  tableau_oauth_frontend_redirect?: string;
+  eas_jwt_key_pem?: string;
 }
 
 // Agent Configuration interfaces

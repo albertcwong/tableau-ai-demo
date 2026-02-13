@@ -46,8 +46,10 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
-      // All users go to the unified main page
-      router.push('/');
+      const params = new URLSearchParams(window.location.search);
+      const returnUrl = params.get('returnUrl');
+      const target = returnUrl?.startsWith('/') ? decodeURIComponent(returnUrl) : '/';
+      router.push(target);
       setLoading(false);
     }
   }, [isAuthenticated, authLoading, router]);
@@ -69,12 +71,11 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Call the API directly for password authentication
-      const response = await authApi.login({ username, password });
-      
-      // Token is stored in localStorage by authApi.login
-      // Force a full page reload to ensure AuthContext picks up the new token
-      window.location.href = '/';
+      await authApi.login({ username, password });
+      const params = new URLSearchParams(window.location.search);
+      const returnUrl = params.get('returnUrl');
+      const target = returnUrl?.startsWith('/') ? decodeURIComponent(returnUrl) : '/';
+      window.location.href = target;
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Login failed. Please check your credentials.'));
       setLoading(false);

@@ -98,6 +98,7 @@ class TableauClient:
         self.site_content_url: Optional[str] = None
         self._pat_auth: bool = False  # True when authenticated via PAT (no refresh)
         self._standard_auth: bool = False  # True when authenticated via username/password (no refresh)
+        self._eas_oauth_auth: bool = False  # True when authenticated via EAS OAuth 2.0 Trust (no refresh)
         self._on_401_invalidate: Optional[Callable[[], None]] = on_401_invalidate
         # Pre-seeded from cache (avoids sign-in when token reuse)
         if initial_token:
@@ -107,11 +108,13 @@ class TableauClient:
                 self.site_id = initial_site_id
             if initial_site_content_url:
                 self.site_content_url = initial_site_content_url
-            # Detect PAT auth from client_id placeholder
+            # Detect auth type from client_id placeholder
             if client_id == "pat-placeholder":
                 self._pat_auth = True
             elif client_id == "standard-placeholder":
                 self._standard_auth = True
+            elif client_id == "connected_app_oauth-placeholder":
+                self._eas_oauth_auth = True
         
         # SSL verification setting
         # If verify_ssl=False (from config skip_ssl_verify), skip verification
@@ -623,6 +626,54 @@ class TableauClient:
         except httpx.RequestError as e:
             raise TableauAuthenticationError(f"Network error during PAT authentication: {str(e)}") from e
 
+    async def sign_in_with_eas_jwt(self, eas_jwt: str) -> Dict[str, Any]:
+        """
+        Sign in using JWT from External Authorization Server (OAuth 2.0 Trust).
+        Same REST payload as sign_in() but JWT is pre-obtained from EAS.
+        """
+        sign_in_url = urljoin(self.api_base, 'auth/signin')
+        credentials = {
+            "jwt": eas_jwt,
+            "site": {"contentUrl": self.site_id or ""}
+        }
+        payload = {"credentials": credentials}
+        logger.info("EAS JWT sign-in: url=%s site_contentUrl=%s", sign_in_url, self.site_id or "")
+        try:
+            response = await self._client.post(
+                sign_in_url,
+                json=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"}
+            )
+            logger.info("EAS JWT sign-in response: status=%d", response.status_code)
+            if response.status_code >= 400:
+                logger.error("EAS JWT sign-in error: %s", response.text[:500])
+            response.raise_for_status()
+            data = response.json()
+            creds = data.get("credentials", {})
+            self.auth_token = creds.get("token")
+            site_info = creds.get("site", {})
+            self.site_content_url = site_info.get("contentUrl") or site_info.get("contenturl")
+            if site_info.get("id"):
+                self.site_id = site_info["id"]
+            self.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=8)
+            if not self.auth_token:
+                raise TableauAuthenticationError("No token received from EAS JWT sign-in")
+            self._eas_oauth_auth = True
+            return {
+                "token": self.auth_token,
+                "site_content_url": self.site_content_url,
+                "expires_at": self.token_expires_at.isoformat(),
+                "site": site_info,
+                "user": creds.get("user", {}),
+                "credentials": creds,
+            }
+        except httpx.HTTPStatusError as e:
+            raise TableauAuthenticationError(
+                f"EAS JWT authentication failed: {e.response.status_code} - {e.response.text}"
+            ) from e
+        except httpx.RequestError as e:
+            raise TableauAuthenticationError(f"Network error during EAS JWT authentication: {str(e)}") from e
+
     async def sign_in_with_password(self, username: str, password: str) -> Dict[str, Any]:
         """
         Authenticate with Tableau using username and password.
@@ -760,8 +811,8 @@ class TableauClient:
             logger.info("No auth token found, calling sign_in()...")
             await self.sign_in()
             return
-        # PAT and standard auth cannot refresh; user must reconnect when token expires
-        if self._pat_auth or self._standard_auth:
+        # PAT, standard, and EAS OAuth auth cannot refresh; user must reconnect when token expires
+        if self._pat_auth or self._standard_auth or self._eas_oauth_auth:
             return
         # Refresh if token expires within 1 minute
         if datetime.now(timezone.utc) >= (self.token_expires_at - timedelta(minutes=1)):

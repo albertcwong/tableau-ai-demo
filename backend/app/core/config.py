@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     AUTH0_AUDIENCE: str = ""
     AUTH0_ISSUER: str = ""
     BACKEND_API_URL: str = "http://localhost:8000"  # Backend API URL for MCP Server
+    TABLEAU_OAUTH_FRONTEND_REDIRECT: str = "http://localhost:3000"  # Frontend URL for OAuth callback redirect
+
+    # EAS JWT: when Auth0 cannot set aud/sub (restricted claims), backend can construct the JWT.
+    # Set path to RSA private key PEM. Tableau must register this backend as EAS (issuer=BACKEND_API_URL).
+    EAS_JWT_KEY_PATH: Optional[str] = None
+    # Override aud claim (default "tableau"). For site-level EAS: "tableau:<site_luid>"
+    EAS_JWT_AUD: Optional[str] = None
     
     # VizQL Agent (DEPRECATED - use admin panel agent config instead)
     VIZQL_AGENT_TYPE: str = "tool_use"  # DEPRECATED: Use admin panel to configure agent versions. Fallback only.

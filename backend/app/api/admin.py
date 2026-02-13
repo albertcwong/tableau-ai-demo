@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import get_password_hash
 from app.api.auth import get_current_admin_user
@@ -14,6 +15,7 @@ from app.models.chat import Message, Conversation, ChatContext
 from app.models.agent_config import AgentConfig
 from app.services.auth_config_service import get_auth_config, update_auth_config
 from app.services.agent_config_service import AgentConfigService
+from app.services.pat_encryption import encrypt_secret
 from app.api.models import (
     AgentConfigResponse, AgentVersionResponse, AgentVersionUpdate,
     AgentSettingsResponse, AgentSettingsUpdate
@@ -77,6 +79,13 @@ class TableauConfigCreate(BaseModel):
     secret_id: Optional[str] = None
     allow_pat_auth: Optional[bool] = False
     allow_standard_auth: Optional[bool] = False
+    allow_connected_app_oauth: Optional[bool] = False
+    eas_issuer_url: Optional[str] = None
+    eas_client_id: Optional[str] = None
+    eas_client_secret: Optional[str] = None
+    eas_authorization_endpoint: Optional[str] = None
+    eas_token_endpoint: Optional[str] = None
+    eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = False
 
 
@@ -91,6 +100,13 @@ class TableauConfigUpdate(BaseModel):
     secret_id: Optional[str] = None
     allow_pat_auth: Optional[bool] = None
     allow_standard_auth: Optional[bool] = None
+    allow_connected_app_oauth: Optional[bool] = None
+    eas_issuer_url: Optional[str] = None
+    eas_client_id: Optional[str] = None
+    eas_client_secret: Optional[str] = None
+    eas_authorization_endpoint: Optional[str] = None
+    eas_token_endpoint: Optional[str] = None
+    eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -107,6 +123,13 @@ class TableauConfigResponse(BaseModel):
     secret_id: Optional[str]
     allow_pat_auth: Optional[bool] = False
     allow_standard_auth: Optional[bool] = False
+    allow_connected_app_oauth: Optional[bool] = False
+    eas_issuer_url: Optional[str] = None
+    eas_client_id: Optional[str] = None
+    eas_client_secret: Optional[str] = None
+    eas_authorization_endpoint: Optional[str] = None
+    eas_token_endpoint: Optional[str] = None
+    eas_sub_claim_field: Optional[str] = None
     skip_ssl_verify: Optional[bool] = False
     is_active: bool
     created_by: Optional[int]
@@ -389,6 +412,13 @@ async def list_tableau_configs(
         secret_id=c.secret_id,
         allow_pat_auth=getattr(c, 'allow_pat_auth', False),
         allow_standard_auth=getattr(c, 'allow_standard_auth', False),
+        allow_connected_app_oauth=getattr(c, 'allow_connected_app_oauth', False),
+        eas_issuer_url=getattr(c, 'eas_issuer_url', None),
+        eas_client_id=getattr(c, 'eas_client_id', None),
+        eas_client_secret=getattr(c, 'eas_client_secret', None),
+        eas_authorization_endpoint=getattr(c, 'eas_authorization_endpoint', None),
+        eas_token_endpoint=getattr(c, 'eas_token_endpoint', None),
+        eas_sub_claim_field=getattr(c, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(c, 'skip_ssl_verify', False),
         is_active=c.is_active,
         created_by=c.created_by,
@@ -405,22 +435,43 @@ async def create_tableau_config(
     """Create a new Tableau server configuration."""
     allow_pat = config_data.allow_pat_auth or False
     allow_standard = config_data.allow_standard_auth or False
+    allow_oauth = config_data.allow_connected_app_oauth or False
     has_connected_app = bool((config_data.client_id or "").strip() and (config_data.client_secret or "").strip())
-    if not allow_pat and not allow_standard and not has_connected_app:
+    has_oauth = allow_oauth and all([
+        (config_data.eas_issuer_url or "").strip(),
+        (config_data.eas_client_id or "").strip(),
+        (config_data.eas_client_secret or "").strip(),
+    ])
+    if not allow_pat and not allow_standard and not has_connected_app and not has_oauth:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either Connected App credentials (client_id and client_secret), allow_pat_auth, or allow_standard_auth must be provided"
+            detail="Provide Connected App (client_id/client_secret), allow_pat_auth, allow_standard_auth, or OAuth 2.0 Trust (allow_connected_app_oauth + eas_issuer_url, eas_client_id, eas_client_secret)"
         )
+    if allow_oauth and not has_oauth:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="allow_connected_app_oauth requires eas_issuer_url, eas_client_id, and eas_client_secret"
+        )
+    eas_secret = (config_data.eas_client_secret or "").strip() or None
+    if eas_secret:
+        eas_secret = encrypt_secret(eas_secret)
     new_config = TableauServerConfig(
         name=config_data.name,
         server_url=config_data.server_url.rstrip('/'),
         site_id=config_data.site_id or "",
         api_version=config_data.api_version or "3.15",
         client_id=(config_data.client_id or "").strip() or None,
-        client_secret=(config_data.client_secret or "").strip() or None,  # TODO: Encrypt this
+        client_secret=(config_data.client_secret or "").strip() or None,
         secret_id=(config_data.secret_id or config_data.client_id or "").strip() or None,
         allow_pat_auth=config_data.allow_pat_auth or False,
         allow_standard_auth=config_data.allow_standard_auth or False,
+        allow_connected_app_oauth=config_data.allow_connected_app_oauth or False,
+        eas_issuer_url=(config_data.eas_issuer_url or "").strip() or None,
+        eas_client_id=(config_data.eas_client_id or "").strip() or None,
+        eas_client_secret=eas_secret,
+        eas_authorization_endpoint=(config_data.eas_authorization_endpoint or "").strip() or None,
+        eas_token_endpoint=(config_data.eas_token_endpoint or "").strip() or None,
+        eas_sub_claim_field=(config_data.eas_sub_claim_field or "").strip() or None,
         skip_ssl_verify=config_data.skip_ssl_verify or False,
         is_active=True,
         created_by=current_user.id
@@ -440,6 +491,13 @@ async def create_tableau_config(
         secret_id=new_config.secret_id,
         allow_pat_auth=getattr(new_config, 'allow_pat_auth', False),
         allow_standard_auth=getattr(new_config, 'allow_standard_auth', False),
+        allow_connected_app_oauth=getattr(new_config, 'allow_connected_app_oauth', False),
+        eas_issuer_url=getattr(new_config, 'eas_issuer_url', None),
+        eas_client_id=getattr(new_config, 'eas_client_id', None),
+        eas_client_secret=getattr(new_config, 'eas_client_secret', None),
+        eas_authorization_endpoint=getattr(new_config, 'eas_authorization_endpoint', None),
+        eas_token_endpoint=getattr(new_config, 'eas_token_endpoint', None),
+        eas_sub_claim_field=getattr(new_config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(new_config, 'skip_ssl_verify', False),
         is_active=new_config.is_active,
         created_by=new_config.created_by,
@@ -471,6 +529,13 @@ async def get_tableau_config(
         secret_id=config.secret_id,
         allow_pat_auth=getattr(config, 'allow_pat_auth', False),
         allow_standard_auth=getattr(config, 'allow_standard_auth', False),
+        allow_connected_app_oauth=getattr(config, 'allow_connected_app_oauth', False),
+        eas_issuer_url=getattr(config, 'eas_issuer_url', None),
+        eas_client_id=getattr(config, 'eas_client_id', None),
+        eas_client_secret=getattr(config, 'eas_client_secret', None),
+        eas_authorization_endpoint=getattr(config, 'eas_authorization_endpoint', None),
+        eas_token_endpoint=getattr(config, 'eas_token_endpoint', None),
+        eas_sub_claim_field=getattr(config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,
@@ -511,6 +576,22 @@ async def update_tableau_config(
         config.allow_pat_auth = config_data.allow_pat_auth
     if config_data.allow_standard_auth is not None:
         config.allow_standard_auth = config_data.allow_standard_auth
+    if config_data.allow_connected_app_oauth is not None:
+        config.allow_connected_app_oauth = config_data.allow_connected_app_oauth
+    if config_data.eas_issuer_url is not None:
+        config.eas_issuer_url = (config_data.eas_issuer_url or "").strip() or None
+    if config_data.eas_client_id is not None:
+        config.eas_client_id = (config_data.eas_client_id or "").strip() or None
+    if config_data.eas_client_secret is not None:
+        raw = (config_data.eas_client_secret or "").strip()
+        if raw:
+            config.eas_client_secret = encrypt_secret(raw)
+    if config_data.eas_authorization_endpoint is not None:
+        config.eas_authorization_endpoint = (config_data.eas_authorization_endpoint or "").strip() or None
+    if config_data.eas_token_endpoint is not None:
+        config.eas_token_endpoint = (config_data.eas_token_endpoint or "").strip() or None
+    if config_data.eas_sub_claim_field is not None:
+        config.eas_sub_claim_field = (config_data.eas_sub_claim_field or "").strip() or None
     if config_data.skip_ssl_verify is not None:
         config.skip_ssl_verify = config_data.skip_ssl_verify
     if config_data.is_active is not None:
@@ -518,11 +599,22 @@ async def update_tableau_config(
 
     allow_pat = getattr(config, 'allow_pat_auth', False)
     allow_standard = getattr(config, 'allow_standard_auth', False)
+    allow_oauth = getattr(config, 'allow_connected_app_oauth', False)
     has_connected_app = bool((config.client_id or "").strip() and (config.client_secret or "").strip())
-    if not allow_pat and not allow_standard and not has_connected_app:
+    has_oauth = allow_oauth and all([
+        (config.eas_issuer_url or "").strip(),
+        (config.eas_client_id or "").strip(),
+        (config.eas_client_secret or "").strip(),
+    ])
+    if not allow_pat and not allow_standard and not has_connected_app and not has_oauth:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either Connected App credentials (client_id and client_secret), allow_pat_auth, or allow_standard_auth must be provided"
+            detail="Provide Connected App, allow_pat_auth, allow_standard_auth, or OAuth 2.0 Trust"
+        )
+    if allow_oauth and not has_oauth:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="allow_connected_app_oauth requires eas_issuer_url, eas_client_id, and eas_client_secret"
         )
 
     db.commit()
@@ -539,6 +631,13 @@ async def update_tableau_config(
         secret_id=config.secret_id,
         allow_pat_auth=getattr(config, 'allow_pat_auth', False),
         allow_standard_auth=getattr(config, 'allow_standard_auth', False),
+        allow_connected_app_oauth=getattr(config, 'allow_connected_app_oauth', False),
+        eas_issuer_url=getattr(config, 'eas_issuer_url', None),
+        eas_client_id=getattr(config, 'eas_client_id', None),
+        eas_client_secret=getattr(config, 'eas_client_secret', None),
+        eas_authorization_endpoint=getattr(config, 'eas_authorization_endpoint', None),
+        eas_token_endpoint=getattr(config, 'eas_token_endpoint', None),
+        eas_sub_claim_field=getattr(config, 'eas_sub_claim_field', None),
         skip_ssl_verify=getattr(config, 'skip_ssl_verify', False),
         is_active=config.is_active,
         created_by=config.created_by,
@@ -1162,6 +1261,9 @@ class AuthConfigResponse(BaseModel):
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
     auth0_tableau_metadata_field: Optional[str] = None
+    backend_api_url: Optional[str] = None
+    tableau_oauth_frontend_redirect: Optional[str] = None
+    eas_jwt_key_configured: bool = False  # True if key in DB or EAS_JWT_KEY_PATH set; never expose key
     updated_by: Optional[int] = None
     updated_at: str
     created_at: str
@@ -1177,6 +1279,9 @@ class AuthConfigUpdate(BaseModel):
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
     auth0_tableau_metadata_field: Optional[str] = None
+    backend_api_url: Optional[str] = None
+    tableau_oauth_frontend_redirect: Optional[str] = None
+    eas_jwt_key_pem: Optional[str] = None  # PEM content; empty string to clear
 
 
 # Agent management
@@ -1300,7 +1405,9 @@ async def get_auth_config_endpoint(
     current_user: User = Depends(get_current_admin_user)
 ):
     """Get current authentication configuration."""
+    from app.services.auth_config_service import get_resolved_eas_jwt_key_content
     config = get_auth_config(db)
+    has_key = bool(config.eas_jwt_key_pem_encrypted) or bool(getattr(settings, "EAS_JWT_KEY_PATH", None))
     return AuthConfigResponse(
         id=config.id,
         enable_password_auth=config.enable_password_auth,
@@ -1311,6 +1418,9 @@ async def get_auth_config_endpoint(
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
         auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
+        backend_api_url=config.backend_api_url,
+        tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
+        eas_jwt_key_configured=has_key,
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()
@@ -1366,9 +1476,14 @@ async def update_auth_config_endpoint(
         auth0_audience=config_data.auth0_audience,
         auth0_issuer=config_data.auth0_issuer,
         auth0_tableau_metadata_field=config_data.auth0_tableau_metadata_field,
+        backend_api_url=config_data.backend_api_url,
+        tableau_oauth_frontend_redirect=config_data.tableau_oauth_frontend_redirect,
+        eas_jwt_key_pem=config_data.eas_jwt_key_pem,
         updated_by=current_user.id
     )
-    
+
+    from app.services.auth_config_service import get_resolved_eas_jwt_key_content
+    has_key = bool(config.eas_jwt_key_pem_encrypted) or bool(getattr(settings, "EAS_JWT_KEY_PATH", None))
     return AuthConfigResponse(
         id=config.id,
         enable_password_auth=config.enable_password_auth,
@@ -1379,6 +1494,9 @@ async def update_auth_config_endpoint(
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
         auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
+        backend_api_url=config.backend_api_url,
+        tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
+        eas_jwt_key_configured=has_key,
         updated_by=config.updated_by,
         updated_at=config.updated_at.isoformat(),
         created_at=config.created_at.isoformat()

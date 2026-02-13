@@ -106,7 +106,12 @@ async def get_tableau_client(
             if auth_type == "connected_app" and not (config.client_id and config.client_secret):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Connected App credentials are not configured for this server. Use PAT or standard authentication or contact your admin."
+                    detail="Connected App credentials are not configured for this server. Use PAT, standard, or OAuth 2.0 Trust authentication or contact your admin."
+                )
+            if auth_type == "connected_app_oauth" and not getattr(config, "allow_connected_app_oauth", False):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="OAuth 2.0 Trust is not enabled for this server. Use another auth type or contact your admin."
                 )
             
             token_store = get_token_store(auth_type)
@@ -119,6 +124,14 @@ async def get_tableau_client(
                     config, token_entry, auth_type,
                     tableau_username=tableau_username,
                     on_401_invalidate=invalidate_cb,
+                )
+
+            # For connected_app_oauth: no credential restore; must go through OAuth flow again
+            if auth_type == "connected_app_oauth":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Tableau OAuth session expired. Please reconnect using the Connect button.",
+                    headers={"X-Error-Code": "TABLEAU_OAUTH_SESSION_EXPIRED"},
                 )
 
             # For PAT: if no token in cache, try to restore session from stored credentials

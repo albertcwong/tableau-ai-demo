@@ -10,6 +10,7 @@ from app.services.tableau.token_store import TokenEntry
 _AUTH_PLACEHOLDERS = {
     "pat": ("pat-placeholder", "pat-placeholder"),
     "standard": ("standard-placeholder", "standard-placeholder"),
+    "connected_app_oauth": ("connected_app_oauth-placeholder", "connected_app_oauth-placeholder"),
 }
 
 
@@ -64,6 +65,8 @@ def create_tableau_client_from_token(
         client._pat_auth = True
     elif auth_type == "standard":
         client._standard_auth = True
+    elif auth_type == "connected_app_oauth":
+        client._eas_oauth_auth = True
     return client
 
 

@@ -3,7 +3,9 @@ import logging
 import logging.handlers
 import time
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI, Request, status, Query, Depends
+from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings, PROJECT_ROOT
@@ -220,6 +222,43 @@ async def gateway_health_check(
 async def root():
     """Root endpoint."""
     return {"message": "Tableau AI Demo API", "version": "1.0.0", "docs": "/api/v1/docs"}
+
+
+def _eas_metadata(base: Optional[str] = None) -> dict:
+    """Shared metadata for OIDC and OAuth 2.0 AS discovery."""
+    b = (base or settings.BACKEND_API_URL or "").rstrip("/")
+    return {"issuer": b, "jwks_uri": f"{b}/.well-known/jwks.json"}
+
+
+@app.get("/.well-known/openid-configuration")
+async def well_known_openid_configuration(db: Session = Depends(get_db)):
+    """OIDC discovery. Tableau fetches this to get jwks_uri for JWT validation."""
+    from app.services.auth_config_service import get_resolved_backend_api_url
+    return _eas_metadata(get_resolved_backend_api_url(db))
+
+
+@app.get("/.well-known/oauth-authorization-server")
+async def well_known_oauth_authorization_server(db: Session = Depends(get_db)):
+    """RFC 8414 OAuth 2.0 AS metadata. Some clients use this instead of OIDC discovery."""
+    from app.services.auth_config_service import get_resolved_backend_api_url
+    return _eas_metadata(get_resolved_backend_api_url(db))
+
+
+@app.get("/.well-known/jwks.json")
+async def well_known_jwks(db: Session = Depends(get_db)):
+    """JWKS for backend-constructed EAS JWTs. Tableau fetches this when backend is registered as EAS."""
+    from app.services.eas_jwt_builder import get_jwks
+    from app.services.auth_config_service import get_resolved_eas_jwt_key_content
+
+    key_content = get_resolved_eas_jwt_key_content(db)
+    if key_content:
+        jwks = get_jwks(key_content=key_content)
+    else:
+        key_path = getattr(settings, "EAS_JWT_KEY_PATH", None)
+        jwks = get_jwks(key_path=key_path) if key_path else None
+    if not jwks:
+        return JSONResponse(status_code=404, content={"detail": "EAS JWT key not configured"})
+    return jwks
 
 
 # Include API router

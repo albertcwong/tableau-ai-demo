@@ -1,5 +1,6 @@
 """User settings API - PAT management and account settings."""
 import logging
+from datetime import datetime, timezone
 from typing import Any, List, Tuple, Type
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
-from app.models.user import User, TableauServerConfig, UserTableauPAT, UserTableauPassword
+from app.models.user import User, TableauServerConfig, UserTableauPAT, UserTableauPassword, UserTableauAuthPreference
 from app.services.pat_encryption import encrypt_pat
 
 logger = logging.getLogger(__name__)
@@ -266,3 +267,67 @@ async def delete_tableau_password(
     """Delete standard credentials for a Tableau server."""
     if not _delete_credential(db, current_user.id, UserTableauPassword, config_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credentials not found for this server")
+
+
+class TableauAuthPreferenceUpdate(BaseModel):
+    """Tableau auth preference update model."""
+    config_id: int = Field(..., description="Tableau server config ID")
+    preferred_auth_type: str = Field(..., description="Preferred auth type: connected_app, connected_app_oauth, pat, standard")
+
+
+@router.get("/tableau-auth-preferences", response_model=dict)
+async def get_tableau_auth_preferences(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get current user's preferred auth type per Tableau server."""
+    preferences = db.query(UserTableauAuthPreference).filter(
+        UserTableauAuthPreference.user_id == current_user.id
+    ).all()
+    return {pref.tableau_server_config_id: pref.preferred_auth_type for pref in preferences}
+
+
+@router.put("/tableau-auth-preferences", status_code=status.HTTP_204_NO_CONTENT)
+async def update_tableau_auth_preference(
+    data: TableauAuthPreferenceUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update preferred auth type for a Tableau server."""
+    # Validate auth type
+    valid_types = ['connected_app', 'connected_app_oauth', 'pat', 'standard']
+    if data.preferred_auth_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid auth type. Must be one of: {', '.join(valid_types)}"
+        )
+    
+    # Verify config exists and is active
+    config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.id == data.config_id,
+        TableauServerConfig.is_active == True
+    ).first()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tableau server config not found"
+        )
+    
+    # Find existing preference or create new
+    existing = db.query(UserTableauAuthPreference).filter(
+        UserTableauAuthPreference.user_id == current_user.id,
+        UserTableauAuthPreference.tableau_server_config_id == data.config_id
+    ).first()
+    
+    if existing:
+        existing.preferred_auth_type = data.preferred_auth_type
+        existing.updated_at = datetime.now(timezone.utc)
+    else:
+        pref = UserTableauAuthPreference(
+            user_id=current_user.id,
+            tableau_server_config_id=data.config_id,
+            preferred_auth_type=data.preferred_auth_type
+        )
+        db.add(pref)
+    
+    db.commit()

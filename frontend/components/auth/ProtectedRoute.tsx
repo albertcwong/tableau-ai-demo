@@ -10,7 +10,11 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
-      router.push('/login');
+      const returnUrl =
+        typeof window !== 'undefined'
+          ? encodeURIComponent(window.location.pathname + window.location.search)
+          : '';
+      router.push(returnUrl ? `/login?returnUrl=${returnUrl}` : '/login');
     }
   }, [isAuthenticated, loading, router]);
 

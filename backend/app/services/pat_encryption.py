@@ -45,3 +45,13 @@ def decrypt_pat(encrypted_secret: str) -> str:
     cipher = Fernet(_get_fernet_key())
     decrypted = cipher.decrypt(encrypted_secret.encode())
     return decrypted.decode()
+
+
+def encrypt_secret(secret: str) -> str:
+    """Encrypt secret for storage (PAT, EAS client secret, etc.)."""
+    return encrypt_pat(secret)
+
+
+def decrypt_secret(encrypted_secret: str) -> str:
+    """Decrypt secret from storage."""
+    return decrypt_pat(encrypted_secret)

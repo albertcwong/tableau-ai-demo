@@ -18,6 +18,7 @@ export function AuthConfigManagement() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
+  const [easKeyTouched, setEasKeyTouched] = useState(false);
   const [formData, setFormData] = useState<AuthConfigUpdate>({
     enable_password_auth: true,
     enable_oauth_auth: false,
@@ -27,6 +28,9 @@ export function AuthConfigManagement() {
     auth0_audience: '',
     auth0_issuer: '',
     auth0_tableau_metadata_field: '',
+    backend_api_url: '',
+    tableau_oauth_frontend_redirect: '',
+    eas_jwt_key_pem: '',
   });
 
   useEffect(() => {
@@ -48,7 +52,11 @@ export function AuthConfigManagement() {
         auth0_audience: authConfig.auth0_audience || '',
         auth0_issuer: authConfig.auth0_issuer || '',
         auth0_tableau_metadata_field: authConfig.auth0_tableau_metadata_field || '',
+        backend_api_url: authConfig.backend_api_url || '',
+        tableau_oauth_frontend_redirect: authConfig.tableau_oauth_frontend_redirect || '',
+        eas_jwt_key_pem: '',
       });
+      setEasKeyTouched(false);
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Failed to load authentication configuration'));
     } finally {
@@ -85,7 +93,9 @@ export function AuthConfigManagement() {
         }
       }
 
-      const updatedConfig = await adminApi.updateAuthConfig(formData);
+      const payload: AuthConfigUpdate = { ...formData };
+      if (!easKeyTouched) delete payload.eas_jwt_key_pem;
+      const updatedConfig = await adminApi.updateAuthConfig(payload);
       setConfig(updatedConfig);
       setSuccess('Authentication configuration updated successfully. Changes take effect immediately.');
       
@@ -284,6 +294,86 @@ export function AuthConfigManagement() {
           </Card>
         )}
 
+        <Card>
+          <CardHeader>
+            <CardTitle>Connected App OAuth Trust / EAS URLs</CardTitle>
+            <CardDescription>
+              Backend and frontend URLs for OAuth callback. EAS JWT key for backend-constructed JWTs.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="backend_api_url">Backend API URL</Label>
+              <Input
+                id="backend_api_url"
+                type="url"
+                placeholder="https://your-backend.example.com or https://xxx.ngrok-free.app"
+                value={formData.backend_api_url || ''}
+                onChange={(e) => setFormData({ ...formData, backend_api_url: e.target.value })}
+              />
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                OAuth callback base. Tableau registers this as EAS issuer.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tableau_oauth_frontend_redirect">Frontend Redirect URL</Label>
+              <Input
+                id="tableau_oauth_frontend_redirect"
+                type="url"
+                placeholder="https://localhost:3000"
+                value={formData.tableau_oauth_frontend_redirect || ''}
+                onChange={(e) => setFormData({ ...formData, tableau_oauth_frontend_redirect: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>EAS JWT Key (RSA private key PEM)</Label>
+              {config?.eas_jwt_key_configured && (
+                <p className="text-sm text-green-600 dark:text-green-400">Key configured. Upload or paste to replace.</p>
+              )}
+              <Input
+                type="file"
+                accept=".pem"
+                className="max-w-xs"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    setEasKeyTouched(true);
+                    const r = new FileReader();
+                    r.onload = () => setFormData((prev) => ({ ...prev, eas_jwt_key_pem: (r.result as string) || '' }));
+                    r.readAsText(f);
+                  }
+                  e.target.value = '';
+                }}
+              />
+              <textarea
+                className="w-full min-h-[80px] font-mono text-sm p-2 border rounded"
+                placeholder="Or paste PEM content. Leave empty to keep existing."
+                value={formData.eas_jwt_key_pem || ''}
+                onChange={(e) => {
+                  setEasKeyTouched(true);
+                  setFormData({ ...formData, eas_jwt_key_pem: e.target.value });
+                }}
+              />
+              {config?.eas_jwt_key_configured && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEasKeyTouched(true);
+                    setFormData((prev) => ({ ...prev, eas_jwt_key_pem: '' }));
+                  }}
+                >
+                  Clear key
+                </Button>
+              )}
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                RSA 2048-bit key. Generate: openssl genrsa -out eas_jwt_key.pem 2048
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="flex justify-end">
           <Button type="submit" disabled={saving}>
             {saving ? (
@@ -332,6 +422,20 @@ export function AuthConfigManagement() {
                   </div>
                 </>
               )}
+              <div>
+                <span className="font-medium">Backend API URL:</span>{' '}
+                <span className="text-gray-600 dark:text-gray-400">{config.backend_api_url || 'Not set (using .env)'}</span>
+              </div>
+              <div>
+                <span className="font-medium">Frontend Redirect URL:</span>{' '}
+                <span className="text-gray-600 dark:text-gray-400">{config.tableau_oauth_frontend_redirect || 'Not set (using .env)'}</span>
+              </div>
+              <div>
+                <span className="font-medium">EAS JWT Key:</span>{' '}
+                <span className={config.eas_jwt_key_configured ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}>
+                  {config.eas_jwt_key_configured ? 'Configured' : 'Not configured'}
+                </span>
+              </div>
               <div className="pt-2 text-xs text-gray-500 dark:text-gray-400">
                 Last updated: {new Date(config.updated_at).toLocaleString()}
               </div>

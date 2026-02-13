@@ -47,6 +47,7 @@ class UserResponse(BaseModel):
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     preferred_agent_type: Optional[str] = None
+    preferred_tableau_auth_type: Optional[str] = None
     tableau_username: Optional[str] = None
 
 
@@ -239,6 +240,7 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         preferred_provider=current_user.preferred_provider,
         preferred_model=current_user.preferred_model,
         preferred_agent_type=current_user.preferred_agent_type,
+        preferred_tableau_auth_type=current_user.preferred_tableau_auth_type,
         tableau_username=current_user.tableau_username
     )
 
@@ -254,6 +256,7 @@ class UserPreferencesUpdate(BaseModel):
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     preferred_agent_type: Optional[str] = None
+    preferred_tableau_auth_type: Optional[str] = None
 
 
 @router.put("/auth/preferences", response_model=UserResponse)
@@ -262,17 +265,19 @@ async def update_user_preferences(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update current user's preferences (provider, model, agent type)."""
+    """Update current user's preferences (provider, model, agent type, Tableau auth)."""
     if preferences.preferred_provider is not None:
         current_user.preferred_provider = preferences.preferred_provider
     if preferences.preferred_model is not None:
         current_user.preferred_model = preferences.preferred_model
     if preferences.preferred_agent_type is not None:
         current_user.preferred_agent_type = preferences.preferred_agent_type
-    
+    if preferences.preferred_tableau_auth_type is not None:
+        current_user.preferred_tableau_auth_type = preferences.preferred_tableau_auth_type
+
     db.commit()
     db.refresh(current_user)
-    
+
     return UserResponse(
         id=current_user.id,
         username=current_user.username,
@@ -280,7 +285,9 @@ async def update_user_preferences(
         is_active=current_user.is_active,
         preferred_provider=current_user.preferred_provider,
         preferred_model=current_user.preferred_model,
-        preferred_agent_type=current_user.preferred_agent_type
+        preferred_agent_type=current_user.preferred_agent_type,
+        preferred_tableau_auth_type=current_user.preferred_tableau_auth_type,
+        tableau_username=current_user.tableau_username
     )
 
 

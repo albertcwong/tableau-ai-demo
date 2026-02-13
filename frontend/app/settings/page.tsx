@@ -8,8 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { TableauPATManagement } from '@/components/settings/TableauPATManagement';
-import { TableauPasswordManagement } from '@/components/settings/TableauPasswordManagement';
+import { TableauConnectionsManagement } from '@/components/settings/TableauConnectionsManagement';
 import { ModelSettings } from '@/components/agent-panel/ModelSettings';
 import { useAuth } from '@/components/auth/AuthContext';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
@@ -78,9 +77,8 @@ function SettingsContent() {
             </CardContent>
           </Card>
         </TabsContent>
-        <TabsContent value="tableau" className="mt-4 space-y-4">
-          <TableauPATManagement />
-          <TableauPasswordManagement />
+        <TabsContent value="tableau" className="mt-4">
+          <TableauConnectionsManagement />
         </TabsContent>
         <TabsContent value="preferences" className="mt-4">
           <Card>

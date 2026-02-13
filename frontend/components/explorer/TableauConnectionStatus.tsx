@@ -17,11 +17,41 @@ interface TableauConnectionStatusProps {
   onSiteChange?: () => void;
 }
 
+type AuthType = 'connected_app' | 'pat' | 'standard' | 'connected_app_oauth';
+
+function resolveAuthType(
+  config: TableauConfigOption | null,
+  pref: AuthType | null,
+  perServerPref: AuthType | null,
+  patIds: number[],
+  pwdIds: number[],
+  configId: number | null
+): AuthType {
+  if (!config) return 'connected_app';
+  const hasCA = config.has_connected_app ?? false;
+  const hasOAuth = config.has_connected_app_oauth ?? false;
+  const supported: AuthType[] = [];
+  if (hasCA) supported.push('connected_app');
+  if (hasOAuth) supported.push('connected_app_oauth');
+  if (config.allow_pat_auth) supported.push('pat');
+  if (config.allow_standard_auth) supported.push('standard');
+  // Prefer per-server preference, then global preference, then first available
+  if (perServerPref && supported.includes(perServerPref)) return perServerPref;
+  if (pref && supported.includes(pref)) return pref;
+  if (supported.includes('connected_app_oauth')) return 'connected_app_oauth';
+  if (supported.includes('connected_app')) return 'connected_app';
+  if (supported.includes('pat')) return 'pat';
+  if (supported.includes('standard')) return 'standard';
+  return 'connected_app';
+}
+
 export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: TableauConnectionStatusProps) {
   const { isAdmin, isAuthenticated } = useAuth();
   const [configs, setConfigs] = useState<TableauConfigOption[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
-  const [authType, setAuthType] = useState<'connected_app' | 'pat' | 'standard'>('connected_app');
+  const [preferredAuthType, setPreferredAuthType] = useState<'connected_app' | 'pat' | 'standard' | 'connected_app_oauth' | null>(null);
+  const [perServerPreferences, setPerServerPreferences] = useState<Record<number, AuthType>>({});
+  const [authType, setAuthType] = useState<AuthType>('connected_app');
   const [userPatConfigIds, setUserPatConfigIds] = useState<number[]>([]);
   const [userPasswordConfigIds, setUserPasswordConfigIds] = useState<number[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<{
@@ -36,36 +66,97 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
 
   // Load configs on mount
   useEffect(() => {
-    // Skip if user is not authenticated
-    if (!isAuthenticated) {
-      return;
-    }
+    if (!isAuthenticated) return;
     loadConfigs();
-    // Don't automatically restore connection state - let user explicitly connect
-    // This prevents automatic API calls on page load
-    // The stored config ID can be restored for UI purposes (in loadConfigs),
-    // but connection state should only be set when user explicitly clicks "Connect"
   }, [isAuthenticated]);
+
+  // Resolve authType when selectedConfigId or preferences change
+  useEffect(() => {
+    const cfg = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) ?? null : null;
+    const perServerPref = selectedConfigId ? (perServerPreferences[selectedConfigId] as AuthType | null) : null;
+    const resolved = resolveAuthType(cfg, preferredAuthType, perServerPref, userPatConfigIds, userPasswordConfigIds, selectedConfigId);
+    setAuthType(resolved);
+  }, [selectedConfigId, preferredAuthType, perServerPreferences, configs, userPatConfigIds, userPasswordConfigIds]);
+
+  // Handle OAuth callback redirect (?tableau_connected=1 or ?tableau_error=...)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('tableau_connected');
+    const error = params.get('tableau_error');
+    const errorDetail = params.get('tableau_error_detail');
+    const configIdFromUrl = params.get('tableau_config_id');
+    if (connected || error || configIdFromUrl) {
+      console.log('[Tableau OAuth] Callback params:', { connected, error, configIdFromUrl, configsCount: configs.length });
+    }
+    if (connected === '1' && configIdFromUrl) {
+      if (configs.length === 0) {
+        console.log('[Tableau OAuth] Waiting for configs to load before applying connection');
+        return;
+      }
+      const config = configs.find((c) => c.id === Number(configIdFromUrl));
+      console.log('[Tableau OAuth] Match check:', { configIdFromUrl, configIdNum: Number(configIdFromUrl), found: !!config, configIds: configs.map((c) => c.id) });
+      if (config) {
+        console.log('[Tableau OAuth] Applying connection for config:', config.id, config.name);
+        setSelectedConfigId(Number(configIdFromUrl));
+        setAuthType('connected_app_oauth');
+        setConnectionStatus({
+          connected: true,
+          config,
+          authResponse: { authenticated: true, server_url: config.server_url, token: '...' },
+        });
+        localStorage.setItem('tableau_config_id', configIdFromUrl);
+        localStorage.setItem('tableau_auth_type', 'connected_app_oauth');
+        localStorage.setItem('tableau_connected', 'true');
+        onConnectionChange?.(true, config);
+        setError(null);
+      } else {
+        setError('Tableau connected but configuration not found. Please try connecting again.');
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.delete('tableau_connected');
+      url.searchParams.delete('tableau_config_id');
+      window.history.replaceState({}, '', url.toString());
+    } else if (error) {
+      const msg = errorDetail
+        ? `${decodeURIComponent(error)}: ${decodeURIComponent(errorDetail)}`
+        : decodeURIComponent(error);
+      setError(msg);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('tableau_error');
+      url.searchParams.delete('tableau_error_detail');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [isAuthenticated, configs, onConnectionChange]);
 
   const loadConfigs = async () => {
     if (!isAuthenticated) return;
     try {
-      const [configsList, pats, passwords] = await Promise.all([
+      const [configsList, pats, passwords, user, perServerPrefs] = await Promise.all([
         authApi.listTableauConfigs(),
         userSettingsApi.listTableauPATs().catch(() => []),
         userSettingsApi.listTableauPasswords().catch(() => []),
+        authApi.getCurrentUser().catch(() => null),
+        userSettingsApi.getTableauAuthPreferences().catch(() => ({})),
       ]);
       setConfigs(configsList);
       setUserPatConfigIds(pats.map((p) => p.tableau_server_config_id));
       setUserPasswordConfigIds(passwords.map((p) => p.tableau_server_config_id));
+      setPerServerPreferences(perServerPrefs as Record<number, AuthType>);
+      const pref = user?.preferred_tableau_auth_type;
+      if (pref && ['pat', 'connected_app', 'standard', 'connected_app_oauth'].includes(pref)) {
+        setPreferredAuthType(pref as typeof preferredAuthType);
+      }
       const storedConfigId = localStorage.getItem('tableau_config_id');
-      const storedAuthType = localStorage.getItem('tableau_auth_type');
-      if (storedConfigId && configsList.find((c) => c.id === Number(storedConfigId))) {
-        setSelectedConfigId(Number(storedConfigId));
-      }
-      if (storedAuthType === 'pat' || storedAuthType === 'connected_app' || storedAuthType === 'standard') {
-        setAuthType(storedAuthType);
-      }
+      const configId = storedConfigId && configsList.find((c) => c.id === Number(storedConfigId))
+        ? Number(storedConfigId)
+        : null;
+      if (configId) setSelectedConfigId(configId);
+      const found = configId ? configsList.find((c) => c.id === configId) : undefined;
+      const cfg = found != null ? found : null;
+      const perServerPref = configId ? (perServerPrefs[configId] as AuthType | null) : null;
+      const resolved = resolveAuthType(cfg, pref as AuthType | null, perServerPref, pats.map((p) => p.tableau_server_config_id), passwords.map((p) => p.tableau_server_config_id), configId);
+      setAuthType(resolved);
     } catch (err) {
       console.error('Failed to load Tableau configs:', err);
       setError('Failed to load Tableau server configurations');
@@ -81,16 +172,34 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     setLoading(true);
     setError(null);
 
-    try {
-      const config = configs.find((c) => c.id === selectedConfigId);
-      const hasCA = config?.has_connected_app ?? false;
-      const effectiveAuthType = hasCA
+    const config = configs.find((c) => c.id === selectedConfigId);
+    const hasCA = config?.has_connected_app ?? false;
+    const hasOAuth = config?.has_connected_app_oauth ?? false;
+    const effectiveAuthType = hasOAuth && authType === 'connected_app_oauth'
+      ? 'connected_app_oauth'
+      : hasCA
         ? authType
         : config?.allow_pat_auth
           ? 'pat'
           : config?.allow_standard_auth
             ? 'standard'
             : 'pat';
+
+    if (effectiveAuthType === 'connected_app_oauth') {
+      try {
+        const { authorize_url } = await authApi.getOAuthAuthorizeUrl(selectedConfigId);
+        localStorage.setItem('tableau_config_id', String(selectedConfigId));
+        localStorage.setItem('tableau_auth_type', 'connected_app_oauth');
+        window.location.href = authorize_url;
+      } catch (err: unknown) {
+        setError(extractErrorMessage(err, 'Failed to start OAuth flow'));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    try {
       const authResponse = await authApi.authenticateTableau({
         config_id: selectedConfigId,
         auth_type: effectiveAuthType,
@@ -176,12 +285,11 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
   };
 
   const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : null;
-  const hasConnectedApp = selectedConfig?.has_connected_app ?? false;
-  const showAuthTypeSelect =
-    selectedConfig?.allow_pat_auth || selectedConfig?.allow_standard_auth || !hasConnectedApp;
-  const canUsePat = !!selectedConfig?.allow_pat_auth && userPatConfigIds.includes(selectedConfigId!);
+  const canUsePat = !!selectedConfig?.allow_pat_auth && selectedConfigId != null && userPatConfigIds.includes(selectedConfigId);
   const canUseStandard =
-    !!selectedConfig?.allow_standard_auth && userPasswordConfigIds.includes(selectedConfigId!);
+    !!selectedConfig?.allow_standard_auth && selectedConfigId != null && userPasswordConfigIds.includes(selectedConfigId);
+  const needsPatConfig = authType === 'pat' && !canUsePat && !!selectedConfig?.allow_pat_auth;
+  const needsPwdConfig = authType === 'standard' && !canUseStandard;
 
   if (configs.length === 0 && !isAdmin) {
     return (
@@ -204,13 +312,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             onValueChange={(value) => {
               setSelectedConfigId(Number(value));
               setError(null);
-              const newConfig = configs.find((c) => c.id === Number(value));
-              const hasCA = newConfig?.has_connected_app ?? false;
-              if (!newConfig?.allow_pat_auth && !newConfig?.allow_standard_auth) setAuthType('connected_app');
-              else if (!hasCA) setAuthType(newConfig?.allow_pat_auth ? 'pat' : 'standard');
-              if (connectionStatus.connected) {
-                handleDisconnect();
-              }
+              if (connectionStatus.connected) handleDisconnect();
             }}
             disabled={connectionStatus.connected || loading}
           >
@@ -267,43 +369,14 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             </Button>
           )}
         </div>
-        {showAuthTypeSelect && (
-          <div className="flex items-center gap-2">
-            <Select
-              value={
-                authType === 'connected_app' && !hasConnectedApp
-                  ? selectedConfig?.allow_pat_auth
-                    ? 'pat'
-                    : 'standard'
-                  : authType
-              }
-              onValueChange={(v) => {
-                setAuthType(v as 'connected_app' | 'pat' | 'standard');
-                setError(null);
-              }}
-              disabled={connectionStatus.connected || loading}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {hasConnectedApp && <SelectItem value="connected_app">Connected App</SelectItem>}
-                <SelectItem value="pat" disabled={!canUsePat}>
-                  Personal Access Token {!canUsePat && '(configure in Settings)'}
-                </SelectItem>
-                {selectedConfig?.allow_standard_auth && (
-                  <SelectItem value="standard" disabled={!canUseStandard}>
-                    Username/Password {!canUseStandard && '(configure in Settings)'}
-                  </SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-            {(authType === 'pat' || !hasConnectedApp) && !canUsePat && selectedConfig?.allow_pat_auth && (
+        {!connectionStatus.connected && (needsPatConfig || needsPwdConfig) && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {needsPatConfig && (
               <Link href="/settings">
                 <Button variant="outline" size="sm">Add PAT in Settings</Button>
               </Link>
             )}
-            {authType === 'standard' && !canUseStandard && (
+            {needsPwdConfig && (
               <Link href="/settings">
                 <Button variant="outline" size="sm">Add credentials in Settings</Button>
               </Link>

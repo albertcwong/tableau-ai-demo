@@ -93,6 +93,7 @@ class User(Base):
     preferred_provider = Column(String(50), nullable=True, comment="Preferred AI provider (e.g., 'openai', 'anthropic')")
     preferred_model = Column(String(100), nullable=True, comment="Preferred AI model (e.g., 'gpt-4', 'claude-3-opus')")
     preferred_agent_type = Column(String(50), nullable=True, comment="Preferred agent type ('general', 'vizql', 'summary')")
+    preferred_tableau_auth_type = Column(String(50), nullable=True, comment="Preferred Tableau auth: connected_app, connected_app_oauth, pat, standard")
 
     # Relationships
     tableau_configs = relationship("TableauServerConfig", back_populates="created_by_user", cascade="all, delete-orphan")
@@ -100,6 +101,7 @@ class User(Base):
     tableau_server_mappings = relationship("UserTableauServerMapping", back_populates="user", cascade="all, delete-orphan")
     tableau_pats = relationship("UserTableauPAT", back_populates="user", cascade="all, delete-orphan")
     tableau_passwords = relationship("UserTableauPassword", back_populates="user", cascade="all, delete-orphan")
+    tableau_auth_preferences = relationship("UserTableauAuthPreference", back_populates="user", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -124,6 +126,13 @@ class TableauServerConfig(Base):
     secret_id = Column(String(255), nullable=True, comment="Secret ID for JWT 'kid' header (defaults to client_id)")
     allow_pat_auth = Column(Boolean, default=False, nullable=False, comment="Allow users to authenticate with Personal Access Token")
     allow_standard_auth = Column(Boolean, default=False, nullable=False, comment="Allow users to authenticate with username and password")
+    allow_connected_app_oauth = Column(Boolean, default=False, nullable=False, comment="Allow OAuth 2.0 Trust (EAS-issued JWT)")
+    eas_issuer_url = Column(String(500), nullable=True, comment="EAS issuer URL (e.g. https://tenant.auth0.com/)")
+    eas_client_id = Column(String(255), nullable=True, comment="OAuth client ID at EAS")
+    eas_client_secret = Column(String(500), nullable=True, comment="EAS client secret (encrypted at rest)")
+    eas_authorization_endpoint = Column(String(500), nullable=True, comment="EAS authorize endpoint (optional, from discovery)")
+    eas_token_endpoint = Column(String(500), nullable=True, comment="EAS token endpoint (optional, from discovery)")
+    eas_sub_claim_field = Column(String(100), nullable=True, comment="Auth0 claim/field for JWT sub (e.g. email, tableau_username, name). Passed to authorize URL.")
     skip_ssl_verify = Column(Boolean, default=False, nullable=False, comment="Skip SSL certificate verification for Tableau API calls")
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -135,6 +144,7 @@ class TableauServerConfig(Base):
     user_mappings = relationship("UserTableauServerMapping", back_populates="tableau_server_config", cascade="all, delete-orphan")
     user_pats = relationship("UserTableauPAT", back_populates="tableau_config", cascade="all, delete-orphan")
     user_passwords = relationship("UserTableauPassword", back_populates="tableau_config", cascade="all, delete-orphan")
+    user_auth_preferences = relationship("UserTableauAuthPreference", back_populates="tableau_config", cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -219,6 +229,29 @@ class UserTableauPassword(Base):
         return f"<UserTableauPassword(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id})>"
 
 
+class UserTableauAuthPreference(Base):
+    """User's preferred authentication method per Tableau server."""
+    __tablename__ = "user_tableau_auth_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tableau_server_config_id = Column(Integer, ForeignKey("tableau_server_configs.id"), nullable=False, index=True)
+    preferred_auth_type = Column(String(50), nullable=False, comment="Preferred Tableau auth: connected_app, connected_app_oauth, pat, standard")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="tableau_auth_preferences")
+    tableau_config = relationship("TableauServerConfig", back_populates="user_auth_preferences")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'tableau_server_config_id', name='uq_user_tableau_auth_preference'),
+    )
+
+    def __repr__(self):
+        return f"<UserTableauAuthPreference(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, preferred_auth_type={self.preferred_auth_type})>"
+
+
 class ProviderConfig(Base):
     """AI provider configuration model."""
     __tablename__ = "provider_configs"
@@ -282,7 +315,12 @@ class AuthConfig(Base):
     auth0_audience = Column(String(255), nullable=True, comment="Auth0 API audience identifier")
     auth0_issuer = Column(String(255), nullable=True, comment="Auth0 issuer URL")
     auth0_tableau_metadata_field = Column(String(255), nullable=True, comment="Auth0 metadata field name to extract Tableau username (e.g., 'app_metadata.tableau_username' or 'tableau_username')")
-    
+
+    # App / OAuth config (overrides .env when set)
+    backend_api_url = Column(String(500), nullable=True, comment="Backend API URL for OAuth callback and EAS issuer")
+    tableau_oauth_frontend_redirect = Column(String(500), nullable=True, comment="Frontend URL for OAuth redirect after connect")
+    eas_jwt_key_pem_encrypted = Column(Text(), nullable=True, comment="Encrypted RSA private key PEM for EAS JWT signing")
+
     # Metadata
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, index=True)
