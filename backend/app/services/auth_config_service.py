@@ -1,5 +1,6 @@
 """Authentication configuration service with caching."""
 import logging
+import time
 from pathlib import Path
 from typing import List, Optional
 from sqlalchemy.orm import Session
@@ -10,36 +11,74 @@ from app.services.pat_encryption import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for auth config (invalidated on update)
-_auth_config_cache: Optional[AuthConfig] = None
+# Cache plain scalar values to avoid DetachedInstanceError (ORM objects become detached when session closes)
+_auth_config_cache: Optional[dict] = None
 _cache_timestamp: Optional[float] = None
 CACHE_TTL_SECONDS = 60  # Cache for 60 seconds
 
 
-def get_auth_config(db: Session, use_cache: bool = True) -> AuthConfig:
+def _orm_to_cache(config: AuthConfig) -> dict:
+    """Extract scalar values from ORM object for cache (avoids detached instance)."""
+    return {
+        "id": config.id,
+        "enable_password_auth": config.enable_password_auth,
+        "enable_oauth_auth": config.enable_oauth_auth,
+        "auth0_domain": config.auth0_domain,
+        "auth0_client_id": config.auth0_client_id,
+        "auth0_client_secret": config.auth0_client_secret,
+        "auth0_audience": config.auth0_audience,
+        "auth0_issuer": config.auth0_issuer,
+        "auth0_tableau_metadata_field": config.auth0_tableau_metadata_field,
+        "backend_api_url": config.backend_api_url,
+        "tableau_oauth_frontend_redirect": config.tableau_oauth_frontend_redirect,
+        "eas_jwt_key_pem_encrypted": config.eas_jwt_key_pem_encrypted,
+        "cors_origins": config.cors_origins,
+        "mcp_server_name": config.mcp_server_name,
+        "mcp_transport": config.mcp_transport,
+        "mcp_log_level": config.mcp_log_level,
+        "redis_token_ttl": config.redis_token_ttl,
+        "updated_by": config.updated_by,
+        "updated_at": config.updated_at,
+        "created_at": config.created_at,
+    }
+
+
+class _AuthConfigView:
+    """Read-only view over cached dict for attribute access (auth_config.enable_oauth_auth etc)."""
+
+    def __init__(self, d: dict):
+        self._d = d
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._d.get(name)
+
+
+def get_auth_config(db: Session, use_cache: bool = True):
     """
     Get the current authentication configuration.
     Uses caching to avoid database queries on every request.
-    
+    Returns a plain object from cache (avoids DetachedInstanceError) or ORM when use_cache=False.
+
     Args:
         db: Database session
         use_cache: Whether to use cached value (default: True)
-    
+
     Returns:
-        AuthConfig: Current authentication configuration
+        AuthConfig (ORM) when use_cache=False, or a read-only view when use_cache=True
     """
     global _auth_config_cache, _cache_timestamp
-    import time
-    
+
     # Check cache if enabled and valid
     if use_cache and _auth_config_cache is not None and _cache_timestamp is not None:
         age = time.time() - _cache_timestamp
         if age < CACHE_TTL_SECONDS:
-            return _auth_config_cache
-    
+            return _AuthConfigView(_auth_config_cache)
+
     # Fetch from database
     config = db.query(AuthConfig).order_by(AuthConfig.updated_at.desc()).first()
-    
+
     if config is None:
         # Create default config if none exists
         logger.info("No auth config found, creating default (password auth enabled)")
@@ -50,11 +89,11 @@ def get_auth_config(db: Session, use_cache: bool = True) -> AuthConfig:
         db.add(config)
         safe_commit(db)
         db.refresh(config)
-    
-    # Update cache
-    _auth_config_cache = config
-    _cache_timestamp = time.time()
-    
+
+    if use_cache:
+        _auth_config_cache = _orm_to_cache(config)
+        _cache_timestamp = time.time()
+        return _AuthConfigView(_auth_config_cache)
     return config
 
 

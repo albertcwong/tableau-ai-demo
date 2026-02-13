@@ -8,5 +8,5 @@ export { DarkModeToggle } from './DarkModeToggle';
 export { ConversationManager } from './ConversationManager';
 export type { ChatInterfaceProps } from './ChatInterface';
 export type { MessageListProps } from './MessageList';
-export type { MessageInputProps } from './MessageInput';
+export type { MessageInputProps, MessageInputRef } from './MessageInput';
 export type { ModelSelectorProps } from './ModelSelector';

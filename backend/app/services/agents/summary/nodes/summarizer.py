@@ -3,6 +3,37 @@ import logging
 from typing import Dict, Any
 
 from app.services.agents.summary.state import SummaryAgentState
+
+MAX_DATA_ROWS = 50  # Limit rows per view to avoid token overflow
+
+
+def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]) -> str:
+    """Format views_data (columns + rows) as a compact markdown table for prompts."""
+    if not views_data:
+        return "(No view data available)"
+    parts = []
+    for view_id, v_data in views_data.items():
+        if not v_data:
+            continue
+        cols = v_data.get("columns", [])
+        rows = v_data.get("data", [])[:MAX_DATA_ROWS]
+        meta = views_metadata.get(view_id, {})
+        name = meta.get("name") or meta.get("id") or view_id
+        if not cols:
+            parts.append(f"**{name}**: (no columns)")
+            continue
+        header = " | ".join(str(c) for c in cols)
+        sep = " | ".join(["---"] * len(cols))
+        table_lines = [f"**{name}**", "", f"| {header} |", f"| {sep} |"]
+        for row in rows:
+            vals = [str(v)[:50] if v is not None else "" for v in (row if isinstance(row, (list, tuple)) else [row])]
+            if len(vals) < len(cols):
+                vals.extend([""] * (len(cols) - len(vals)))
+            elif len(vals) > len(cols):
+                vals = vals[:len(cols)]
+            table_lines.append("| " + " | ".join(vals) + " |")
+        parts.append("\n".join(table_lines))
+    return "\n\n".join(parts) if parts else "(No view data available)"
 from app.prompts.registry import prompt_registry
 from app.services.ai.client import UnifiedAIClient
 from app.core.config import settings
@@ -62,24 +93,34 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             view_names = view_info_list[0]["name"] if view_info_list else "Unknown View"
             view_count_text = "1 view"
         
-        # Build comprehensive summary prompt
-        system_prompt = prompt_registry.get_prompt(
-            "agents/summary/final_summary.txt",
-            variables={
-                "view_name": view_names,  # Can be multiple views
-                "row_count": total_row_count,
-                "insights": state.get("key_insights", []),
-                "recommendations": state.get("recommendations", []),
-                "user_query": state.get("user_query", "summarize this view")
-            }
-        )
-        
-        # Update user message to mention multiple views if applicable
-        user_query = state.get("user_query", "summarize this view")
-        if len(view_info_list) > 1:
-            user_message = f"Generate executive summary and detailed analysis for {view_count_text}: {view_names}."
+        summary_mode = state.get("summary_mode") or "full"
+        v_data = views_data or {}
+        if not v_data and state.get("view_data"):
+            vd = state["view_data"]
+            v_data = {"single": {"columns": vd.get("columns", []), "data": vd.get("data", []), "row_count": vd.get("row_count", 0)}}
+        v_meta = views_metadata or {}
+        if not v_meta and state.get("view_metadata"):
+            v_meta = {"single": state.get("view_metadata", {})}
+        view_data_str = _format_view_data(v_data, v_meta)
+        prompt_vars = {
+            "view_name": view_names,
+            "row_count": total_row_count,
+            "view_data": view_data_str,
+            "insights": state.get("key_insights", []),
+            "recommendations": state.get("recommendations", []),
+            "user_query": state.get("user_query", "summarize this view")
+        }
+        if summary_mode == "brief":
+            template_file = "agents/summary/final_summary_brief.txt"
+            user_message = "Generate a 2-3 sentence executive summary."
+        elif summary_mode == "custom":
+            template_file = "agents/summary/final_summary_custom.txt"
+            user_message = state.get("user_query", "summarize this view")
         else:
-            user_message = "Generate executive summary and detailed analysis."
+            template_file = "agents/summary/final_summary.txt"
+            user_message = f"Generate executive summary and detailed analysis for {view_count_text}: {view_names}." if len(view_info_list) > 1 else "Generate executive summary and detailed analysis."
+        
+        system_prompt = prompt_registry.get_prompt(template_file, variables=prompt_vars)
         
         # Initialize AI client
         model = state.get("model", "gpt-4")

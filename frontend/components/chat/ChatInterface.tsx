@@ -11,7 +11,8 @@ import { ConversationManager } from './ConversationManager';
 import { ReasoningSteps } from './ReasoningSteps';
 import { AgentSelector } from '@/components/agent-panel/AgentSelector';
 import { ContextManager } from '@/components/agent-panel/ContextManager';
-import { chatApi } from '@/lib/api';
+import { SummaryModeButtons } from './SummaryModeButtons';
+import { chatApi, type SummaryMode } from '@/lib/api';
 import type { Message, MessageRole, AgentMessageChunk, ChatContextObject } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -62,7 +63,9 @@ export function ChatInterface({
   const [error, setError] = useState<Error | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [summaryMode, setSummaryMode] = useState<SummaryMode>('full');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const messageInputRef = useRef<import('./MessageInput').MessageInputRef>(null);
   const previousAgentTypeRef = useRef<'vizql' | 'summary'>(agentType);
 
   // Sync selectedModel when defaultModel prop changes
@@ -182,7 +185,7 @@ export function ChatInterface({
   }, []);
 
   const handleSendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, summaryModeOverride?: SummaryMode) => {
       if (!conversationId || isLoading) return;
 
       // Create new AbortController for this request
@@ -287,6 +290,7 @@ export function ChatInterface({
             agent_type: agentType,
             stream: true,
             embedded_state,
+            ...(agentType === 'summary' && { summary_mode: summaryModeOverride ?? summaryMode }),
           },
           (chunk: string) => {
             // Legacy text chunk handler (for backward compatibility)
@@ -643,6 +647,15 @@ export function ChatInterface({
     [conversationId, selectedModel, isLoading, agentType]
   );
 
+  const handleSummaryModeClick = useCallback((mode: SummaryMode) => {
+    if (mode === 'custom') {
+      setSummaryMode('custom');
+      messageInputRef.current?.focus();
+    } else {
+      handleSendMessage('Summarize', mode);
+    }
+  }, [handleSendMessage]);
+
   const handleEditMessage = useCallback(
     async (messageId: string, newContent: string) => {
       // TODO: Implement message editing API endpoint
@@ -762,6 +775,15 @@ export function ChatInterface({
           />
         )}
       </div>
+      {agentType === 'summary' && context.some((c) => c.object_type === 'view') && (
+        <div className="px-2 sm:px-4 py-2 flex-shrink-0 border-t">
+          <SummaryModeButtons
+            onSelect={handleSummaryModeClick}
+            hasViews={true}
+            disabled={isLoading || isStreaming}
+          />
+        </div>
+      )}
       {lastReasoningSteps && (
         <div className="px-2 sm:px-4 pt-2 sm:pt-4 mb-2 flex-shrink-0">
           <ReasoningSteps 
@@ -775,6 +797,7 @@ export function ChatInterface({
       )}
       <div className="p-2 sm:p-4 border-t space-y-2">
         <MessageInput
+          ref={messageInputRef}
           onSend={handleSendMessage}
           onCancel={isStreaming ? handleCancelMessage : undefined}
           disabled={isLoading || !conversationId}
@@ -782,13 +805,15 @@ export function ChatInterface({
             isCapturing
               ? 'Capturing dashboard state...'
               : agentType === 'summary' && context.some((c) => c.object_type === 'view')
-                ? 'Summarize current view (filters applied when available)'
+                ? summaryMode === 'custom'
+                  ? 'Enter your custom instructions (e.g., Focus only on top 3 outliers)'
+                  : 'Summarize current view (filters applied when available)'
                 : 'Type a message...'
           }
         />
-        <div className="flex gap-4 pt-1">
+        <div className="flex gap-4 pt-1 flex-wrap">
           {onAgentTypeChange && (
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
                 Agent Type
               </label>

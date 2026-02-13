@@ -27,6 +27,9 @@ class SummaryAgentState(BaseAgentState):
     key_insights: list[str]
     recommendations: list[str]
     
+    # Summary mode: brief, full, or custom
+    summary_mode: Optional[str]
+    
     # Output
     executive_summary: Optional[str]
     detailed_analysis: Optional[str]

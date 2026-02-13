@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, forwardRef, useImperativeHandle, useRef } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, X } from 'lucide-react';
@@ -13,14 +13,23 @@ export interface MessageInputProps {
   className?: string;
 }
 
-export function MessageInput({
+export interface MessageInputRef {
+  focus: () => void;
+}
+
+export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(function MessageInput({
   onSend,
   onCancel,
   disabled = false,
   placeholder = 'Type a message...',
   className,
-}: MessageInputProps) {
+}, ref) {
   const [message, setMessage] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => inputRef.current?.focus(),
+  }), []);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -51,6 +60,7 @@ export function MessageInput({
     <form onSubmit={handleSubmit} className={className}>
       <div className="flex gap-2">
         <Input
+          ref={inputRef}
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -84,4 +94,4 @@ export function MessageInput({
       </div>
     </form>
   );
-}
+});

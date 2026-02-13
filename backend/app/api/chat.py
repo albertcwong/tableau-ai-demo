@@ -66,6 +66,7 @@ class MessageRequest(BaseModel):
     temperature: Optional[float] = Field(None, ge=0, le=2, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
     embedded_state: Optional[dict] = Field(None, description="Per-view embedded dashboard state (filters, summary_data, sheets_data) from client capture")
+    summary_mode: Optional[str] = Field(None, description="'brief', 'full', or 'custom'. Only used when agent_type is 'summary'")
 
 
 class MessageResponse(BaseModel):
@@ -146,7 +147,7 @@ async def create_conversation(
     greeting_messages = {
         'general': "Hello! I'm your General Agent assistant. I can help you explore Tableau objects, answer questions about your data, and assist with general queries. What would you like to know?",
         'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
-        'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
+        'summary': "I'm your Summary Agent. Add views to your context, then click one of the buttons above to choose your summary type: Brief, Full, or Custom instructions.",
     }
     
     # Default greeting if agent_type is not provided or invalid
@@ -154,12 +155,15 @@ async def create_conversation(
     greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['vizql'])
     
     # Create initial greeting message from assistant
+    extra_meta = {"is_greeting": True, "agent_type": agent_type_normalized}
+    if agent_type_normalized == "summary":
+        extra_meta["summary_buttons"] = True
     greeting_message = Message(
         conversation_id=conversation.id,
         role=MessageRole.ASSISTANT,
         content=greeting_content,
         created_at=datetime.now(),
-        extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}  # Mark as greeting message
+        extra_metadata=extra_meta
     )
     db.add(greeting_message)
     safe_commit(db)
@@ -188,7 +192,7 @@ async def create_greeting_message(
     # Personalized greetings per agent type
     greeting_messages = {
         'vizql': "Hello! I'm your VizQL Agent. I specialize in constructing and executing VizQL queries to interact with Tableau datasources. I can help you build queries, filter data, and explore your datasets. What would you like to query?",
-        'summary': "Hello! I'm your Summary Agent. I excel at exporting and summarizing multiple Tableau views. I can help you combine insights from different visualizations and create comprehensive summaries. What views would you like me to summarize?",
+        'summary': "I'm your Summary Agent. Add views to your context, then click one of the buttons above to choose your summary type: Brief, Full, or Custom instructions.",
     }
     
     # Normalize agent type (default to vizql)
@@ -196,12 +200,15 @@ async def create_greeting_message(
     greeting_content = greeting_messages.get(agent_type_normalized, greeting_messages['vizql'])
     
     # Create greeting message
+    extra_meta = {"is_greeting": True, "agent_type": agent_type_normalized}
+    if agent_type_normalized == "summary":
+        extra_meta["summary_buttons"] = True
     greeting_message = Message(
         conversation_id=conversation_id,
         role=MessageRole.ASSISTANT,
         content=greeting_content,
         created_at=datetime.now(),
-        extra_metadata={"is_greeting": True, "agent_type": agent_type_normalized}
+        extra_metadata=extra_meta
     )
     db.add(greeting_message)
     safe_commit(db)
@@ -1507,6 +1514,7 @@ async def send_message(
             graph = AgentGraphFactory.create_summary_graph()
             
             # Initialize state for Summary agent
+            summary_mode = request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full"
             initial_state = {
                 "user_query": refined_query,
                 "agent_type": "summary",
@@ -1524,6 +1532,7 @@ async def send_message(
                 "model": request.model,
                 "provider": provider_for_state,
                 "embedded_state": request.embedded_state or None,
+                "summary_mode": summary_mode,
             }
             
             if request.stream:

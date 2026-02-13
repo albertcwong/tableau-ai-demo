@@ -244,6 +244,8 @@ export interface ChatResponse {
   tokens_used: number;
 }
 
+export type SummaryMode = 'brief' | 'full' | 'custom';
+
 export interface MessageRequest {
   conversation_id: number;
   content: string;
@@ -254,6 +256,7 @@ export interface MessageRequest {
   temperature?: number;
   max_tokens?: number;
   embedded_state?: Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>;
+  summary_mode?: SummaryMode;
 }
 
 export const chatApi = {
