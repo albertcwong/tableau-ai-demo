@@ -4,8 +4,13 @@ import { getAuth0Config } from '@/lib/auth0-config';
 
 export async function GET() {
   try {
-    // Check config first
-    const config = await getAuth0Config();
+    let config;
+    try {
+      config = await getAuth0Config();
+    } catch (configError) {
+      console.warn('Auth0 config fetch failed, using disabled config:', configError);
+      config = { domain: '', clientId: '', enabled: false };
+    }
     
     // If Auth0 is not configured, return null token (not an error)
     // This allows the frontend to fall back to password auth

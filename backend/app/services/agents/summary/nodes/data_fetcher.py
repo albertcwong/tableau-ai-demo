@@ -1,61 +1,16 @@
-"""Data fetcher node for retrieving view data."""
+"""Data fetcher node for retrieving view data from embedded_state only."""
 import logging
-import re
-from typing import Dict, Any, List, Optional
-
-from langchain_core.runnables.config import ensure_config
+from typing import Dict, Any
 
 from app.services.agents.summary.state import SummaryAgentState
-from app.services.tableau.client import TableauClient
-from app.services.cache import cached
 from app.services.metrics import track_node_execution
 
 logger = logging.getLogger(__name__)
 
-# Tableau internal IDs (e.g. param values) cause "Error parsing command parameter value string"
-# Match patterns like (xxx,1:1) or xxx,1:1 anywhere in value
-_RE_INTERNAL_ID = re.compile(r",\d+:\d+")
-
 
 def _sanitize_view_id(view_id: str) -> str:
-    """Strip invalid suffixes (e.g. ,1:1) from view_id - Tableau LUIDs are alphanumeric."""
-    if "," in view_id:
-        return view_id.split(",")[0].strip()
-    return view_id
-
-
-def _is_internal_filter_value(v: str) -> bool:
-    """True if value looks like a Tableau internal ID that breaks vf_ params."""
-    return bool(_RE_INTERNAL_ID.search(str(v)))
-
-
-def _filters_from_embedded(filters: List[Dict]) -> Optional[Dict[str, str | List[str]]]:
-    """Convert embedded filter list to vf_ param dict. Skips values that look like internal IDs."""
-    if not filters:
-        return None
-    out: Dict[str, str | List[str]] = {}
-    for f in filters:
-        fn = f.get("fieldName")
-        if not fn:
-            continue
-        vals = f.get("appliedValues")
-        if vals:
-            raw = [v.get("value", str(v)) for v in vals] if isinstance(vals[0], dict) else list(vals)
-            cleaned = [str(v) for v in raw if not _is_internal_filter_value(str(v))]
-            if cleaned:
-                out[fn] = cleaned if len(cleaned) > 1 else cleaned[0]
-        elif f.get("minValue") is not None or f.get("maxValue") is not None:
-            minv, maxv = f.get("minValue"), f.get("maxValue")
-            if minv is not None and maxv is not None:
-                s = f"{minv},{maxv}"
-                if not _is_internal_filter_value(s):
-                    out[fn] = s
-            elif minv is not None and not _is_internal_filter_value(str(minv)):
-                out[fn] = str(minv)
-            elif maxv is not None and not _is_internal_filter_value(str(maxv)):
-                out[fn] = str(maxv)
-    return out if out else None
-
+    """Strip invalid suffixes (e.g. ,1:1) from view_id."""
+    return view_id.split(",")[0].strip() if "," in view_id else view_id
 
 def _extract_from_embedded(
     view_id: str,
@@ -75,7 +30,8 @@ def _extract_from_embedded(
             "data": sd.get("data", []),
             "row_count": sd.get("row_count", 0),
         }
-        views_metadata[view_id] = {"id": view_id, "name": active_sheet.get("name", view_id)}
+        name = active_sheet.get("name") or view_id
+        views_metadata[view_id] = {"id": view_id, "name": name if name else view_id}
         return views_data[view_id]["row_count"]
 
     if sheet_type == "dashboard" and "sheets_data" in emb:
@@ -95,36 +51,17 @@ def _extract_from_embedded(
     return 0
 
 
-@cached("view_data", ttl_seconds=300)  # Cache view data for 5 minutes
-async def _fetch_view_data_cached(
-    view_id: str,
-    max_rows: int = 1000,
-    filters: Optional[Dict[str, str | List[str]]] = None,
-) -> Dict[str, Any]:
-    """Cached view data fetch function."""
-    tableau_client = TableauClient()
-    return await tableau_client.get_view_data(view_id, max_rows=max_rows, filters=filters)
-
-
-@cached("view_metadata", ttl_seconds=600)  # Cache view metadata for 10 minutes
-async def _fetch_view_metadata_cached(view_id: str) -> Dict[str, Any]:
-    """Cached view metadata fetch function."""
-    tableau_client = TableauClient()
-    return await tableau_client.get_view(view_id)
-
-
 @track_node_execution("summary", "data_fetcher")
 async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
     """
-    Fetch view data from Tableau.
-    Uses embedded_state when present (filters, summary_data, sheets_data), else REST API.
+    Fetch view data from embedded_state only. Requires views to be visible in the explorer
+    so the Embedding API can capture their data.
     """
     try:
         view_ids = state.get("context_views", [])
         embedded_state = state.get("embedded_state") or {}
 
         if not view_ids:
-            logger.warning("No view in context for data fetch")
             return {
                 **state,
                 "error": "No view in context. Please add a view first.",
@@ -135,22 +72,49 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
             }
 
         logger.info(f"Fetching data for {len(view_ids)} view(s): {view_ids}")
-        # Tableau client from config (not in state - not msgpack serializable)
-        config = ensure_config()
-        tableau_client = config.get("configurable", {}).get("tableau_client") or state.get("tableau_client")
         views_data: Dict[str, Any] = {}
         views_metadata: Dict[str, Any] = {}
         total_rows = 0
         successful_fetches = 0
+        failed_views = []
         tool_calls = list(state.get("tool_calls", []))
 
         for view_id in view_ids:
             clean_view_id = _sanitize_view_id(view_id)
-            emb = embedded_state.get(view_id) if isinstance(embedded_state, dict) else None
+            emb = (
+                embedded_state.get(view_id) or embedded_state.get(clean_view_id)
+                if isinstance(embedded_state, dict)
+                else None
+            )
 
-            # Use embedded data when available
-            if emb and ("summary_data" in emb or "sheets_data" in emb):
-                rows = _extract_from_embedded(view_id, emb, views_data, views_metadata)
+            if not emb:
+                error_msg = f"View {view_id} not found in embedded_state. Ensure the view is visible in the explorer."
+                logger.warning(error_msg)
+                failed_views.append({"view_id": view_id, "error": "View not found in embedded_state"})
+                tool_calls.append({
+                    "tool": "get_view_data",
+                    "args": {"view_id": view_id, "source": "embedded_state"},
+                    "result": "error",
+                    "error": error_msg,
+                })
+                continue
+
+            # Check for capture errors
+            if emb.get("capture_error"):
+                error_msg = f"Capture failed for {view_id}: {emb.get('capture_error')}"
+                logger.warning(error_msg)
+                failed_views.append({"view_id": view_id, "error": emb.get("capture_error")})
+                tool_calls.append({
+                    "tool": "get_view_data",
+                    "args": {"view_id": view_id, "source": "embedded_state"},
+                    "result": "error",
+                    "error": error_msg,
+                })
+                continue
+
+            # Extract data from embedded_state
+            rows = _extract_from_embedded(view_id, emb, views_data, views_metadata)
+            if rows > 0:
                 total_rows += rows
                 successful_fetches += 1
                 tool_calls.append({
@@ -158,46 +122,29 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                     "args": {"view_id": view_id, "source": "embedded_state"},
                     "result": f"success - {rows} rows (embedded)",
                 })
-                continue
-
-            # Fallback: REST API with optional filters from embedded_state
-            filters = None
-            if emb and emb.get("filters"):
-                filters = _filters_from_embedded(emb["filters"])
-                if filters:
-                    logger.info(f"Using filters for {view_id}: {list(filters.keys())}")
-
-            if tableau_client:
-                try:
-                    view_data = await tableau_client.get_view_data(clean_view_id, max_rows=1000, filters=filters)
-                    view_metadata = await tableau_client.get_view(clean_view_id)
-                except Exception as e:
-                    view_data = None
-                    view_metadata = {"id": view_id, "name": view_id}
-                    logger.error(f"Failed to fetch view data for {view_id}: {e}")
             else:
-                view_data = await _fetch_view_data_cached(clean_view_id, max_rows=1000, filters=filters)
-                view_metadata = await _fetch_view_metadata_cached(clean_view_id)
-
-            if view_data:
-                views_data[view_id] = view_data
-                views_metadata[view_id] = view_metadata
-                total_rows += view_data.get("row_count", 0)
-                successful_fetches += 1
+                # Embedded state exists but has no data
+                error_msg = f"View {view_id} has no summary_data or sheets_data. Ensure the view is visible and try again."
+                logger.warning(error_msg)
+                failed_views.append({"view_id": view_id, "error": "No data in embedded_state"})
                 tool_calls.append({
                     "tool": "get_view_data",
-                    "args": {"view_id": view_id, "max_rows": 1000},
-                    "result": f"success - {view_data.get('row_count', 0)} rows",
-                })
-            else:
-                views_data[view_id] = None
-                views_metadata[view_id] = {"id": view_id, "name": view_id}
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "max_rows": 1000},
+                    "args": {"view_id": view_id, "source": "embedded_state"},
                     "result": "error",
-                    "error": "Failed to fetch data",
+                    "error": error_msg,
                 })
+
+        if successful_fetches == 0:
+            error_details = "; ".join([f"{v['view_id']}: {v['error']}" for v in failed_views]) if failed_views else "No views captured"
+            return {
+                **state,
+                "error": f"Could not get view data from embedded capture. {error_details}. Ensure the views are visible in the explorer and try again.",
+                "view_data": None,
+                "view_metadata": None,
+                "views_data": {},
+                "views_metadata": {},
+                "tool_calls": tool_calls,
+            }
 
         first_view_id = view_ids[0]
         primary_view_data = views_data.get(first_view_id)
@@ -210,6 +157,9 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
             primary_view_metadata = views_metadata.get(first_key, {})
 
         thought = f"Fetched data from {successful_fetches}/{len(view_ids)} view(s), total {total_rows} rows"
+        if failed_views:
+            thought += f" ({len(failed_views)} view(s) failed)"
+        
         return {
             **state,
             "view_data": primary_view_data,
@@ -226,7 +176,7 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         for view_id in view_ids:
             tool_calls.append({
                 "tool": "get_view_data",
-                "args": {"view_id": view_id, "max_rows": 1000},
+                "args": {"view_id": view_id, "source": "embedded_state"},
                 "result": "error",
                 "error": str(e),
             })

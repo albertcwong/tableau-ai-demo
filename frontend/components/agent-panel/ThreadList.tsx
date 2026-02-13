@@ -44,6 +44,7 @@ export function ThreadList({
   const [editName, setEditName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<number | null>(null);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   const handleStartEdit = (thread: ConversationResponse, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent thread selection
@@ -116,6 +117,39 @@ export function ThreadList({
     }
   };
 
+  const handleDeleteAll = async () => {
+    if (threads.length === 0) {
+      return;
+    }
+
+    const confirmed = confirm(
+      `Are you sure you want to delete all ${threads.length} chat thread(s)? This action cannot be undone.`
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingAll(true);
+    try {
+      const result = await chatApi.deleteAllConversations();
+      // Refresh threads list
+      if (onThreadsChange) {
+        onThreadsChange();
+      }
+      // Clear active thread if it was deleted
+      if (activeThreadId) {
+        onSelectThread(0);
+      }
+      alert(result.message);
+    } catch (err) {
+      console.error('Failed to delete all threads:', err);
+      alert('Failed to delete all threads. Please try again.');
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex gap-2">
@@ -140,8 +174,23 @@ export function ThreadList({
       <div>
         
         {expanded && (
-          <div className="mt-2 space-y-1 max-h-96 overflow-y-auto">
-            {threads.map((thread) => {
+          <div className="mt-2 space-y-1">
+            {threads.length > 0 && (
+              <div className="mb-2 px-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  onClick={handleDeleteAll}
+                  disabled={isDeletingAll}
+                >
+                  <Trash2 className="h-3 w-3 mr-2" />
+                  {isDeletingAll ? 'Deleting...' : `Delete All (${threads.length})`}
+                </Button>
+              </div>
+            )}
+            <div className="space-y-1 max-h-96 overflow-y-auto">
+              {threads.map((thread) => {
               const isEditing = editingThreadId === thread.id;
               const displayName = getDisplayName(thread);
               
@@ -229,6 +278,7 @@ export function ThreadList({
                 </Card>
               );
             })}
+            </div>
           </div>
         )}
       </div>

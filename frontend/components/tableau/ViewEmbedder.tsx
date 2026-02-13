@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { getViewEmbedUrl } from '@/lib/tableau';
+import { getViewEmbedUrl, sanitizeViewId } from '@/lib/tableau';
 import type { TableauEmbedUrl } from '@/types';
 
 // Declare tableau-viz web component type
@@ -156,10 +156,12 @@ export function ViewEmbedder({
         const height = containerRef.current.clientHeight || containerHeight || 600;
 
         // Create new tableau-viz web component using Tableau Embedding API v3
+        // Use sanitized viewId - suffixes like ,1:1 cause "Error parsing command parameter value string"
         if (!containerRef.current) return;
+        const cleanViewId = sanitizeViewId(viewId);
         const viz = document.createElement('tableau-viz') as HTMLElement;
-        viz.id = `tableau-viz-${viewId}`;
-        viz.setAttribute('data-view-id', viewId);
+        viz.id = `tableau-viz-${cleanViewId}`;
+        viz.setAttribute('data-view-id', cleanViewId);
 
         // Set required attributes per Tableau Embedding API v3 documentation
         viz.setAttribute('src', embedInfo.url);

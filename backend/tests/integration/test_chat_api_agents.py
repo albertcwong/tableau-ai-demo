@@ -98,21 +98,16 @@ def mock_ai_client():
          patch('app.services.agents.vizql.nodes.query_builder.UnifiedAIClient') as mock_class2, \
          patch('app.services.agents.vizql.nodes.refiner.UnifiedAIClient') as mock_class3, \
          patch('app.services.agents.vizql.nodes.formatter.UnifiedAIClient') as mock_class4, \
-         patch('app.services.agents.summary.nodes.insight_gen.UnifiedAIClient') as mock_class5, \
-         patch('app.services.agents.summary.nodes.summarizer.UnifiedAIClient') as mock_class6, \
-         patch('app.api.chat.UnifiedAIClient') as mock_class7:
+         patch('app.services.agents.summary.nodes.summarizer.UnifiedAIClient') as mock_class5, \
+         patch('app.api.chat.UnifiedAIClient') as mock_class6:
         
-        # Create a single mock client instance
         mock_client = AsyncMock()
-        
-        # All class mocks return the same instance
         mock_class1.return_value = mock_client
         mock_class2.return_value = mock_client
         mock_class3.return_value = mock_client
         mock_class4.return_value = mock_client
         mock_class5.return_value = mock_client
         mock_class6.return_value = mock_client
-        mock_class7.return_value = mock_client
         
         # Default mock response - no function call
         mock_response = ChatResponse(
@@ -315,21 +310,7 @@ class TestChatAPIWithSummaryAgent:
         self, client, db_session, test_conversation,
         test_view_context, mock_tableau_client, mock_ai_client
     ):
-        """Test Summary agent with valid view context."""
-        # Mock AI responses for insight generation and summarization
-        insight_response = ChatResponse(
-            content=json.dumps({
-                "insights": ["Sales are highest in South region"],
-                "recommendations": ["Focus on expanding in South region"]
-            }),
-            model="gpt-4",
-            tokens_used=150,
-            prompt_tokens=100,
-            completion_tokens=50,
-            finish_reason="stop",
-            function_call=None
-        )
-        
+        """Test Summary agent with valid view context and embedded_state."""
         summary_response = ChatResponse(
             content="This view shows sales data across regions...",
             model="gpt-4",
@@ -339,9 +320,20 @@ class TestChatAPIWithSummaryAgent:
             finish_reason="stop",
             function_call=None
         )
-        
-        mock_ai_client.chat = AsyncMock(side_effect=[insight_response, summary_response])
-        
+        mock_ai_client.chat = AsyncMock(side_effect=[summary_response])
+
+        embedded_state = {
+            "test-view-456": {
+                "sheet_type": "worksheet",
+                "summary_data": {
+                    "columns": ["Region", "Sales"],
+                    "data": [["West", "1500"], ["East", "2000"]],
+                    "row_count": 2,
+                },
+                "captured_at": "2024-01-01T00:00:00Z",
+            }
+        }
+
         response = client.post(
             "/api/v1/chat/message",
             json={
@@ -349,7 +341,9 @@ class TestChatAPIWithSummaryAgent:
                 "content": "summarize this view",
                 "agent_type": "summary",
                 "model": "gpt-4",
-                "stream": False
+                "provider": "openai",
+                "stream": False,
+                "embedded_state": embedded_state,
             }
         )
         
@@ -391,11 +385,10 @@ class TestChatAPIWithSummaryAgent:
                 "content": "summarize this view",
                 "agent_type": "summary",
                 "model": "gpt-4",
+                "provider": "openai",
                 "stream": False
             }
         )
-        
-        # Should still succeed but use general agent
         assert response.status_code == 200
     
     def test_chat_with_summary_agent_streaming(
@@ -403,19 +396,6 @@ class TestChatAPIWithSummaryAgent:
         test_view_context, mock_tableau_client, mock_ai_client
     ):
         """Test Summary agent with streaming response."""
-        insight_response = ChatResponse(
-            content=json.dumps({
-                "insights": ["Sales are highest in South region"],
-                "recommendations": []
-            }),
-            model="gpt-4",
-            tokens_used=150,
-            prompt_tokens=100,
-            completion_tokens=50,
-            finish_reason="stop",
-            function_call=None
-        )
-        
         summary_response = ChatResponse(
             content="Summary of the view...",
             model="gpt-4",
@@ -425,9 +405,19 @@ class TestChatAPIWithSummaryAgent:
             finish_reason="stop",
             function_call=None
         )
-        
-        mock_ai_client.chat = AsyncMock(side_effect=[insight_response, summary_response])
-        
+        mock_ai_client.chat = AsyncMock(side_effect=[summary_response])
+
+        embedded_state = {
+            "test-view-456": {
+                "sheet_type": "worksheet",
+                "summary_data": {
+                    "columns": ["Region", "Sales"],
+                    "data": [["West", "1500"]],
+                    "row_count": 1,
+                },
+            }
+        }
+
         response = client.post(
             "/api/v1/chat/message",
             json={
@@ -435,7 +425,9 @@ class TestChatAPIWithSummaryAgent:
                 "content": "summarize this view",
                 "agent_type": "summary",
                 "model": "gpt-4",
-                "stream": True
+                "provider": "openai",
+                "stream": True,
+                "embedded_state": embedded_state,
             },
             headers={"Accept": "text/event-stream"}
         )
@@ -803,24 +795,17 @@ class TestChatAPIErrorHandling:
         test_view_context, mock_tableau_for_chat, mock_ai_client
     ):
         """Test Summary agent uses embedded_state when present (skips REST API)."""
-        # Use graph without checkpointer to avoid serializing tableau_client mock
         from langgraph.graph import StateGraph, END
         from app.services.agents.summary.state import SummaryAgentState
         from app.services.agents.summary.nodes.data_fetcher import fetch_data_node
-        from app.services.agents.summary.nodes.analyzer import analyze_data_node
-        from app.services.agents.summary.nodes.insight_gen import generate_insights_node
         from app.services.agents.summary.nodes.summarizer import summarize_node
 
         def _create_no_checkpoint():
             w = StateGraph(SummaryAgentState)
             w.add_node("data_fetcher", fetch_data_node)
-            w.add_node("analyzer", analyze_data_node)
-            w.add_node("insight_gen", generate_insights_node)
             w.add_node("summarizer", summarize_node)
             w.set_entry_point("data_fetcher")
-            w.add_edge("data_fetcher", "analyzer")
-            w.add_edge("analyzer", "insight_gen")
-            w.add_edge("insight_gen", "summarizer")
+            w.add_edge("data_fetcher", "summarizer")
             w.add_edge("summarizer", END)
             return w.compile()
 
@@ -828,18 +813,6 @@ class TestChatAPIErrorHandling:
             "app.services.agents.summary.graph.create_summary_graph",
             side_effect=_create_no_checkpoint,
         ):
-            insight_response = ChatResponse(
-                content=json.dumps({
-                    "insights": ["Data from embedded capture shows regional breakdown"],
-                    "recommendations": []
-                }),
-                model="gpt-4",
-                tokens_used=150,
-                prompt_tokens=100,
-                completion_tokens=50,
-                finish_reason="stop",
-                function_call=None
-            )
             summary_response = ChatResponse(
                 content="Summary from embedded view data...",
                 model="gpt-4",
@@ -849,7 +822,7 @@ class TestChatAPIErrorHandling:
                 finish_reason="stop",
                 function_call=None
             )
-            mock_ai_client.chat = AsyncMock(side_effect=[insight_response, summary_response])
+            mock_ai_client.chat = AsyncMock(side_effect=[summary_response])
 
             embedded_state = {
                 "test-view-456": {
@@ -880,20 +853,14 @@ class TestChatAPIErrorHandling:
             data = response.json()
             assert "message" in data
             assert len(data["message"]["content"]) > 0
-            # When embedded_state has summary_data, data_fetcher uses it; REST API not called
+            # When embedded_state has summary_data, data_fetcher uses it; REST API should never be called
             assert not mock_tableau_for_chat.get_view_data.called
 
     def test_summary_agent_with_missing_view(
         self, client, db_session, test_conversation,
-        mock_tableau_client, mock_ai_client
+        mock_tableau_for_chat, mock_ai_client
     ):
-        """Test Summary agent handles missing view gracefully."""
-        # Mock view not found error
-        mock_tableau_client.get_view_data = AsyncMock(
-            side_effect=Exception("View not found")
-        )
-        
-        # Add view context but view doesn't exist
+        """Test Summary agent returns error when embedded_state is missing (no REST fallback)."""
         ctx = ChatContext(
             conversation_id=test_conversation.id,
             object_type='view',
@@ -901,7 +868,7 @@ class TestChatAPIErrorHandling:
         )
         db_session.add(ctx)
         db_session.commit()
-        
+
         response = client.post(
             "/api/v1/chat/message",
             json={
@@ -909,13 +876,14 @@ class TestChatAPIErrorHandling:
                 "content": "summarize this view",
                 "agent_type": "summary",
                 "model": "gpt-4",
-                "stream": False
+                "provider": "openai",
+                "stream": False,
+                "embedded_state": {}  # Empty embedded_state
             }
         )
-        
-        # Should handle error gracefully - might return 200 with error message or 500
-        # Accept either as valid error handling
-        assert response.status_code in [200, 500]
-        if response.status_code == 200:
-            data = response.json()
-            assert "message" in data
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "message" in data
+        # Should contain error message about embedded capture
+        assert "embedded" in data["message"]["content"].lower() or "capture" in data["message"]["content"].lower()

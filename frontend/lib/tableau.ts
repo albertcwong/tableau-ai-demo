@@ -59,17 +59,23 @@ export async function getViews(
 /**
  * Get embed URL for a Tableau view
  */
+/** Strip Tableau internal suffixes (e.g. ,1:0, ,1:1) that cause "Error parsing command parameter value string". */
+export function sanitizeViewId(viewId: string): string {
+  return viewId.includes(',') ? viewId.split(',')[0].trim() : viewId;
+}
+
 export async function getViewEmbedUrl(
   viewId: string,
   filters?: Record<string, string>
 ): Promise<TableauEmbedUrl> {
+  const cleanId = sanitizeViewId(viewId);
   const params = new URLSearchParams();
   if (filters) {
     params.append('filters', JSON.stringify(filters));
   }
 
   const response = await apiClient.get<TableauEmbedUrl>(
-    `/api/v1/tableau/views/${viewId}/embed-url${params.toString() ? `?${params.toString()}` : ''}`
+    `/api/v1/tableau/views/${cleanId}/embed-url${params.toString() ? `?${params.toString()}` : ''}`
   );
   return response.data;
 }

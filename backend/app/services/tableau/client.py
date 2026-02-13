@@ -1176,6 +1176,12 @@ class TableauClient:
             "row_count": len(data_rows),
         }
     
+    def _sanitize_view_id(self, view_id: str) -> str:
+        """Strip Tableau internal suffixes (e.g. ,1:0) that cause 'Error parsing command parameter value string'."""
+        if "," in view_id:
+            return view_id.split(",")[0].strip()
+        return view_id
+
     async def get_view_embed_url(
         self,
         view_id: str,
@@ -1186,13 +1192,14 @@ class TableauClient:
         Get embedding URL for a view.
         
         Args:
-            view_id: View ID
+            view_id: View ID (LUID; suffixes like ,1:0 are stripped)
             filters: Optional filters to apply (e.g., {"Region": "West"})
             params: Optional URL parameters
             
         Returns:
             Dictionary with embed_url and token
         """
+        view_id = self._sanitize_view_id(view_id)
         logger.info("-" * 80)
         logger.info("GET_VIEW_EMBED_URL CALL")
         logger.info(f"  View ID: '{view_id}'")
@@ -1271,7 +1278,12 @@ class TableauClient:
             
             query_params = []
             if filters:
+                import re
+                _internal_suffix = re.compile(r",\d+:\d+")
                 for key, value in filters.items():
+                    # Skip values with Tableau internal IDs that cause "Error parsing command parameter value string"
+                    if isinstance(value, str) and _internal_suffix.search(value):
+                        continue
                     query_params.append(f"{key}={value}")
             if params:
                 for key, value in params.items():

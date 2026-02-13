@@ -287,9 +287,9 @@ Return ONLY the JSON array, no other text."""
                 "processing_time": None,
                 "model": self.model,
                 "provider": self.provider,
+                "embedded_state": context.get("embedded_state"),
+                "summary_mode": context.get("summary_mode") or "full",
             }
-            
-            # If we have query results from VizQL agent, use them
             if input_data and "query_results" in input_data:
                 state["view_data"] = input_data["query_results"]
             

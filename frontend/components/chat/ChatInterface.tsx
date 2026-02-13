@@ -274,8 +274,36 @@ export function ChatInterface({
           try {
             setIsCapturing(true);
             embedded_state = await onCaptureEmbeddedState(viewIds);
+            
+            // Check if any views failed to capture
+            if (embedded_state) {
+              const failedViews = Object.entries(embedded_state)
+                .filter(([_, state]) => state.capture_error || (!state.summary_data && !state.sheets_data))
+                .map(([viewId, state]) => ({ viewId, error: state.capture_error || 'No data captured' }));
+              
+              if (failedViews.length > 0) {
+                const errorMsg = `Could not capture view data for ${failedViews.length} view(s). Ensure the views are visible in the explorer.`;
+                console.error('[ChatInterface] Embedded state capture failures:', failedViews);
+                setError(new Error(errorMsg));
+                setIsLoading(false);
+                setIsStreaming(false);
+                return;
+              }
+            } else {
+              const errorMsg = 'Could not capture view data. Ensure the views are visible in the explorer.';
+              console.error('[ChatInterface] Embedded state capture returned empty result');
+              setError(new Error(errorMsg));
+              setIsLoading(false);
+              setIsStreaming(false);
+              return;
+            }
           } catch (e) {
-            console.warn('Could not capture embedded state:', e);
+            const errorMsg = e instanceof Error ? e.message : 'Could not capture embedded state';
+            console.error('[ChatInterface] Error capturing embedded state:', e);
+            setError(new Error(`Failed to capture view data: ${errorMsg}. Ensure the views are visible in the explorer.`));
+            setIsLoading(false);
+            setIsStreaming(false);
+            return;
           } finally {
             setIsCapturing(false);
           }
@@ -775,11 +803,11 @@ export function ChatInterface({
           />
         )}
       </div>
-      {agentType === 'summary' && context.some((c) => c.object_type === 'view') && (
+      {agentType === 'summary' && (
         <div className="px-2 sm:px-4 py-2 flex-shrink-0 border-t">
           <SummaryModeButtons
             onSelect={handleSummaryModeClick}
-            hasViews={true}
+            hasViews={context.some((c) => c.object_type === 'view')}
             disabled={isLoading || isStreaming}
           />
         </div>

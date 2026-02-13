@@ -543,6 +543,12 @@ export const chatApi = {
     await apiClient.delete(`/api/v1/chat/conversations/${conversationId}`);
   },
 
+  // Delete all conversations for the current user
+  deleteAllConversations: async (): Promise<{ deleted_count: number; message: string }> => {
+    const response = await apiClient.delete<{ deleted_count: number; message: string }>('/api/v1/chat/conversations');
+    return response.data;
+  },
+
   // Update message feedback
   updateMessageFeedback: async (messageId: number, feedback: 'thumbs_up' | 'thumbs_down' | null, feedbackText?: string | null): Promise<MessageResponse> => {
     const response = await apiClient.put<MessageResponse>(`/api/v1/chat/messages/${messageId}/feedback`, {

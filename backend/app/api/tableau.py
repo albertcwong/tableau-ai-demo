@@ -579,6 +579,9 @@ async def get_view_embed_url(
         )
     
     try:
+        # Strip Tableau internal suffixes (e.g. ,1:0) that cause parameter parsing errors
+        clean_view_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+
         # Parse filters if provided as query param
         parsed_filters = None
         if filters:
@@ -592,7 +595,7 @@ async def get_view_embed_url(
                 )
         
         result = await client.get_view_embed_url(
-            view_id=view_id,
+            view_id=clean_view_id,
             filters=parsed_filters,
         )
         

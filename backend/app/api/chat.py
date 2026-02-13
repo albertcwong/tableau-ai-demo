@@ -595,7 +595,9 @@ async def send_message(
                             user_query=refined_query,
                             context={
                                 "datasources": datasource_ids,
-                                "views": view_ids
+                                "views": view_ids,
+                                "embedded_state": request.embedded_state,
+                                "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
                             },
                             tableau_client=tableau_client
                         )
@@ -651,7 +653,9 @@ async def send_message(
                     user_query=refined_query,
                     context={
                         "datasources": datasource_ids,
-                        "views": view_ids
+                        "views": view_ids,
+                        "embedded_state": request.embedded_state,
+                        "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
                     },
                     tableau_client=tableau_client
                 )
@@ -1489,8 +1493,9 @@ async def send_message(
         
         # Route to Summary agent graph
         elif agent_type == 'summary' and view_ids:
+            # Summary agent uses embedded_state only (no REST fallback)
             from app.services.agents.graph_factory import AgentGraphFactory
-            
+
             logger.info(f"Routing to Summary agent graph with views: {view_ids}")
             
             # Apply feedback-based refinement to query
@@ -1545,8 +1550,8 @@ async def send_message(
                     stream_start_time = time.time()  # Track when streaming starts
                     stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
-                        # Provide config with thread_id + tableau_client (not in state - not msgpack serializable)
-                        config = {"configurable": {"thread_id": f"summary-{request.conversation_id}", "tableau_client": tableau_client}}
+                        # Provide config with thread_id only (Summary agent uses embedded_state only, no REST API)
+                        config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
                         async for state_update in graph.astream(initial_state, config=config):
                             # LangGraph astream returns updates keyed by node name
                             # Each update contains the state dictionary for that node
@@ -1766,8 +1771,8 @@ async def send_message(
                 )
             else:
                 # Non-streaming: execute graph and return result
-                # Provide config with thread_id + tableau_client (not in state - not msgpack serializable)
-                config = {"configurable": {"thread_id": f"summary-{request.conversation_id}", "tableau_client": tableau_client}}
+                # Provide config with thread_id only (Summary agent uses embedded_state only, no REST API)
+                config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
                 final_state = await graph.ainvoke(initial_state, config=config)
                 execution_time = time.time() - execution_start
                 
@@ -2130,6 +2135,42 @@ async def delete_conversation(
     db.delete(conversation)
     safe_commit(db)
     logger.info(f"Deleted conversation {conversation_id}")
+
+
+class DeleteAllConversationsResponse(BaseModel):
+    """Response model for deleting all conversations."""
+    deleted_count: int
+    message: str
+
+
+@router.delete("/conversations", status_code=status.HTTP_200_OK, response_model=DeleteAllConversationsResponse)
+async def delete_all_conversations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete all conversations and their messages for the current user."""
+    # Find all conversations for this user
+    conversations = db.query(Conversation).filter(Conversation.user_id == current_user.id).all()
+    
+    deleted_count = len(conversations)
+    
+    if deleted_count == 0:
+        return DeleteAllConversationsResponse(
+            deleted_count=0,
+            message="No conversations found to delete"
+        )
+    
+    # Delete all conversations (cascade will handle messages and chat_contexts)
+    for conversation in conversations:
+        db.delete(conversation)
+    
+    safe_commit(db)
+    logger.info(f"User {current_user.id} deleted {deleted_count} conversation(s)")
+    
+    return DeleteAllConversationsResponse(
+        deleted_count=deleted_count,
+        message=f"Successfully deleted {deleted_count} conversation(s) and all associated messages"
+    )
 
 
 # Phase 5B: Chat Context Management

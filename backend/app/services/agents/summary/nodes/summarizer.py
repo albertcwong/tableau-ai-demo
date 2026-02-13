@@ -8,10 +8,11 @@ MAX_DATA_ROWS = 50  # Limit rows per view to avoid token overflow
 
 
 def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]) -> str:
-    """Format views_data (columns + rows) as a compact markdown table for prompts."""
+    """Format views_data with per-sheet traceability: sheet name, row count, columns."""
     if not views_data:
         return "(No view data available)"
     parts = []
+    sheet_summaries = []
     for view_id, v_data in views_data.items():
         if not v_data:
             continue
@@ -19,12 +20,15 @@ def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]
         rows = v_data.get("data", [])[:MAX_DATA_ROWS]
         meta = views_metadata.get(view_id, {})
         name = meta.get("name") or meta.get("id") or view_id
+        row_count = v_data.get("row_count", 0)
+        col_str = ", ".join(str(c) for c in cols) if cols else "(none)"
+        sheet_summaries.append(f'- Sheet "{name}": {row_count} rows, columns: {col_str}')
         if not cols:
-            parts.append(f"**{name}**: (no columns)")
+            parts.append(f"**{name}** (no columns)")
             continue
         header = " | ".join(str(c) for c in cols)
         sep = " | ".join(["---"] * len(cols))
-        table_lines = [f"**{name}**", "", f"| {header} |", f"| {sep} |"]
+        table_lines = [f"**{name}** ({row_count} rows)", "", f"| {header} |", f"| {sep} |"]
         for row in rows:
             vals = [str(v)[:50] if v is not None else "" for v in (row if isinstance(row, (list, tuple)) else [row])]
             if len(vals) < len(cols):
@@ -33,7 +37,8 @@ def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]
                 vals = vals[:len(cols)]
             table_lines.append("| " + " | ".join(vals) + " |")
         parts.append("\n".join(table_lines))
-    return "\n\n".join(parts) if parts else "(No view data available)"
+    header_block = "\n".join(sheet_summaries) + f"\nTotal: {sum(v.get('row_count', 0) for v in views_data.values() if v)} rows across {len(sheet_summaries)} sheet(s)"
+    return header_block + "\n\n## Data Tables\n\n" + ("\n\n".join(parts) if parts else "(No data)")
 from app.prompts.registry import prompt_registry
 from app.services.ai.client import UnifiedAIClient
 from app.core.config import settings
@@ -43,10 +48,17 @@ logger = logging.getLogger(__name__)
 
 async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
     """
-    Generate final natural language summary.
-    
-    This is a final "Act" step in ReAct.
+    Generate final natural language summary from view data only.
     """
+    if state.get("error"):
+        return {
+            **state,
+            "final_answer": state["error"],
+            "executive_summary": None,
+            "detailed_analysis": None,
+            "current_thought": None,
+        }
+
     try:
         # Check for multiple views
         views_metadata = state.get("views_metadata", {})
@@ -64,7 +76,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
                 if not v_data:
                     continue
                 v_metadata = views_metadata.get(view_id, {})
-                view_name = v_metadata.get("name") or v_metadata.get("id") or view_id
+                view_name = v_metadata.get("name") or v_metadata.get("id") or view_id or "Unknown View"
                 row_count = v_data.get("row_count", 0)
                 total_row_count += row_count
                 view_info_list.append({
@@ -76,7 +88,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             # Single view (backward compatibility)
             view_metadata = state.get("view_metadata") or {}
             view_data = state.get("view_data") or {}
-            view_name = view_metadata.get("name") or view_metadata.get("id") or "Unknown View"
+            view_name = view_metadata.get("name") or view_metadata.get("id") or (view_ids[0] if view_ids else "Unknown View")
             row_count = view_data.get("row_count", 0)
             total_row_count = row_count
             view_info_list.append({
@@ -90,7 +102,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             view_names = ", ".join([v["name"] for v in view_info_list])
             view_count_text = f"{len(view_info_list)} views"
         else:
-            view_names = view_info_list[0]["name"] if view_info_list else "Unknown View"
+            view_names = view_info_list[0]["name"] if view_info_list else (view_ids[0] if view_ids else "Unknown View")
             view_count_text = "1 view"
         
         summary_mode = state.get("summary_mode") or "full"

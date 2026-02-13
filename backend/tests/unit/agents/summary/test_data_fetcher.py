@@ -2,60 +2,14 @@
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from app.services.agents.summary.nodes.data_fetcher import (
     fetch_data_node,
-    _filters_from_embedded,
     _extract_from_embedded,
-    _sanitize_view_id,
 )
 from app.services.agents.summary.state import SummaryAgentState
-
-
-def test_sanitize_view_id():
-    """Test _sanitize_view_id strips invalid suffixes."""
-    assert _sanitize_view_id("aY37NWdboRrk2fnuL8fpXAAAAJY") == "aY37NWdboRrk2fnuL8fpXAAAAJY"
-    assert _sanitize_view_id("aY37NWdboRrk2fnuL8fpXAAAAJY,1:1") == "aY37NWdboRrk2fnuL8fpXAAAAJY"
-
-
-def test_filters_from_embedded_empty():
-    """Test _filters_from_embedded with empty list."""
-    assert _filters_from_embedded([]) is None
-
-
-def test_filters_from_embedded_categorical():
-    """Test _filters_from_embedded with categorical appliedValues."""
-    filters = [
-        {"fieldName": "Region", "appliedValues": [{"value": "West"}, {"value": "East"}]},
-    ]
-    out = _filters_from_embedded(filters)
-    assert out == {"Region": ["West", "East"]}
-
-
-def test_filters_from_embedded_string_values():
-    """Test _filters_from_embedded with string appliedValues."""
-    filters = [{"fieldName": "Category", "appliedValues": ["Tech", "Furniture"]}]
-    out = _filters_from_embedded(filters)
-    assert out == {"Category": ["Tech", "Furniture"]}
-
-
-def test_filters_from_embedded_range():
-    """Test _filters_from_embedded with min/max range."""
-    filters = [{"fieldName": "Sales", "minValue": "100", "maxValue": "5000"}]
-    out = _filters_from_embedded(filters)
-    assert out == {"Sales": "100,5000"}
-
-
-def test_filters_from_embedded_skips_internal_ids():
-    """Test _filters_from_embedded skips Tableau internal ID values that cause parse errors."""
-    filters = [
-        {"fieldName": "Param", "appliedValues": [{"value": "(aY37NWdboRrk2fnuL8fpXAAAAJY,1:1)"}]},
-    ]
-    out = _filters_from_embedded(filters)
-    assert out is None or "Param" not in out
 
 
 def test_extract_from_embedded_worksheet():
@@ -186,3 +140,208 @@ async def test_fetch_data_node_with_embedded_state_dashboard():
     result = await fetch_data_node(state)
     assert "dash-1_sheet_0" in result["views_data"]
     assert result["views_data"]["dash-1_sheet_0"]["row_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_node_missing_embedded_state_returns_error():
+    """Test fetch_data_node returns error when embedded_state has no data (no REST fallback)."""
+    state: SummaryAgentState = {
+        "user_query": "summarize",
+        "agent_type": "summary",
+        "context_datasources": [],
+        "context_views": ["view-1"],
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
+        "current_thought": None,
+        "final_answer": None,
+        "error": None,
+        "confidence": None,
+        "processing_time": None,
+        "embedded_state": {},
+        "view_data": None,
+        "view_metadata": None,
+        "views_data": None,
+        "views_metadata": None,
+        "column_stats": None,
+        "trends": [],
+        "outliers": [],
+        "correlations": None,
+        "key_insights": [],
+        "recommendations": [],
+        "executive_summary": None,
+        "detailed_analysis": None,
+    }
+    result = await fetch_data_node(state)
+    assert result["error"] is not None
+    assert "embedded capture" in result["error"].lower()
+    assert result["views_data"] == {}
+    assert result["tool_calls"][0]["result"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_node_embedded_state_key_fallback():
+    """Test embedded_state lookup uses clean_view_id when view_id has suffix (e.g. ,1:1)."""
+    state: SummaryAgentState = {
+        "user_query": "summarize",
+        "agent_type": "summary",
+        "context_datasources": [],
+        "context_views": ["view-1,1:1"],
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
+        "current_thought": None,
+        "final_answer": None,
+        "error": None,
+        "confidence": None,
+        "processing_time": None,
+        "embedded_state": {
+            "view-1": {
+                "sheet_type": "worksheet",
+                "active_sheet": {"name": "Sales"},
+                "summary_data": {
+                    "columns": ["Region", "Sales"],
+                    "data": [["North", "100"]],
+                    "row_count": 1,
+                },
+            }
+        },
+        "view_data": None,
+        "view_metadata": None,
+        "views_data": None,
+        "views_metadata": None,
+        "column_stats": None,
+        "trends": [],
+        "outliers": [],
+        "correlations": None,
+        "key_insights": [],
+        "recommendations": [],
+        "executive_summary": None,
+        "detailed_analysis": None,
+    }
+    result = await fetch_data_node(state)
+    assert result["views_data"]["view-1,1:1"]["row_count"] == 1
+    assert result["views_metadata"]["view-1,1:1"]["name"] == "Sales"
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_node_embedded_empty_returns_error():
+    """When embedded capture returns 0 rows, return error (no REST fallback)."""
+    state: SummaryAgentState = {
+        "user_query": "summarize",
+        "agent_type": "summary",
+        "context_datasources": [],
+        "context_views": ["view-1"],
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
+        "current_thought": None,
+        "final_answer": None,
+        "error": None,
+        "confidence": None,
+        "processing_time": None,
+        "embedded_state": {
+            "view-1": {
+                "sheet_type": "worksheet",
+                "active_sheet": {"name": "Sheet1"},
+                "summary_data": {"columns": [], "data": [], "row_count": 0},
+            },
+        },
+        "view_data": None,
+        "view_metadata": None,
+        "views_data": None,
+        "views_metadata": None,
+        "column_stats": None,
+        "trends": [],
+        "outliers": [],
+        "correlations": None,
+        "key_insights": [],
+        "recommendations": [],
+        "executive_summary": None,
+        "detailed_analysis": None,
+    }
+    result = await fetch_data_node(state)
+    assert result["error"] is not None
+    assert "embedded capture" in result["error"].lower()
+    assert result["views_data"] == {}
+    assert result["tool_calls"][0]["result"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_node_capture_error_returns_error():
+    """Test fetch_data_node handles capture_error from embedded_state."""
+    state: SummaryAgentState = {
+        "user_query": "summarize",
+        "agent_type": "summary",
+        "context_datasources": [],
+        "context_views": ["view-1"],
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
+        "current_thought": None,
+        "final_answer": None,
+        "error": None,
+        "confidence": None,
+        "processing_time": None,
+        "embedded_state": {
+            "view-1": {
+                "view_id": "view-1",
+                "sheet_type": "worksheet",
+                "captured_at": "2024-01-01T00:00:00Z",
+                "capture_error": "Failed to get summary data: Tableau 500 error",
+            },
+        },
+        "view_data": None,
+        "view_metadata": None,
+        "views_data": None,
+        "views_metadata": None,
+        "column_stats": None,
+        "trends": [],
+        "outliers": [],
+        "correlations": None,
+        "key_insights": [],
+        "recommendations": [],
+        "executive_summary": None,
+        "detailed_analysis": None,
+    }
+    result = await fetch_data_node(state)
+    assert result["error"] is not None
+    assert "capture failed" in result["error"].lower() or "capture_error" in str(result["error"]).lower()
+    assert result["views_data"] == {}
+    assert result["tool_calls"][0]["result"] == "error"
+    assert "capture failed" in result["tool_calls"][0]["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_node_no_context_views():
+    """Test fetch_data_node returns error when no views in context."""
+    state: SummaryAgentState = {
+        "user_query": "summarize",
+        "agent_type": "summary",
+        "context_datasources": [],
+        "context_views": [],
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
+        "current_thought": None,
+        "final_answer": None,
+        "error": None,
+        "confidence": None,
+        "processing_time": None,
+        "embedded_state": {},
+        "view_data": None,
+        "view_metadata": None,
+        "views_data": None,
+        "views_metadata": None,
+        "column_stats": None,
+        "trends": [],
+        "outliers": [],
+        "correlations": None,
+        "key_insights": [],
+        "recommendations": [],
+        "executive_summary": None,
+        "detailed_analysis": None,
+    }
+    result = await fetch_data_node(state)
+    assert result["error"] == "No view in context. Please add a view first."
+    assert result["views_data"] == {}

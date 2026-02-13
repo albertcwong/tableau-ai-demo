@@ -18,6 +18,7 @@ import { X, GripVertical, Settings } from 'lucide-react';
 import type { ChatContextObject } from '@/types';
 import type { ConversationResponse } from '@/lib/api';
 import type { EmbeddedViewState } from '@/lib/tableauEmbeddedState';
+import { sanitizeViewId } from '@/lib/tableau';
 
 interface RenderedState {
   selectedObject: {
@@ -269,9 +270,10 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
     }
     
     try {
+      const idToStore = objectType === 'view' ? sanitizeViewId(objectId) : objectId;
       const obj = await chatContextApi.addContext({
         conversation_id: threadId,
-        object_id: objectId,
+        object_id: idToStore,
         object_type: objectType,
         object_name: objectName,
       });

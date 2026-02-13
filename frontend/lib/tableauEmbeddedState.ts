@@ -23,6 +23,7 @@ export interface EmbeddedViewState {
     summary_data: { columns: string[]; data: unknown[][]; row_count: number };
   }>;
   captured_at: string;
+  capture_error?: string; // Error message if capture failed
 }
 
 const MAX_SHEETS = 10;
@@ -81,7 +82,8 @@ export async function captureEmbeddedState(
   vizElement: HTMLElement | null,
   viewId: string
 ): Promise<EmbeddedViewState | null> {
-  if (!vizElement || typeof (vizElement as unknown as Record<string, unknown>).workbook !== 'object') {
+  if (!vizElement) {
+    console.warn(`[captureEmbeddedState] Viz element not found for view ${viewId}`);
     return null;
   }
 
@@ -112,8 +114,16 @@ export async function captureEmbeddedState(
     };
   };
 
+  if (typeof viz.workbook !== 'object') {
+    console.warn(`[captureEmbeddedState] workbook not available for view ${viewId} - viz may not be interactive yet`);
+    return null;
+  }
+
   const workbook = viz.workbook;
-  if (!workbook?.activeSheet) return null;
+  if (!workbook?.activeSheet) {
+    console.warn(`[captureEmbeddedState] activeSheet not available for view ${viewId}`);
+    return null;
+  }
 
   const activeSheet = workbook.activeSheet;
   const sheetType = (activeSheet.sheetType === 'dashboard' ? 'dashboard' : 'worksheet') as
@@ -130,36 +140,53 @@ export async function captureEmbeddedState(
     captured_at: new Date().toISOString(),
   };
 
-  try {
-    const getFilters = activeSheet.getFiltersAsync;
-    if (typeof getFilters === 'function') {
-      const filters = await getFilters.call(activeSheet);
-      result.filters = extractFilters(Array.isArray(filters) ? filters : []);
-    }
-  } catch (e) {
-    console.warn('Could not get filters:', e);
-  }
-
+  // Skip getFiltersAsync - it returns 410 (Gone) when session is stale; summary agent doesn't use filters
   try {
     if (sheetType === 'worksheet') {
       const getReader = activeSheet.getSummaryDataReaderAsync;
-      if (typeof getReader === 'function') {
-        const reader = await getReader.call(activeSheet, { pageRowCount: 10000 });
+      if (typeof getReader !== 'function') {
+        console.warn(`[captureEmbeddedState] getSummaryDataReaderAsync not available for view ${viewId}`);
+        result.capture_error = 'getSummaryDataReaderAsync method not available';
+        return result;
+      }
+
+      try {
+        // Use official pattern: no options for getAllPagesAsync (works for < 4M rows)
+        const reader = await getReader.call(activeSheet);
         try {
           const getAllPages = reader.getAllPagesAsync;
-          const table = typeof getAllPages === 'function'
-            ? await getAllPages.call(reader)
-            : reader.pageCount && reader.pageCount > 0 && reader.getPageAsync
-              ? await reader.getPageAsync.call(reader, 0)
-              : null;
-          if (table) {
-            result.summary_data = dataTableToSummary(table);
+          if (typeof getAllPages === 'function') {
+            const table = await getAllPages.call(reader);
+            if (table) {
+              result.summary_data = dataTableToSummary(table);
+              console.log(`[captureEmbeddedState] Successfully captured ${result.summary_data.row_count} rows for view ${viewId}`);
+            } else {
+              console.warn(`[captureEmbeddedState] getAllPagesAsync returned null for view ${viewId}`);
+              result.capture_error = 'getAllPagesAsync returned no data';
+            }
+          } else if (reader.pageCount && reader.pageCount > 0 && reader.getPageAsync) {
+            // Fallback for older API versions
+            const table = await reader.getPageAsync.call(reader, 0);
+            if (table) {
+              result.summary_data = dataTableToSummary(table);
+              console.log(`[captureEmbeddedState] Successfully captured ${result.summary_data.row_count} rows (page 0) for view ${viewId}`);
+            } else {
+              console.warn(`[captureEmbeddedState] getPageAsync(0) returned null for view ${viewId}`);
+              result.capture_error = 'getPageAsync returned no data';
+            }
+          } else {
+            console.warn(`[captureEmbeddedState] No data reader methods available for view ${viewId}`);
+            result.capture_error = 'Data reader methods not available';
           }
         } finally {
           if (typeof reader.releaseAsync === 'function') {
             await reader.releaseAsync.call(reader);
           }
         }
+      } catch (e) {
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        console.error(`[captureEmbeddedState] Error calling getSummaryDataReaderAsync for view ${viewId}:`, e);
+        result.capture_error = `Failed to get summary data: ${errorMsg}`;
       }
     } else if (sheetType === 'dashboard' && activeSheet.worksheets) {
       const worksheets = Array.isArray(activeSheet.worksheets)
@@ -178,23 +205,34 @@ export async function captureEmbeddedState(
       for (const i of sheetsToCapture) {
         const ws = worksheets[i];
         const getReader = ws?.getSummaryDataReaderAsync;
-        if (typeof getReader !== 'function') continue;
+        if (typeof getReader !== 'function') {
+          console.warn(`[captureEmbeddedState] getSummaryDataReaderAsync not available for sheet ${i} in view ${viewId}`);
+          continue;
+        }
 
         try {
-          const reader = await getReader.call(ws, { pageRowCount: 5000 });
+          // Use official pattern: no options for getAllPagesAsync
+          const reader = await getReader.call(ws);
           try {
             const getAllPages = reader.getAllPagesAsync;
-            const table = typeof getAllPages === 'function'
-              ? await getAllPages.call(reader)
-              : reader.pageCount && reader.pageCount > 0 && reader.getPageAsync
-                ? await reader.getPageAsync.call(reader, 0)
-                : null;
+            let table: DataTableLike | null = null;
+            if (typeof getAllPages === 'function') {
+              table = await getAllPages.call(reader);
+            } else if (reader.pageCount && reader.pageCount > 0 && reader.getPageAsync) {
+              // Fallback for older API versions
+              table = await reader.getPageAsync.call(reader, 0);
+            }
+
             if (table) {
+              const summaryData = dataTableToSummary(table);
               result.sheets_data!.push({
                 sheet_name: ws.name ?? `Sheet_${i}`,
                 sheet_index: i,
-                summary_data: dataTableToSummary(table),
+                summary_data: summaryData,
               });
+              console.log(`[captureEmbeddedState] Successfully captured ${summaryData.row_count} rows for sheet ${i} (${ws.name}) in view ${viewId}`);
+            } else {
+              console.warn(`[captureEmbeddedState] No data returned for sheet ${i} in view ${viewId}`);
             }
           } finally {
             if (typeof reader.releaseAsync === 'function') {
@@ -202,30 +240,82 @@ export async function captureEmbeddedState(
             }
           }
         } catch (e) {
-          console.warn(`Could not get data for sheet ${i}:`, e);
+          const errorMsg = e instanceof Error ? e.message : String(e);
+          console.error(`[captureEmbeddedState] Error getting data for sheet ${i} in view ${viewId}:`, e);
+          // Continue with other sheets even if one fails
         }
       }
     }
   } catch (e) {
-    console.warn('Could not get summary data:', e);
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    console.error(`[captureEmbeddedState] Error capturing summary data for view ${viewId}:`, e);
+    result.capture_error = `Failed to capture summary data: ${errorMsg}`;
   }
 
   return result;
 }
 
-/** Capture state for multiple views (finds viz by data-view-id or id) */
+function sanitizeViewId(viewId: string): string {
+  return viewId.includes(',') ? viewId.split(',')[0].trim() : viewId;
+}
+
+/** Capture state for multiple views (finds viz by data-view-id or id). Viz elements use sanitized ids. */
 export async function captureEmbeddedStateForViews(
   viewIds: string[]
 ): Promise<Record<string, EmbeddedViewState>> {
   const out: Record<string, EmbeddedViewState> = {};
+  console.log(`[captureEmbeddedStateForViews] Attempting to capture ${viewIds.length} view(s):`, viewIds);
+  
   for (const viewId of viewIds) {
-    const el =
-      document.querySelector(`[data-view-id="${CSS.escape(viewId)}"]`) ||
-      document.getElementById(`tableau-viz-${viewId}`);
-    const state = await captureEmbeddedState(el as HTMLElement, viewId);
+    const cleanId = sanitizeViewId(viewId);
+    // Try multiple selectors to find the viz element
+    const selectors = [
+      `[data-view-id="${CSS.escape(cleanId)}"]`,
+      `[data-view-id="${CSS.escape(viewId)}"]`,
+      `#tableau-viz-${cleanId}`,
+      `#tableau-viz-${viewId}`,
+    ];
+    
+    let el: HTMLElement | null = null;
+    for (const selector of selectors) {
+      el = document.querySelector(selector) as HTMLElement | null;
+      if (el) {
+        console.log(`[captureEmbeddedStateForViews] Found viz element for ${viewId} using selector: ${selector}`);
+        break;
+      }
+    }
+    
+    if (!el) {
+      console.warn(`[captureEmbeddedStateForViews] Viz element not found for view ${viewId}. Tried selectors:`, selectors);
+      // Still create an entry with error so backend knows capture failed
+      out[viewId] = {
+        view_id: viewId,
+        sheet_type: 'worksheet',
+        captured_at: new Date().toISOString(),
+        capture_error: `Viz element not found. Ensure the view is visible in the explorer.`,
+      };
+      continue;
+    }
+    
+    const state = await captureEmbeddedState(el, viewId);
     if (state) {
       out[viewId] = state;
+      if (state.capture_error) {
+        console.warn(`[captureEmbeddedStateForViews] Capture failed for view ${viewId}: ${state.capture_error}`);
+      }
+    } else {
+      // captureEmbeddedState returned null - create entry with error
+      out[viewId] = {
+        view_id: viewId,
+        sheet_type: 'worksheet',
+        captured_at: new Date().toISOString(),
+        capture_error: 'Failed to capture embedded state (workbook or activeSheet not available)',
+      };
     }
   }
+  
+  const successCount = Object.values(out).filter(s => !s.capture_error && (s.summary_data || s.sheets_data)).length;
+  console.log(`[captureEmbeddedStateForViews] Capture complete: ${successCount}/${viewIds.length} views captured successfully`);
+  
   return out;
 }
