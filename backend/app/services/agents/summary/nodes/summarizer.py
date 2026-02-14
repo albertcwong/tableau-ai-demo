@@ -6,6 +6,7 @@ from app.services.agents.summary.state import SummaryAgentState
 
 MAX_DATA_ROWS = 50  # Limit rows per view to avoid token overflow
 MAX_WORDS_CUSTOM = 300  # Hard limit for custom mode (failsafe if API ignores max_tokens)
+MAX_WORDS_BRIEF = 120  # Hard limit for brief mode (1-2 bullets per sheet, up to 120 words)
 
 
 def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]) -> str:
@@ -23,7 +24,7 @@ def _format_view_data(views_data: Dict[str, Any], views_metadata: Dict[str, Any]
         name = meta.get("name") or meta.get("id") or view_id
         row_count = v_data.get("row_count", 0)
         col_str = ", ".join(str(c) for c in cols) if cols else "(none)"
-        sheet_summaries.append(f'- Sheet "{name}": {row_count} rows, columns: {col_str}')
+        sheet_summaries.append(f'- {name}: {row_count} rows, columns: {col_str}')
         if not cols:
             parts.append(f"**{name}** (no columns)")
             continue
@@ -61,30 +62,27 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         }
 
     try:
-        # Check for multiple views
         views_metadata = state.get("views_metadata", {})
         views_data = state.get("views_data", {})
+        view_images = state.get("view_images", {}) or {}
         view_ids = state.get("context_views", [])
-        
-        # Build view information for prompt
+
         view_info_list = []
         total_row_count = 0
-        
-        if views_metadata and views_data:
-            # Multiple views (includes dashboard sheets as view_id_sheet_N)
-            for view_id in views_data:
-                v_data = views_data.get(view_id)
-                if not v_data:
-                    continue
+
+        if views_metadata and (views_data or view_images):
+            for view_id in set(list(views_data.keys()) + list(view_images.keys())):
                 v_metadata = views_metadata.get(view_id, {})
                 view_name = v_metadata.get("name") or v_metadata.get("id") or view_id or "Unknown View"
-                row_count = v_data.get("row_count", 0)
-                total_row_count += row_count
-                view_info_list.append({
-                    "id": view_id,
-                    "name": view_name,
-                    "row_count": row_count
-                })
+                if view_id in view_images:
+                    view_info_list.append({"id": view_id, "name": view_name, "row_count": 0, "type": "image"})
+                else:
+                    v_data = views_data.get(view_id)
+                    if not v_data:
+                        continue
+                    row_count = v_data.get("row_count", 0)
+                    total_row_count += row_count
+                    view_info_list.append({"id": view_id, "name": view_name, "row_count": row_count, "type": "tabular"})
         else:
             # Single view (backward compatibility)
             view_metadata = state.get("view_metadata") or {}
@@ -115,6 +113,10 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         if not v_meta and state.get("view_metadata"):
             v_meta = {"single": state.get("view_metadata", {})}
         view_data_str = _format_view_data(v_data, v_meta)
+        if view_images and not v_data:
+            view_data_str = "Dashboard images are attached below. Summarize the visualizations."
+        elif view_images and v_data:
+            view_data_str += "\n\nDashboard images are also attached below."
         
         # Format message history for prompt (last 10 messages)
         messages = state.get("messages", [])
@@ -157,7 +159,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             user_message = state.get("user_query", "summarize this view")
         elif summary_mode == "brief":
             template_file = "agents/summary/final_summary_brief.txt"
-            user_message = "Generate a 2-3 sentence executive summary."
+            user_message = "Generate a concise executive summary. For each sheet: use the sheet name as a title on its own line, then 1-2 relevant bullet points. Total limit: 120 words."
         elif summary_mode == "custom":
             template_file = "agents/summary/final_summary_custom.txt"
             user_message = state.get("user_query", "summarize this view")
@@ -166,21 +168,35 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             user_message = f"Generate executive summary and detailed analysis for {view_count_text}: {view_names}." if len(view_info_list) > 1 else "Generate executive summary and detailed analysis."
         
         system_prompt = prompt_registry.get_prompt(template_file, variables=prompt_vars)
-        
-        # Initialize AI client
+
         model = state.get("model", "gpt-4")
         provider = state.get("provider", "openai")
-        
-        ai_client = UnifiedAIClient(
-            gateway_url=settings.BACKEND_API_URL
-        )
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ]
-        
-        apply_word_limit = is_specific_question
+        has_vision = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "claude", "vision"])
+
+        if view_images and not has_vision:
+            return {
+                **state,
+                "error": "Image analysis requires a vision-capable model (e.g. gpt-4o, claude-3). Please switch model.",
+                "final_answer": "Image analysis requires a vision-capable model.",
+                "executive_summary": None,
+                "detailed_analysis": None,
+                "current_thought": None,
+            }
+
+        ai_client = UnifiedAIClient(gateway_url=settings.BACKEND_API_URL)
+
+        if view_images and has_vision:
+            user_content = [{"type": "text", "text": user_message + "\n\n" + view_data_str}]
+            for view_id, b64 in view_images.items():
+                name = views_metadata.get(view_id, {}).get("name", view_id)
+                user_content.append({"type": "text", "text": f"\n[Image: {name}]"})
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+        else:
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
+
+        apply_word_limit = is_specific_question or summary_mode == "brief"
+        word_limit = MAX_WORDS_BRIEF if summary_mode == "brief" else MAX_WORDS_CUSTOM
         
         response = await ai_client.chat(
             model=model,
@@ -191,19 +207,19 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         summary_text = (response.content or "").strip()
         if not summary_text:
             raise ValueError("AI returned empty response")
-        # Failsafe: truncate to 300 words if API ignored max_tokens
+        # Failsafe: truncate if API ignored max_tokens
         if apply_word_limit:
             words = summary_text.split()
-            if len(words) > MAX_WORDS_CUSTOM:
-                summary_text = " ".join(words[:MAX_WORDS_CUSTOM]) + "..."
-                logger.warning(f"Summarizer: truncated response from {len(words)} to {MAX_WORDS_CUSTOM} words (API may have ignored max_tokens)")
+            if len(words) > word_limit:
+                summary_text = " ".join(words[:word_limit]) + "..."
+                logger.warning(f"Summarizer: truncated response from {len(words)} to {word_limit} words (API may have ignored max_tokens)")
         
         return {
             **state,
             "executive_summary": summary_text,
             "detailed_analysis": summary_text,
             "final_answer": summary_text,
-            "current_thought": None  # Clear thought as we're done
+            "current_thought": "Summarized view data and metrics."
         }
     except Exception as e:
         logger.error(f"Error generating summary: {e}", exc_info=True)

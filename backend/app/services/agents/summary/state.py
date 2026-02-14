@@ -18,6 +18,7 @@ class SummaryAgentState(BaseAgentState):
     # Multiple views support
     views_data: Optional[dict]  # Dict mapping view_id -> view_data
     views_metadata: Optional[dict]  # Dict mapping view_id -> view_metadata
+    view_images: Optional[dict]  # Dict mapping view_id -> base64 PNG (for dashboards)
     
     # Embedded dashboard state (from client-side capture)
     embedded_state: Optional[dict]  # Per-view: { view_id: { filters, active_sheet, summary_data, sheets_data, ... } }

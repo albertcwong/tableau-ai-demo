@@ -423,6 +423,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
             onRemoveContext={handleRemoveContext}
             onLoadQuery={onLoadQuery}
             onCaptureEmbeddedState={onCaptureEmbeddedState}
+            onThreadsChange={handleThreadsChange}
           />
         </div>
       )}

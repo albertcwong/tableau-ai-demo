@@ -99,8 +99,8 @@ def mock_ai_client():
          patch('app.services.agents.vizql.nodes.refiner.UnifiedAIClient') as mock_class3, \
          patch('app.services.agents.vizql.nodes.formatter.UnifiedAIClient') as mock_class4, \
          patch('app.services.agents.summary.nodes.summarizer.UnifiedAIClient') as mock_class5, \
-         patch('app.api.chat.UnifiedAIClient') as mock_class6:
-        
+         patch('app.services.agents.summary.nodes.get_data.UnifiedAIClient') as mock_class6, \
+         patch('app.api.chat.UnifiedAIClient') as mock_class7:
         mock_client = AsyncMock()
         mock_class1.return_value = mock_client
         mock_class2.return_value = mock_client
@@ -108,6 +108,7 @@ def mock_ai_client():
         mock_class4.return_value = mock_client
         mock_class5.return_value = mock_client
         mock_class6.return_value = mock_client
+        mock_class7.return_value = mock_client
         
         # Default mock response - no function call
         mock_response = ChatResponse(
@@ -797,15 +798,15 @@ class TestChatAPIErrorHandling:
         """Test Summary agent uses embedded_state when present (skips REST API)."""
         from langgraph.graph import StateGraph, END
         from app.services.agents.summary.state import SummaryAgentState
-        from app.services.agents.summary.nodes.data_fetcher import fetch_data_node
+        from app.services.agents.summary.nodes.get_data import get_data_node
         from app.services.agents.summary.nodes.summarizer import summarize_node
 
         def _create_no_checkpoint():
             w = StateGraph(SummaryAgentState)
-            w.add_node("data_fetcher", fetch_data_node)
+            w.add_node("get_data", get_data_node)
             w.add_node("summarizer", summarize_node)
-            w.set_entry_point("data_fetcher")
-            w.add_edge("data_fetcher", "summarizer")
+            w.set_entry_point("get_data")
+            w.add_edge("get_data", "summarizer")
             w.add_edge("summarizer", END)
             return w.compile()
 
@@ -813,6 +814,33 @@ class TestChatAPIErrorHandling:
             "app.services.agents.summary.graph.create_summary_graph",
             side_effect=_create_no_checkpoint,
         ):
+            query_meta_call = ChatResponse(
+                content="",
+                model="gpt-4",
+                tokens_used=50,
+                prompt_tokens=30,
+                completion_tokens=20,
+                finish_reason="tool_calls",
+                function_call=FunctionCall(name="query_view_metadata", arguments='{"view_id": "test-view-456"}'),
+            )
+            get_embed_call = ChatResponse(
+                content="",
+                model="gpt-4",
+                tokens_used=50,
+                prompt_tokens=30,
+                completion_tokens=20,
+                finish_reason="tool_calls",
+                function_call=FunctionCall(name="get_embed_data", arguments='{"view_id": "test-view-456"}'),
+            )
+            stop_call = ChatResponse(
+                content="",
+                model="gpt-4",
+                tokens_used=10,
+                prompt_tokens=60,
+                completion_tokens=5,
+                finish_reason="stop",
+                function_call=None,
+            )
             summary_response = ChatResponse(
                 content="Summary from embedded view data...",
                 model="gpt-4",
@@ -822,7 +850,7 @@ class TestChatAPIErrorHandling:
                 finish_reason="stop",
                 function_call=None
             )
-            mock_ai_client.chat = AsyncMock(side_effect=[summary_response])
+            mock_ai_client.chat = AsyncMock(side_effect=[query_meta_call, get_embed_call, stop_call, summary_response])
 
             embedded_state = {
                 "test-view-456": {
@@ -853,7 +881,7 @@ class TestChatAPIErrorHandling:
             data = response.json()
             assert "message" in data
             assert len(data["message"]["content"]) > 0
-            # When embedded_state has summary_data, data_fetcher uses it; REST API should never be called
+            # When embedded_state has summary_data, get_data uses get_embed_data tool; REST API should never be called
             assert not mock_tableau_for_chat.get_view_data.called
 
     def test_summary_agent_with_missing_view(

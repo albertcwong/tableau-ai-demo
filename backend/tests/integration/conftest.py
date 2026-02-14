@@ -27,6 +27,7 @@ def mock_tableau_for_chat():
         "name": "Sales Dashboard",
         "workbook_id": "wb-123",
     })
+    mock.get_view_type = AsyncMock(return_value={"view_type": "worksheet", "name": "Sales Dashboard", "id": "test-view-456"})
     mock.execute_vds_query = AsyncMock(return_value={
         "columns": ["Region", "Sales"],
         "data": [{"Region": "North", "Sales": 1000}, {"Region": "South", "Sales": 2000}],

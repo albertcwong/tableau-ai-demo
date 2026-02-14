@@ -60,6 +60,8 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
   const [workbookViews, setWorkbookViews] = useState<Map<string, TableauView[]>>(new Map());
   const [selectedObject, setSelectedObject] = useState<SelectedObject>(null);
   const [loadingData, setLoadingData] = useState(false);
+  const [loadingDatasources, setLoadingDatasources] = useState(false);
+  const [loadingWorkbooks, setLoadingWorkbooks] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectedConfig, setConnectedConfig] = useState<TableauConfigOption | undefined>();
@@ -236,6 +238,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
 
   const loadDatasources = async (pageNumber = 1, append = false) => {
     setLoadingData(true);
+    setLoadingDatasources(true);
     setError(null);
 
     try {
@@ -275,11 +278,13 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       setError(err instanceof Error ? err.message : 'Failed to load datasources');
     } finally {
       setLoadingData(false);
+      setLoadingDatasources(false);
     }
   };
 
   const loadWorkbooks = async (pageNumber = 1, append = false) => {
     setLoadingData(true);
+    setLoadingWorkbooks(true);
     setError(null);
 
     try {
@@ -319,6 +324,7 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
       setError(err instanceof Error ? err.message : 'Failed to load workbooks');
     } finally {
       setLoadingData(false);
+      setLoadingWorkbooks(false);
     }
   };
 
@@ -701,6 +707,16 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                       ({allDatasources.length}{datasourcePagination.totalAvailable > allDatasources.length ? ` / ${datasourcePagination.totalAvailable}` : ''})
                     </span>
                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto h-6 w-6 p-0"
+                    onClick={() => loadDatasources(1, false)}
+                    disabled={loadingDatasources}
+                    title="Refresh datasources"
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', loadingDatasources && 'animate-spin')} />
+                  </Button>
                 </div>
                 <div className="mb-2 relative">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
@@ -914,6 +930,16 @@ export function ThreePanelLayout({ onAddToContext, contextObjects = [], onLoadQu
                       ({allWorkbooks.length}{workbookPagination.totalAvailable > allWorkbooks.length ? ` / ${workbookPagination.totalAvailable}` : ''})
                     </span>
                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto h-6 w-6 p-0"
+                    onClick={() => loadWorkbooks(1, false)}
+                    disabled={loadingWorkbooks}
+                    title="Refresh workbooks"
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', loadingWorkbooks && 'animate-spin')} />
+                  </Button>
                 </div>
                 <div className="mb-2 relative">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />

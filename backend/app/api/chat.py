@@ -238,11 +238,17 @@ async def create_greeting_message(
 async def list_conversations(
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    """List all conversations with message counts."""
+    """List conversations for the current user (or unauthenticated sessions)."""
     try:
-        conversations = db.query(Conversation).order_by(desc(Conversation.updated_at)).offset(skip).limit(limit).all()
+        q = db.query(Conversation).order_by(desc(Conversation.updated_at))
+        if current_user:
+            q = q.filter(Conversation.user_id == current_user.id)
+        else:
+            q = q.filter(Conversation.user_id.is_(None))
+        conversations = q.offset(skip).limit(limit).all()
         
         # Eager load messages to compute counts efficiently
         for conv in conversations:
@@ -1517,12 +1523,6 @@ async def send_message(
             metrics = get_metrics()
             conversation_memory = get_conversation_memory(request.conversation_id)
             
-            # Handle invalidate_cache flag
-            if request.invalidate_cache:
-                from app.services.view_data_cache import invalidate
-                invalidate(request.conversation_id)
-                logger.info(f"Cache invalidated for conversation {request.conversation_id} due to invalidate_cache flag")
-            
             # Build message history from conversation messages
             message_history = []
             for msg in history_messages:
@@ -1534,15 +1534,8 @@ async def send_message(
             
             graph = AgentGraphFactory.create_summary_graph()
             
-            # Diagnostic logging for REST fallback debugging
             logger.info(f"Summary agent: stream={request.stream}, tableau_client={'present' if tableau_client else 'None'}, views={len(view_ids)}")
-            
-            # Get max_rows from agent settings for REST fallback
-            from app.services.agent_config_service import AgentConfigService
-            agent_config_service = AgentConfigService(db)
-            summary_settings = agent_config_service.get_agent_settings("summary")
-            max_rows = summary_settings.get("max_rows", 5000)
-            
+
             # Initialize state for Summary agent
             summary_mode = request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full"
             initial_state = {
@@ -1564,7 +1557,6 @@ async def send_message(
                 "embedded_state": request.embedded_state or None,
                 "summary_mode": summary_mode,
                 "conversation_id": request.conversation_id,
-                "invalidate_cache": request.invalidate_cache or False,
             }
             
             if request.stream:
@@ -1577,12 +1569,10 @@ async def send_message(
                     stream_start_time = time.time()  # Track when streaming starts
                     stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
-                        # Pass tableau_client and max_rows in configurable (not state - state gets checkpointed, TableauClient isn't picklable)
                         config = {
                             "configurable": {
                                 "thread_id": f"summary-{request.conversation_id}",
                                 "tableau_client": tableau_client,
-                                "max_rows": max_rows,
                             }
                         }
                         async for state_update in graph.astream(initial_state, config=config):
@@ -1804,12 +1794,10 @@ async def send_message(
                 )
             else:
                 # Non-streaming: execute graph and return result
-                # Pass tableau_client and max_rows in configurable (not state - state gets checkpointed, TableauClient isn't picklable)
                 config = {
                     "configurable": {
                         "thread_id": f"summary-{request.conversation_id}",
                         "tableau_client": tableau_client,
-                        "max_rows": max_rows,
                     }
                 }
                 final_state = await graph.ainvoke(initial_state, config=config)
@@ -2150,6 +2138,31 @@ async def update_message_feedback(
         vizql_query=None,  # Not stored in DB
         created_at=message.created_at
     )
+
+
+@router.delete("/conversations/{conversation_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_message(
+    conversation_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
+    """Delete a single message from a conversation."""
+    message = db.query(Message).filter(
+        Message.id == message_id,
+        Message.conversation_id == conversation_id
+    ).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation:
+        if current_user and conversation.user_id is not None and conversation.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to delete this message")
+        if conversation.user_id is not None and not current_user:
+            raise HTTPException(status_code=403, detail="Authentication required to delete this message")
+    db.delete(message)
+    safe_commit(db)
+    logger.info(f"Deleted message {message_id} from conversation {conversation_id}")
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

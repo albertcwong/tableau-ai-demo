@@ -552,28 +552,30 @@ class TableauClient:
             
         except httpx.HTTPStatusError as e:
             error_detail = e.response.text
-            # Try to parse XML error response for better error messages
+            ct = (e.response.headers.get("content-type") or "").lower()
             try:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(e.response.text)
-                error_elem = root.find('.//{http://tableau.com/api}error')
-                if error_elem is not None:
-                    code = error_elem.get('code', '')
-                    summary = error_elem.find('.//{http://tableau.com/api}summary')
-                    detail = error_elem.find('.//{http://tableau.com/api}detail')
-                    summary_text = summary.text if summary is not None else ''
-                    detail_text = detail.text if detail is not None else ''
-                    error_detail = f"Code {code}: {summary_text} - {detail_text}"
-            except (AttributeError, KeyError, TypeError) as e:
-                # Expected errors when parsing XML error response - continue with generic error
-                logger.debug(f"Could not parse XML error details: {e}")
+                if "json" in ct or e.response.text.strip().startswith("{"):
+                    data = e.response.json()
+                    err = data.get("error", data) if isinstance(data, dict) else {}
+                    if isinstance(err, dict):
+                        code = err.get("code", "")
+                        summary = err.get("summary", err.get("message", ""))
+                        detail = err.get("detail", "")
+                        error_detail = f"Code {code}: {summary} - {detail}".strip(" -") or error_detail
+                elif "xml" in ct or e.response.text.strip().startswith("<"):
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(e.response.text)
+                    error_elem = root.find('.//{http://tableau.com/api}error')
+                    if error_elem is not None:
+                        code = error_elem.get('code', '')
+                        summary = error_elem.find('.//{http://tableau.com/api}summary')
+                        detail = error_elem.find('.//{http://tableau.com/api}detail')
+                        summary_text = summary.text if summary is not None else ''
+                        detail_text = detail.text if detail is not None else ''
+                        error_detail = f"Code {code}: {summary_text} - {detail_text}"
+            except Exception:
                 pass
-            except Exception as e:
-                # Log unexpected errors but continue with generic error
-                logger.warning(f"Unexpected error parsing XML error response: {e}", exc_info=True)
-                pass
-            
-            # Log debug info (without exposing secrets)
+
             logger.error(
                 f"Tableau authentication failed: {e.response.status_code} - {error_detail}. "
                 f"Server: {self.server_url}, Site: {self.site_id or '(empty/default)'}, "
@@ -1752,6 +1754,62 @@ class TableauClient:
         
         view_data = response.get("view", {})
         return view_data
+
+    async def get_view_type(self, view_id: str) -> Dict[str, Any]:
+        """
+        Get view type (worksheet vs dashboard) and metadata.
+        
+        Args:
+            view_id: View ID (LUID)
+            
+        Returns:
+            Dict with view_type ("worksheet"|"dashboard"), name, id
+        """
+        clean_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        view = await self.get_view(clean_id)
+        name = view.get("name") or view.get("Name") or clean_id
+        dashboards = await self._metadata_query_dashboard_sheets(clean_id)
+        view_type = "dashboard" if (dashboards and dashboards[0].get("sheets")) else "worksheet"
+        return {"view_type": view_type, "name": name, "id": clean_id}
+
+    async def get_view_image(
+        self, view_id: str, width: Optional[int] = None, height: Optional[int] = None
+    ) -> bytes:
+        """
+        Get view as PNG image via Tableau REST Query View Image endpoint.
+        
+        Args:
+            view_id: View ID (LUID or content URL like Superstore/Overview)
+            width: Optional width in pixels
+            height: Optional height in pixels
+            
+        Returns:
+            PNG image bytes
+        """
+        await self._ensure_authenticated()
+        clean_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        site_id = self.site_id or ""
+        # Resolve content URL to LUID if needed (image endpoint requires LUID)
+        luid = clean_id
+        if "/" in clean_id:
+            view = await self.get_view(clean_id)
+            luid = view.get("id") or view.get("Id") or view.get("ID")
+            if not luid:
+                raise TableauAPIError(f"No id (LUID) in view response for {view_id}")
+        headers = {**self._get_auth_headers(), "Accept": "*/*"}
+        params: Dict[str, Any] = {}
+        if width is not None:
+            params["width"] = width
+        if height is not None:
+            params["height"] = height
+        base = self.api_base.rstrip("/")
+        rest_img_url = f"{base}/sites/{site_id}/views/{luid}/image"
+        resp = await self._client.get(rest_img_url, headers=headers, params=params or None, timeout=60)
+        if resp.status_code != 200 or not resp.content:
+            raise TableauAPIError(
+                f"Query View Image failed: {resp.status_code} for {rest_img_url}"
+            )
+        return resp.content
     
     async def get_view_data(
         self,
@@ -2625,6 +2683,7 @@ class TableauClient:
             dashboards(filter: {luid: $luid}) {
                 name
                 luid
+                workbook { luid }
                 sheets {
                     luid
                     name
@@ -2690,7 +2749,39 @@ class TableauClient:
         except Exception as e:
             logger.warning(f"Error querying Metadata API for dashboard sheets: {e}")
             return []
-    
+
+    async def _rest_get_workbook_views_name_to_luid(self, workbook_luid: str) -> Dict[str, str]:
+        """
+        REST API workaround: get all views in workbook and build name->luid map.
+        Used to fill in missing luids when dashboard.sheets return blank luid for hidden sheets.
+
+        Args:
+            workbook_luid: Workbook LUID
+
+        Returns:
+            Dict mapping view name to view LUID
+        """
+        name_to_luid: Dict[str, str] = {}
+        try:
+            page = 1
+            while True:
+                result = await self.get_workbook_views(workbook_luid, page_size=1000, page_number=page)
+                items = result.get("items", [])
+                for v in items:
+                    vid = v.get("id") or v.get("Id") or v.get("ID")
+                    vname = v.get("name") or v.get("Name") or v.get("caption") or v.get("Caption")
+                    if vid and vname:
+                        name_to_luid[vname] = vid
+                pag = result.get("pagination", {})
+                total = pag.get("totalAvailable")
+                if not items or len(items) < 1000 or (total is not None and page * 1000 >= total):
+                    break
+                page += 1
+            logger.info(f"REST API get_workbook_views({workbook_luid}): {len(name_to_luid)} view(s) -> {name_to_luid}")
+        except Exception as e:
+            logger.warning(f"Error fetching workbook views via REST for {workbook_luid}: {e}")
+        return name_to_luid
+
     async def get_view_summary_expanded(self, view_id: str, max_rows_per_view: int = 5000) -> Dict[str, Any]:
         """
         Get summary data for view; if Dashboard, expand to containing Sheet objects via Metadata API.
@@ -2710,10 +2801,19 @@ class TableauClient:
         # 1. Query Metadata API for Dashboard sheets
         dashboards = await self._metadata_query_dashboard_sheets(clean_id)
         if dashboards and dashboards[0].get("sheets"):
-            sheets = dashboards[0]["sheets"]
+            dashboard = dashboards[0]
+            sheets = dashboard["sheets"]
+            # Fill in missing luids for hidden sheets via workbook views(path:"")
+            name_to_luid: Dict[str, str] = {}
+            sheets_without_luid = [s for s in sheets if not s.get("luid") and s.get("name")]
+            if sheets_without_luid:
+                wb = dashboard.get("workbook") or {}
+                wb_luid = wb.get("luid") if isinstance(wb, dict) else None
+                if wb_luid:
+                    name_to_luid = await self._rest_get_workbook_views_name_to_luid(wb_luid)
             results = []
             for sheet in sheets:
-                sid = sheet.get("luid")
+                sid = sheet.get("luid") or (name_to_luid.get(sheet.get("name") or "") if name_to_luid else None)
                 if not sid:
                     continue
                 try:

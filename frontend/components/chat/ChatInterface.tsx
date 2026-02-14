@@ -32,6 +32,7 @@ export interface ChatInterfaceProps {
   onLoadQuery?: (datasourceId: string, query: Record<string, any>) => void;
   onCaptureEmbeddedState?: (viewIds: string[]) => Promise<Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>>;
   onViewDataChanged?: () => void; // Callback to notify when view data may have changed (e.g., filters applied)
+  onThreadsChange?: () => void; // Callback when messages change (e.g., after delete) so thread list can refresh
 }
 
 const DEFAULT_MODEL = 'gpt-4';
@@ -48,6 +49,7 @@ export function ChatInterface({
   onLoadQuery,
   onCaptureEmbeddedState,
   onViewDataChanged,
+  onThreadsChange,
 }: ChatInterfaceProps) {
   const [conversationId, setConversationId] = useState<number | null>(
     initialConversationId || null
@@ -223,7 +225,7 @@ export function ChatInterface({
       // Map node names to human-readable step names
       const nodeNameMap: Record<string, string> = {
         // Summary agent nodes
-        'data_fetcher': 'Fetching view data',
+        'get_data': 'Fetching view data',
         'analyzer': 'Analyzing data',
         'insight_gen': 'Generating insights',
         'summarizer': 'Generating summary',
@@ -702,12 +704,16 @@ export function ChatInterface({
 
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
-      // TODO: Implement message deletion API endpoint
-      console.log('Delete message:', messageId);
-      // For now, just remove locally
-      setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
+      if (!conversationId) return;
+      try {
+        await chatApi.deleteMessage(conversationId, messageId);
+        setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
+        onThreadsChange?.();
+      } catch (err) {
+        console.error('Failed to delete message:', err);
+      }
     },
-    []
+    [conversationId, onThreadsChange]
   );
 
   const handleRetry = useCallback(() => {

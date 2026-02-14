@@ -318,6 +318,13 @@ export const chatApi = {
     return response.data;
   },
 
+  // Delete a message
+  deleteMessage: async (conversationId: number, messageId: string): Promise<void> => {
+    await apiClient.delete(
+      `/api/v1/chat/conversations/${conversationId}/messages/${messageId}`
+    );
+  },
+
   // Send a message (non-streaming)
   sendMessage: async (request: MessageRequest): Promise<ChatResponse> => {
     const response = await apiClient.post<ChatResponse>('/api/v1/chat/message', {
