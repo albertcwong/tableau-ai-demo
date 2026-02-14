@@ -1,10 +1,13 @@
-"""Data fetcher node for retrieving view data from embedded_state or cache."""
+"""Data fetcher node for retrieving view data from embedded_state, cache, or REST API fallback."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+from langchain_core.runnables.config import ensure_config
 
 from app.services.agents.summary.state import SummaryAgentState
 from app.services.metrics import track_node_execution
 from app.services.view_data_cache import get_cached, set_cached
+from app.services.tableau.client import TableauClient
 
 logger = logging.getLogger(__name__)
 
@@ -96,19 +99,28 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 has_embedded_data = True
                 break
 
-        # If invalidate_cache is true and no embedded_state, return error
+        # Get tableau_client and max_rows from config (not state - state gets checkpointed and TableauClient isn't picklable)
+        config = ensure_config()
+        tableau_client: Optional[TableauClient] = config.get("configurable", {}).get("tableau_client")
+        max_rows: int = config.get("configurable", {}).get("max_rows", 5000)
+        
+        # If invalidate_cache is true and no embedded_state, try REST fallback instead of error
         if invalidate_cache and not has_embedded_data:
-            error_msg = "View data may have changed. Please ensure the view is visible in the explorer and try again."
-            logger.warning(f"invalidate_cache=true but no embedded_state for views {view_ids}")
-            return {
-                **state,
-                "error": error_msg,
-                "view_data": None,
-                "view_metadata": None,
-                "views_data": {},
-                "views_metadata": {},
-                "tool_calls": tool_calls,
-            }
+            if tableau_client:
+                logger.info(f"invalidate_cache=true but no embedded_state - using REST fallback for views {view_ids}")
+                # Will fall through to REST fallback below
+            else:
+                error_msg = "View data may have changed. Please ensure the view is visible in the explorer and try again."
+                logger.warning(f"invalidate_cache=true but no embedded_state and no tableau_client for views {view_ids}")
+                return {
+                    **state,
+                    "error": error_msg,
+                    "view_data": None,
+                    "view_metadata": None,
+                    "views_data": {},
+                    "views_metadata": {},
+                    "tool_calls": tool_calls,
+                }
 
         # If no embedded_state data, try cache
         if not has_embedded_data and conversation_id:
@@ -127,26 +139,95 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                         "args": {"view_id": view_id, "source": "cache"},
                         "result": f"success - cached data ({views_data.get(view_id, {}).get('row_count', 0)} rows)",
                     })
-            else:
-                # Cache miss - add to failed_views for better error message
-                for view_id in view_ids:
-                    failed_views.append({"view_id": view_id, "error": "No embedded_state and cache miss"})
+        
+        # REST API fallback: if no embedded_state and (no cache or cache miss), try REST
+        if not has_embedded_data and tableau_client:
+            # Check which views still need data
+            views_to_fetch = []
+            for view_id in view_ids:
+                clean_view_id = _sanitize_view_id(view_id)
+                # Skip if we already have data from cache or embedded_state
+                if (view_id in views_data or clean_view_id in views_data):
+                    continue
+                views_to_fetch.append(view_id)
+            
+            if views_to_fetch:
+                logger.info(f"Using REST API fallback for {len(views_to_fetch)} view(s): {views_to_fetch}")
+                for view_id in views_to_fetch:
+                    clean_view_id = _sanitize_view_id(view_id)
+                    try:
+                        # Try expanded first (for Dashboards), fallback to single view
+                        expanded_result = await tableau_client.get_view_summary_expanded(
+                            clean_view_id,
+                            max_rows_per_view=max_rows
+                        )
+                        
+                        if expanded_result["views"]:
+                            # If multiple views (Dashboard), add each sheet
+                            if len(expanded_result["views"]) > 1:
+                                for i, view_data in enumerate(expanded_result["views"]):
+                                    sheet_id = view_data["view_id"]
+                                    sheet_name = view_data.get("name") or f"Sheet_{i}"
+                                    key = f"{clean_view_id}_sheet_{i}"
+                                    views_data[key] = {
+                                        "columns": view_data["columns"],
+                                        "data": view_data["data"],
+                                        "row_count": view_data["row_count"],
+                                    }
+                                    views_metadata[key] = {"id": key, "name": sheet_name}
+                                    total_rows += view_data["row_count"]
+                                successful_fetches += 1
+                                tool_calls.append({
+                                    "tool": "get_view_data",
+                                    "args": {"view_id": view_id, "source": "rest_api_expanded"},
+                                    "result": f"success - {len(expanded_result['views'])} sheet(s), {expanded_result['total_rows']} rows (REST)",
+                                })
+                            else:
+                                # Single view
+                                view_data = expanded_result["views"][0]
+                                views_data[clean_view_id] = {
+                                    "columns": view_data["columns"],
+                                    "data": view_data["data"],
+                                    "row_count": view_data["row_count"],
+                                }
+                                views_metadata[clean_view_id] = {
+                                    "id": clean_view_id,
+                                    "name": view_data.get("name") or clean_view_id
+                                }
+                                total_rows += view_data["row_count"]
+                                successful_fetches += 1
+                                tool_calls.append({
+                                    "tool": "get_view_data",
+                                    "args": {"view_id": view_id, "source": "rest_api"},
+                                    "result": f"success - {view_data['row_count']} rows (REST)",
+                                })
+                    except Exception as e:
+                        error_msg = f"REST API fetch failed: {str(e)}"
+                        logger.warning(f"Failed to fetch {view_id} via REST: {e}")
+                        failed_views.append({"view_id": view_id, "error": error_msg})
+                        tool_calls.append({
+                            "tool": "get_view_data",
+                            "args": {"view_id": view_id, "source": "rest_api"},
+                            "result": "error",
+                            "error": error_msg,
+                        })
+        
+        # If still no data and no REST fallback available, mark as failed
+        if not has_embedded_data and not used_cache and not tableau_client:
+            for view_id in view_ids:
+                clean_view_id = _sanitize_view_id(view_id)
+                if clean_view_id not in views_data and view_id not in views_data:
+                    error_msg = (
+                        "No embedded_state, cache miss, and no REST fallback. "
+                        "Select a Tableau connection in the explorer to enable server-side data fetch."
+                    )
+                    failed_views.append({"view_id": view_id, "error": error_msg})
                     tool_calls.append({
                         "tool": "get_view_data",
-                        "args": {"view_id": view_id, "source": "cache"},
+                        "args": {"view_id": view_id, "source": "embedded_state"},
                         "result": "error",
-                        "error": "Cache miss - no cached data available",
+                        "error": error_msg,
                     })
-        elif not has_embedded_data and not conversation_id:
-            # No conversation_id means we can't use cache
-            for view_id in view_ids:
-                failed_views.append({"view_id": view_id, "error": "No embedded_state and no conversation_id for cache"})
-                tool_calls.append({
-                    "tool": "get_view_data",
-                    "args": {"view_id": view_id, "source": "embedded_state"},
-                    "result": "error",
-                    "error": "No embedded_state provided",
-                })
 
         # Process embedded_state if available
         if has_embedded_data:
@@ -224,8 +305,8 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 "tool_calls": tool_calls,
             }
 
-        # Cache the data if we got it from embedded_state
-        if has_embedded_data and conversation_id and views_data:
+        # Cache the data if we got it from embedded_state or REST API
+        if (has_embedded_data or (tableau_client and successful_fetches > 0)) and conversation_id and views_data:
             set_cached(conversation_id, view_ids, views_data, views_metadata)
 
         first_view_id = view_ids[0]
@@ -241,6 +322,8 @@ async def fetch_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         thought = f"Fetched data from {successful_fetches}/{len(view_ids)} view(s), total {total_rows} rows"
         if used_cache:
             thought = f"Using cached view data from previous summary ({successful_fetches} view(s), {total_rows} rows)"
+        elif tableau_client and successful_fetches > 0:
+            thought = f"Fetched data via REST API ({successful_fetches} view(s), {total_rows} rows)"
         if failed_views:
             thought += f" ({len(failed_views)} view(s) failed)"
         

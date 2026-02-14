@@ -283,40 +283,28 @@ export function ChatInterface({
             setIsCapturing(true);
             embedded_state = await onCaptureEmbeddedState(viewIds);
             
-            // Check if any views failed to capture
+            // Check if any views failed to capture - but don't block send
+            // Backend will use REST API fallback when embedded_state is empty/partial
             if (embedded_state) {
               const failedViews = Object.entries(embedded_state)
                 .filter(([_, state]) => state.capture_error || (!state.summary_data && !state.sheets_data))
                 .map(([viewId, state]) => ({ viewId, error: state.capture_error || 'No data captured' }));
               
               if (failedViews.length > 0) {
-                const errorMsg = `Could not capture view data for ${failedViews.length} view(s). Ensure the views are visible in the explorer.`;
-                console.error('[ChatInterface] Embedded state capture failures:', failedViews);
-                setError(new Error(errorMsg));
-                setIsLoading(false);
-                setIsStreaming(false);
-                return;
+                console.warn('[ChatInterface] Some views failed to capture, backend will use REST API fallback:', failedViews);
+                // Show toast notification but don't block
+                // Note: Backend will handle REST fallback automatically
               }
-            } else {
-              const errorMsg = 'Could not capture view data. Ensure the views are visible in the explorer.';
-              console.error('[ChatInterface] Embedded state capture returned empty result');
-              setError(new Error(errorMsg));
-              setIsLoading(false);
-              setIsStreaming(false);
-              return;
-            }
-            
-            // Reset viewDataMayHaveChanged after successful capture
-            if (embedded_state) {
+              
+              // Reset viewDataMayHaveChanged after capture attempt
               setViewDataMayHaveChanged(false);
+            } else {
+              console.warn('[ChatInterface] Embedded state capture returned empty result, backend will use REST API fallback');
             }
           } catch (e) {
-            const errorMsg = e instanceof Error ? e.message : 'Could not capture embedded state';
-            console.error('[ChatInterface] Error capturing embedded state:', e);
-            setError(new Error(`Failed to capture view data: ${errorMsg}. Ensure the views are visible in the explorer.`));
-            setIsLoading(false);
-            setIsStreaming(false);
-            return;
+            // Log error but don't block - backend will use REST fallback
+            console.warn('[ChatInterface] Error capturing embedded state, backend will use REST API fallback:', e);
+            embedded_state = undefined; // Ensure undefined so backend knows to use REST
           } finally {
             setIsCapturing(false);
           }

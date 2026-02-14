@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse, type SiteInfo } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, CheckCircle2, XCircle, Server, X } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Server, X, Search } from 'lucide-react';
 import { HiOutlineLink } from 'react-icons/hi';
 import { FaUnlink } from 'react-icons/fa';
 import { useAuth } from '@/components/auth/AuthContext';
@@ -58,17 +59,61 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     connected: boolean;
     config?: TableauConfigOption;
     authResponse?: TableauAuthResponse;
+    authType?: AuthType;
   }>({ connected: false });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sites, setSites] = useState<SiteInfo[]>([]);
+  const [sitesPagination, setSitesPagination] = useState<{ pageNumber: number; totalAvailable: number } | null>(null);
+  const [siteSearchTerm, setSiteSearchTerm] = useState('');
+  const [debouncedSiteSearch, setDebouncedSiteSearch] = useState('');
+  const [loadingSites, setLoadingSites] = useState(false);
   const [switchingSite, setSwitchingSite] = useState(false);
+
+  const connectedAuthType = connectionStatus.authType ?? authType;
+  const canSwitchSite =
+    connectionStatus.connected &&
+    (connectedAuthType === 'standard' || connectedAuthType === 'pat') &&
+    selectedConfigId;
+
+  const loadSites = useCallback(
+    async (pageNumber = 1, append = false) => {
+      const auth = connectionStatus.authType ?? authType;
+      if (!selectedConfigId || (auth !== 'standard' && auth !== 'pat')) return;
+      setLoadingSites(true);
+      try {
+        const search = debouncedSiteSearch.length >= 1 ? debouncedSiteSearch : undefined;
+        const result = await authApi.listSites(selectedConfigId, auth, 50, pageNumber, search);
+        if (append) {
+          setSites((prev) => [...prev, ...result.sites]);
+        } else {
+          setSites(result.sites);
+        }
+        setSitesPagination({
+          pageNumber: result.pagination.page_number,
+          totalAvailable: result.pagination.total_available,
+        });
+      } catch {
+        setSites([]);
+        setSitesPagination(null);
+      } finally {
+        setLoadingSites(false);
+      }
+    },
+    [selectedConfigId, authType, connectionStatus.authType, debouncedSiteSearch]
+  );
 
   // Load configs on mount
   useEffect(() => {
     if (!isAuthenticated) return;
     loadConfigs();
   }, [isAuthenticated]);
+
+  // Debounce site search
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSiteSearch(siteSearchTerm), 400);
+    return () => clearTimeout(t);
+  }, [siteSearchTerm]);
 
   // Resolve authType when selectedConfigId or preferences change
   useEffect(() => {
@@ -77,6 +122,13 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     const resolved = resolveAuthType(cfg, preferredAuthType, perServerPref, userPatConfigIds, userPasswordConfigIds, selectedConfigId);
     setAuthType(resolved);
   }, [selectedConfigId, preferredAuthType, perServerPreferences, configs, userPatConfigIds, userPasswordConfigIds]);
+
+  // Reload sites when search changes (for site switcher)
+  useEffect(() => {
+    if (canSwitchSite && selectedConfigId) {
+      loadSites(1, false);
+    }
+  }, [debouncedSiteSearch, canSwitchSite, selectedConfigId, loadSites]);
 
   // Handle OAuth callback redirect (?tableau_connected=1 or ?tableau_error=...)
   useEffect(() => {
@@ -104,6 +156,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
           connected: true,
           config,
           authResponse: { authenticated: true, server_url: config.server_url, token: '...' },
+          authType: 'connected_app_oauth',
         });
         localStorage.setItem('tableau_config_id', configIdFromUrl);
         localStorage.setItem('tableau_auth_type', 'connected_app_oauth');
@@ -210,18 +263,30 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
         connected: true,
         config,
         authResponse,
+        authType: effectiveAuthType,
       });
 
       const canSwitchSite = effectiveAuthType === 'standard' || effectiveAuthType === 'pat';
       if (canSwitchSite && selectedConfigId) {
+        setSiteSearchTerm('');
+        setDebouncedSiteSearch('');
+        setLoadingSites(true);
         try {
-          const sitesList = await authApi.listSites(selectedConfigId, effectiveAuthType);
-          setSites(sitesList);
+          const result = await authApi.listSites(selectedConfigId, effectiveAuthType, 50, 1);
+          setSites(result.sites);
+          setSitesPagination({
+            pageNumber: result.pagination.page_number,
+            totalAvailable: result.pagination.total_available,
+          });
         } catch {
           setSites([]);
+          setSitesPagination(null);
+        } finally {
+          setLoadingSites(false);
         }
       } else {
         setSites([]);
+        setSitesPagination(null);
       }
 
       // Store connection state
@@ -246,6 +311,9 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     setConnectionStatus({ connected: false });
     setSelectedConfigId(null);
     setSites([]);
+    setSitesPagination(null);
+    setSiteSearchTerm('');
+    setDebouncedSiteSearch('');
     localStorage.removeItem('tableau_config_id');
     localStorage.removeItem('tableau_auth_type');
     localStorage.removeItem('tableau_connected');
@@ -253,12 +321,6 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     localStorage.removeItem('tableau_site_content_url');
     onConnectionChange?.(false);
   };
-
-  const canSwitchSite =
-    connectionStatus.connected &&
-    (authType === 'standard' || authType === 'pat') &&
-    selectedConfigId &&
-    sites.length > 0;
 
   const handleSwitchSite = async (siteContentUrl: string) => {
     if (!selectedConfigId || switchingSite) return;
@@ -269,7 +331,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     try {
       const authResponse = await authApi.switchSite({
         config_id: selectedConfigId,
-        auth_type: authType as 'standard' | 'pat',
+        auth_type: (connectionStatus.authType ?? authType) as 'standard' | 'pat',
         site_content_url: siteContentUrl,
       });
       setConnectionStatus((prev) => ({ ...prev, authResponse }));
@@ -292,6 +354,14 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
     !!selectedConfig?.allow_standard_auth && selectedConfigId != null && userPasswordConfigIds.includes(selectedConfigId);
   const needsPatConfig = authType === 'pat' && !canUsePat && !!selectedConfig?.allow_pat_auth;
   const needsPwdConfig = authType === 'standard' && !canUseStandard;
+
+  const supportedAuthTypes: AuthType[] = [];
+  if (selectedConfig?.has_connected_app) supportedAuthTypes.push('connected_app');
+  if (selectedConfig?.has_connected_app_oauth) supportedAuthTypes.push('connected_app_oauth');
+  if (selectedConfig?.allow_pat_auth) supportedAuthTypes.push('pat');
+  if (selectedConfig?.allow_standard_auth) supportedAuthTypes.push('standard');
+  const showAuthSelector = !connectionStatus.connected && supportedAuthTypes.length > 1;
+  const selectableAuthType = supportedAuthTypes.includes(authType) ? authType : supportedAuthTypes[0] ?? 'connected_app';
 
   if (configs.length === 0 && !isAdmin) {
     return (
@@ -346,6 +416,30 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             </SelectContent>
           </Select>
 
+          {showAuthSelector && (
+            <Select
+              value={selectableAuthType}
+              onValueChange={(v) => {
+                const t = v as AuthType;
+                if (selectedConfigId) {
+                  setPerServerPreferences((prev) => ({ ...prev, [selectedConfigId]: t }));
+                  userSettingsApi.updateTableauAuthPreference(selectedConfigId, t).catch(() => {});
+                }
+              }}
+            >
+              <SelectTrigger className="w-[180px]" title="Auth method (standard/PAT allow site switching)">
+                <SelectValue placeholder="Auth method" />
+              </SelectTrigger>
+              <SelectContent>
+                {supportedAuthTypes.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t === 'standard' ? 'Username/password' : t === 'pat' ? 'PAT' : t === 'connected_app' ? 'Connected App' : 'OAuth'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
           {connectionStatus.connected ? (
             <Button
               onClick={handleDisconnect}
@@ -359,9 +453,9 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
           ) : (
             <Button
               onClick={handleConnect}
-              disabled={!selectedConfigId || loading}
+              disabled={!selectedConfigId || loading || needsPatConfig || needsPwdConfig}
               size="sm"
-              title="Connect"
+              title={needsPatConfig ? 'Add PAT in Settings first' : needsPwdConfig ? 'Add credentials in Settings first' : 'Connect'}
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -400,36 +494,83 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             </AlertDescription>
           </Alert>
           {canSwitchSite && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-muted-foreground shrink-0">Site:</label>
-              <Select
-                value={
-                  (() => {
-                    const contentUrl =
-                      sites.find((s) => s.id === connectionStatus.authResponse?.site_id)?.contentUrl ?? '';
-                    return contentUrl || '__default__';
-                  })()
-                }
-                onValueChange={(v) => handleSwitchSite(v === '__default__' ? '' : v)}
-                disabled={switchingSite}
-              >
-                <SelectTrigger className="w-[220px]">
-                  <SelectValue placeholder="Switch site..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {sites.map((s) => {
-                    const contentUrl = s.contentUrl ?? '';
-                    const value = contentUrl || '__default__';
-                    return (
-                      <SelectItem key={s.id ?? value} value={value}>
-                        {s.name ?? s.contentUrl ?? 'Default'}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-              {switchingSite && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search sites..."
+                  value={siteSearchTerm}
+                  onChange={(e) => setSiteSearchTerm(e.target.value)}
+                  className="h-7 pl-7 pr-7 text-xs"
+                />
+                {siteSearchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSiteSearchTerm('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-muted-foreground shrink-0">Site:</label>
+                <Select
+                  value={
+                    (() => {
+                      const contentUrl =
+                        sites.find((s) => s.id === connectionStatus.authResponse?.site_id)?.contentUrl ?? '';
+                      return contentUrl || '__default__';
+                    })()
+                  }
+                  onValueChange={(v) => handleSwitchSite(v === '__default__' ? '' : v)}
+                  disabled={switchingSite}
+                >
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Switch site..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {loadingSites ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : sites.length === 0 ? (
+                      <div className="py-2 px-2 text-sm text-muted-foreground">
+                        {siteSearchTerm ? 'No sites match search' : 'No sites found'}
+                      </div>
+                    ) : (
+                      sites.map((s) => {
+                        const contentUrl = s.contentUrl ?? '';
+                        const value = contentUrl || '__default__';
+                        return (
+                          <SelectItem key={s.id ?? value} value={value}>
+                            {s.name ?? s.contentUrl ?? 'Default'}
+                          </SelectItem>
+                        );
+                      })
+                    )}
+                  </SelectContent>
+                </Select>
+                {switchingSite && (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              {sitesPagination && sitesPagination.totalAvailable > sites.length && (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Showing {sites.length} of {sitesPagination.totalAvailable} sites
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs"
+                    disabled={loadingSites}
+                    onClick={() => loadSites((sitesPagination?.pageNumber ?? 1) + 1, true)}
+                  >
+                    {loadingSites ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Load more'}
+                  </Button>
+                </div>
               )}
             </div>
           )}

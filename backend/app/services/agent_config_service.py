@@ -82,13 +82,13 @@ class AgentConfigService:
         return config is not None
     
     def get_agent_settings(self, agent_name: str) -> Dict[str, Optional[int]]:
-        """Get agent-level settings (retry configs) with fallback to env vars.
+        """Get agent-level settings (retry configs, max_rows) with fallback to env vars.
         
         Args:
-            agent_name: Agent name (e.g., 'vizql')
+            agent_name: Agent name (e.g., 'vizql', 'summary')
             
         Returns:
-            Dictionary with max_build_retries and max_execution_retries
+            Dictionary with max_build_retries, max_execution_retries, and max_rows
         """
         settings_config = self.db.query(AgentConfig).filter(
             and_(
@@ -98,20 +98,27 @@ class AgentConfigService:
         ).first()
         
         if settings_config:
-            return {
+            result = {
                 'max_build_retries': settings_config.max_build_retries,
-                'max_execution_retries': settings_config.max_execution_retries
+                'max_execution_retries': settings_config.max_execution_retries,
+                'max_rows': settings_config.max_rows
             }
+            return result
         
         # Fallback to env vars (for backward compatibility)
         logger.warning(
             f"No agent settings found for {agent_name}, falling back to env vars. "
             "Consider configuring via admin panel."
         )
-        return {
+        result = {
             'max_build_retries': getattr(settings, 'VIZQL_MAX_BUILD_RETRIES', 3),
-            'max_execution_retries': getattr(settings, 'VIZQL_MAX_EXECUTION_RETRIES', 3)
+            'max_execution_retries': getattr(settings, 'VIZQL_MAX_EXECUTION_RETRIES', 3),
+            'max_rows': None  # No env var fallback for max_rows
         }
+        # For summary agent, default max_rows to 5000 if not configured
+        if agent_name == 'summary':
+            result['max_rows'] = 5000
+        return result
     
     def get_all_agents(self) -> Dict[str, List[Dict[str, Any]]]:
         """Get all agents with their versions.
@@ -203,14 +210,16 @@ class AgentConfigService:
         self,
         agent_name: str,
         max_build_retries: Optional[int] = None,
-        max_execution_retries: Optional[int] = None
+        max_execution_retries: Optional[int] = None,
+        max_rows: Optional[int] = None
     ) -> AgentConfig:
-        """Update agent-level settings (retry configs).
+        """Update agent-level settings (retry configs, max_rows).
         
         Args:
             agent_name: Agent name
             max_build_retries: Optional max build retries
             max_execution_retries: Optional max execution retries
+            max_rows: Optional max rows (Summary agent)
             
         Returns:
             Updated AgentConfig instance (settings row)
@@ -225,6 +234,7 @@ class AgentConfigService:
         if not settings_config:
             # Create settings row if it doesn't exist
             from datetime import datetime, timezone
+            default_max_rows = max_rows if max_rows is not None else (5000 if agent_name == 'summary' else None)
             settings_config = AgentConfig(
                 agent_name=agent_name,
                 version='settings',
@@ -232,6 +242,7 @@ class AgentConfigService:
                 is_default=False,
                 max_build_retries=max_build_retries or 3,
                 max_execution_retries=max_execution_retries or 3,
+                max_rows=default_max_rows,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
             )
@@ -241,7 +252,10 @@ class AgentConfigService:
                 settings_config.max_build_retries = max_build_retries
             if max_execution_retries is not None:
                 settings_config.max_execution_retries = max_execution_retries
+            if max_rows is not None:
+                settings_config.max_rows = max_rows
         
+        from app.core.database import safe_commit
         safe_commit(self.db)
         self.db.refresh(settings_config)
         return settings_config

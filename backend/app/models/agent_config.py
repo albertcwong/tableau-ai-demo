@@ -17,6 +17,7 @@ class AgentConfig(Base):
     description = Column(String(500), nullable=True, comment="Optional description of this version")
     max_build_retries = Column(Integer, nullable=True, comment="VizQL-specific: max query build/refinement attempts")
     max_execution_retries = Column(Integer, nullable=True, comment="VizQL-specific: max execution retry attempts")
+    max_rows = Column(Integer, nullable=True, comment="Summary-specific: max rows per view for REST API data fetch")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

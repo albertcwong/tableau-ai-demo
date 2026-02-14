@@ -256,9 +256,26 @@ class AgentSettingsResponse(BaseModel):
     agent_name: str
     max_build_retries: Optional[int] = None
     max_execution_retries: Optional[int] = None
+    max_rows: Optional[int] = None
 
 
 class AgentSettingsUpdate(BaseModel):
     """Request model for updating agent-level settings."""
     max_build_retries: Optional[int] = Field(None, ge=1, le=10)
     max_execution_retries: Optional[int] = Field(None, ge=1, le=10)
+    max_rows: Optional[int] = Field(None, ge=100, description="Summary agent: max rows per view for REST API data fetch")
+
+
+class ViewSummaryDataResponse(BaseModel):
+    """Response model for view summary data."""
+    view_id: str
+    name: Optional[str] = None
+    columns: List[str]
+    data: List[List[Any]]
+    row_count: int
+
+
+class ViewSummaryExpandedResponse(BaseModel):
+    """Response model for expanded view summary data (Dashboard with multiple Sheets)."""
+    views: List[ViewSummaryDataResponse]
+    total_rows: int

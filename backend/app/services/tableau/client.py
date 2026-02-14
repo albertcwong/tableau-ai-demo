@@ -801,15 +801,18 @@ class TableauClient:
         endpoint = "sites"
         params = {"pageSize": page_size, "pageNumber": page_number}
         response = await self._request("GET", endpoint, params=params)
-        sites = response.get("sites", {}).get("site", [])
-        items = sites if isinstance(sites, list) else [sites] if sites else []
+        # Unwrap tsResponse if present (XML format)
+        data = response.get("tsResponse", response) if "tsResponse" in response else response
+        # Tableau REST API returns {"site": [...]} (top-level) or {"sites": {"site": [...]}} (nested)
+        sites_data = data.get("site")
+        if sites_data is None:
+            sites_inner = data.get("sites")
+            sites_data = (sites_inner.get("site", []) if isinstance(sites_inner, dict) else []) if sites_inner else []
+        items = sites_data if isinstance(sites_data, list) else [sites_data] if sites_data else []
         return [
-            {
-                "id": s.get("id"),
-                "name": s.get("name"),
-                "contentUrl": s.get("contentUrl") or s.get("contenturl"),
-            }
+            {"id": s.get("id"), "name": s.get("name"), "contentUrl": s.get("contentUrl") or s.get("contenturl")}
             for s in items
+            if isinstance(s, dict)
         ]
 
     async def _ensure_authenticated(self) -> None:
@@ -2601,6 +2604,155 @@ class TableauClient:
             logger.warning(f"Error querying Metadata API: {e}")
             # Don't raise - return empty dict so enrichment can continue with VizQL data only
             return {}
+    
+    async def _metadata_query_dashboard_sheets(self, dashboard_luid: str) -> List[Dict[str, Any]]:
+        """
+        Query Metadata API GraphQL to get Dashboard's containing Sheet objects.
+        
+        Args:
+            dashboard_luid: Dashboard LUID (view_id)
+            
+        Returns:
+            List of dashboard dicts with sheets, or empty list if not found/error
+        """
+        await self._ensure_authenticated()
+        
+        server_base = self.server_url.rstrip('/')
+        graphql_url = f"{server_base}/api/metadata/graphql"
+        
+        query = """
+        query GetDashboardSheets($luid: String!) {
+            dashboards(filter: {luid: $luid}) {
+                name
+                luid
+                sheets {
+                    luid
+                    name
+                }
+            }
+        }
+        """
+        
+        payload = {
+            "query": query,
+            "variables": {
+                "luid": dashboard_luid
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Tableau-Auth": self.auth_token
+        }
+        
+        try:
+            logger.info(f"Metadata API GraphQL request for dashboard {dashboard_luid}: {json.dumps(payload, indent=2)}")
+            response = await self._client.post(
+                graphql_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            logger.debug(f"Metadata API GraphQL raw response: {json.dumps(result, indent=2)}")
+            
+            # Check for GraphQL errors
+            if "errors" in result:
+                error_messages = [err.get("message", "Unknown error") for err in result["errors"]]
+                logger.warning(f"GraphQL errors: {error_messages}")
+                return []
+            
+            dashboards = result.get("data", {}).get("dashboards", [])
+            if not dashboards:
+                logger.info(f"No dashboard found with LUID {dashboard_luid} in Metadata API")
+                return []
+            
+            # Handle nested arrays: sheets is [[Sheet]!]! - array of arrays
+            dashboard = dashboards[0]
+            raw_sheets = dashboard.get("sheets", [])
+            sheets = []
+            for item in raw_sheets:
+                if isinstance(item, list):
+                    sheets.extend(item)
+                else:
+                    sheets.append(item)
+            
+            dashboard["sheets"] = sheets
+            logger.info(f"Found dashboard '{dashboard.get('name')}' with {len(sheets)} sheet(s)")
+            return [dashboard]
+            
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Metadata API error: {e.response.status_code} - {e.response.text}")
+            return []
+        except Exception as e:
+            logger.warning(f"Error querying Metadata API for dashboard sheets: {e}")
+            return []
+    
+    async def get_view_summary_expanded(self, view_id: str, max_rows_per_view: int = 5000) -> Dict[str, Any]:
+        """
+        Get summary data for view; if Dashboard, expand to containing Sheet objects via Metadata API.
+        
+        Uses Metadata API GraphQL to get Dashboard's sheets, then REST API to fetch data for each Sheet.
+        Falls back to single-view REST fetch if Metadata API fails or view is a Sheet (not Dashboard).
+        
+        Args:
+            view_id: View LUID (may include suffixes like ,1:1 - will be sanitized)
+            max_rows_per_view: Maximum rows to fetch per view
+            
+        Returns:
+            Dictionary with 'views' (list of view data dicts) and 'total_rows'
+        """
+        clean_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        
+        # 1. Query Metadata API for Dashboard sheets
+        dashboards = await self._metadata_query_dashboard_sheets(clean_id)
+        if dashboards and dashboards[0].get("sheets"):
+            sheets = dashboards[0]["sheets"]
+            results = []
+            for sheet in sheets:
+                sid = sheet.get("luid")
+                if not sid:
+                    continue
+                try:
+                    data = await self.get_view_data(sid, max_rows=max_rows_per_view)
+                    results.append({
+                        "view_id": sid,
+                        "name": sheet.get("name"),
+                        "columns": data["columns"],
+                        "data": data["data"],
+                        "row_count": data["row_count"]
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to get data for sheet {sid} ({sheet.get('name')}): {e}")
+                    # Continue with other sheets even if one fails
+            if results:
+                return {
+                    "views": results,
+                    "total_rows": sum(r["row_count"] for r in results)
+                }
+        
+        # 2. Fallback: single view (Sheet or Metadata API unavailable)
+        try:
+            data = await self.get_view_data(clean_id, max_rows=max_rows_per_view)
+            return {
+                "views": [{
+                    "view_id": clean_id,
+                    "name": None,
+                    "columns": data["columns"],
+                    "data": data["data"],
+                    "row_count": data["row_count"]
+                }],
+                "total_rows": data["row_count"]
+            }
+        except Exception as e:
+            logger.error(f"Failed to get view data for {clean_id}: {e}")
+            return {
+                "views": [],
+                "total_rows": 0
+            }
     
     async def get_field_statistics(
         self, 

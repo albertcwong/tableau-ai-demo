@@ -1420,13 +1420,14 @@ async def get_agent_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user)
 ):
-    """Get agent-level settings (e.g. retry config for vizql)."""
+    """Get agent-level settings (e.g. retry config for vizql, max_rows for summary)."""
     service = AgentConfigService(db)
     settings_dict = service.get_agent_settings(agent_name)
     return AgentSettingsResponse(
         agent_name=agent_name,
         max_build_retries=settings_dict.get('max_build_retries'),
-        max_execution_retries=settings_dict.get('max_execution_retries')
+        max_execution_retries=settings_dict.get('max_execution_retries'),
+        max_rows=settings_dict.get('max_rows')
     )
 
 
@@ -1463,17 +1464,19 @@ async def update_agent_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user)
 ):
-    """Update agent-level settings (retry config)."""
+    """Update agent-level settings (retry config, max_rows)."""
     service = AgentConfigService(db)
     updated = service.update_agent_settings(
         agent_name=agent_name,
         max_build_retries=settings_data.max_build_retries,
-        max_execution_retries=settings_data.max_execution_retries
+        max_execution_retries=settings_data.max_execution_retries,
+        max_rows=settings_data.max_rows
     )
     return AgentSettingsResponse(
         agent_name=agent_name,
         max_build_retries=updated.max_build_retries,
-        max_execution_retries=updated.max_execution_retries
+        max_execution_retries=updated.max_execution_retries,
+        max_rows=updated.max_rows
     )
 
 

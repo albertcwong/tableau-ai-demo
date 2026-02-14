@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.api.tableau_client_factory import (
     create_tableau_client_for_credential_signin,
+    create_tableau_client_from_token,
     resolve_tableau_username,
     site_id_from_config,
 )
@@ -30,7 +31,7 @@ from app.services.eas_oauth import (
     store_oauth_state,
 )
 from app.services.pat_encryption import decrypt_pat
-from app.services.tableau.client import TableauClient, TableauAuthenticationError
+from app.services.tableau.client import TableauClient, TableauAuthenticationError, TableauAPIError, TableauClientError
 from app.services.tableau.token_store import TokenEntry
 from app.services.tableau.token_store_factory import get_token_store
 
@@ -336,6 +337,17 @@ class SiteInfo(BaseModel):
     contentUrl: Optional[str]
 
 
+class SitesPagination(BaseModel):
+    page_number: int
+    page_size: int
+    total_available: int
+
+
+class SitesPaginatedResponse(BaseModel):
+    sites: List[SiteInfo]
+    pagination: SitesPagination
+
+
 @router.post("/switch-site", response_model=TableauAuthResponse)
 async def switch_site(
     body: SwitchSiteRequest,
@@ -403,16 +415,21 @@ async def switch_site(
         )
 
 
-@router.get("/sites", response_model=List[SiteInfo])
+@router.get("/sites", response_model=SitesPaginatedResponse)
 async def list_sites(
     config_id: int = Query(..., description="Tableau server config ID"),
     auth_type: str = Query(..., description="standard or pat"),
+    page_size: int = Query(100, ge=1, le=1000),
+    page_number: int = Query(1, ge=1),
+    search: Optional[str] = Query(None, description="Filter by name or contentUrl (case-insensitive contains)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    List sites the user has access to. For standard and PAT only.
+    List sites the user has access to. Paginated. For standard and PAT only.
+    Tableau API does not support filter on sites, so search is applied client-side.
     """
+    logger.info(f"list_sites: config_id={config_id} auth_type={auth_type} user_id={current_user.id}")
     auth_type = auth_type.lower()
     if auth_type not in ("standard", "pat"):
         raise HTTPException(
@@ -435,16 +452,69 @@ async def list_sites(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please connect first.",
         )
-    client = create_tableau_client_from_token(config, token_entry, auth_type)
     try:
-        sites = await client.list_sites()
+        client = create_tableau_client_from_token(config, token_entry, auth_type)
+    except Exception as e:
+        logger.error(f"Failed to create Tableau client for list_sites: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize Tableau client: {str(e)}",
+        )
+
+    try:
+        all_sites: List[Dict] = []
+        page = 1
+        while True:
+            batch = await client.list_sites(page_size=100, page_number=page)
+            if not batch:
+                break
+            all_sites.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+            if page > 50:
+                break
+        logger.debug(f"list_sites fetched {len(all_sites)} site(s)")
     except TableauAuthenticationError as e:
-        logger.error(f"List sites failed: {e}")
+        logger.error(f"List sites authentication failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
         )
-    return [SiteInfo(id=s.get("id"), name=s.get("name"), contentUrl=s.get("contentUrl")) for s in sites]
+    except TableauAPIError as e:
+        logger.error(f"List sites API error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tableau API error: {str(e)}",
+        )
+    except TableauClientError as e:
+        logger.error(f"List sites client error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Tableau client error: {str(e)}",
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error listing sites: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}",
+        )
+
+    items = [
+        {"id": s.get("id"), "name": s.get("name"), "contentUrl": s.get("contentUrl") or s.get("contenturl")}
+        for s in all_sites
+        if isinstance(s, dict)
+    ]
+    if search and search.strip():
+        q = search.strip().lower()
+        items = [s for s in items if (s.get("name") or "").lower().find(q) >= 0 or (s.get("contentUrl") or "").lower().find(q) >= 0]
+    total = len(items)
+    start = (page_number - 1) * page_size
+    page_items = items[start : start + page_size]
+    return SitesPaginatedResponse(
+        sites=[SiteInfo(id=s["id"], name=s["name"], contentUrl=s["contentUrl"]) for s in page_items],
+        pagination=SitesPagination(page_number=page_number, page_size=page_size, total_available=total),
+    )
 
 
 def _oauth_callback_url(db: Session) -> str:

@@ -15,8 +15,8 @@ from app.services.gateway.router import get_available_models
 from app.services.gateway.api import get_configured_providers
 from app.core.database import get_db
 
-# Create logs directory if it doesn't exist
-LOG_DIR = PROJECT_ROOT / "logs"
+# Create logs directory - use LOG_DIR env in Docker (/app/logs) so logs write to mounted volume
+LOG_DIR = Path(settings.LOG_DIR) if settings.LOG_DIR else PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 # Configure logging with file rotation

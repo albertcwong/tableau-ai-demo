@@ -170,19 +170,26 @@ apiClient.interceptors.response.use(
             localStorage.removeItem('auth_token');
             window.location.href = '/login';
           } else if (isTableauEndpoint) {
-            const isTableauAuthError = typeof message === 'string' && message.toLowerCase().includes('tableau');
-            if (isTableauAuthError && typeof window !== 'undefined') {
-              // Tableau token invalidated (e.g. new sign-in). Clear connection so user reconnects.
-              localStorage.removeItem('tableau_connected');
-              localStorage.removeItem('tableau_token_expires_at');
-            }
-            if (!isTableauAuthError && typeof window !== 'undefined') {
-              // App auth failed on Tableau endpoint - redirect to login
-              localStorage.removeItem('auth_token');
-              window.location.href = '/login';
+            // For Tableau endpoints, never log out the user - these are Tableau connection issues
+            // Check if this is a Tableau authentication endpoint (user-initiated action)
+            const isTableauAuthEndpoint = url.includes('/tableau-auth/authenticate') || 
+                                         url.includes('/tableau-auth/switch-site') ||
+                                         url.includes('/tableau-auth/oauth');
+            
+            if (isTableauAuthEndpoint) {
+              // This is a user-initiated Tableau auth action - don't log out, just show error
+              console.warn('Tableau authentication error:', message);
             } else {
-              console.warn('Tableau connection error (token may be invalidated):', message);
+              // Other Tableau endpoint errors - might be token invalidation
+              const isTableauAuthError = typeof message === 'string' && message.toLowerCase().includes('tableau');
+              if (isTableauAuthError && typeof window !== 'undefined') {
+                // Tableau token invalidated (e.g. new sign-in). Clear connection so user reconnects.
+                localStorage.removeItem('tableau_connected');
+                localStorage.removeItem('tableau_token_expires_at');
+              }
+              console.warn('Tableau connection error:', message);
             }
+            // Never log out user for Tableau endpoint errors - they're Tableau-specific, not app auth issues
           } else if (typeof window !== 'undefined') {
             // Other 401 errors - check if it's a general auth issue
             // Only redirect if it's clearly an auth problem, not a Tableau connectivity issue
@@ -926,10 +933,24 @@ export const authApi = {
     return response.data;
   },
 
-  listSites: async (configId: number, authType: 'standard' | 'pat'): Promise<SiteInfo[]> => {
-    const response = await apiClient.get<SiteInfo[]>('/api/v1/tableau-auth/sites', {
-      params: { config_id: configId, auth_type: authType },
-    });
+  listSites: async (
+    configId: number,
+    authType: 'standard' | 'pat',
+    pageSize = 50,
+    pageNumber = 1,
+    search?: string
+  ): Promise<{ sites: SiteInfo[]; pagination: { page_number: number; page_size: number; total_available: number } }> => {
+    const params: Record<string, string | number> = {
+      config_id: configId,
+      auth_type: authType,
+      page_size: pageSize,
+      page_number: pageNumber,
+    };
+    if (search && search.trim()) params.search = search.trim();
+    const response = await apiClient.get<{ sites: SiteInfo[]; pagination: { page_number: number; page_size: number; total_available: number } }>(
+      '/api/v1/tableau-auth/sites',
+      { params }
+    );
     return response.data;
   },
 };
@@ -1262,11 +1283,13 @@ export interface AgentSettingsResponse {
   agent_name: string;
   max_build_retries?: number | null;
   max_execution_retries?: number | null;
+  max_rows?: number | null;
 }
 
 export interface AgentSettingsUpdate {
   max_build_retries?: number;
   max_execution_retries?: number;
+  max_rows?: number;
 }
 
 // VizQL API functions

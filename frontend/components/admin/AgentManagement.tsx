@@ -112,10 +112,23 @@ export function AgentManagement() {
     }
   };
 
-  const handleSettingsChange = (agentName: string, field: 'max_build_retries' | 'max_execution_retries', value: string) => {
-    const numValue = value === '' ? undefined : parseInt(value, 10);
-    if (numValue !== undefined && (isNaN(numValue) || numValue < 1 || numValue > 10)) {
-      return; // Invalid value
+  const handleSettingsChange = (agentName: string, field: 'max_build_retries' | 'max_execution_retries' | 'max_rows', value: string) => {
+    let numValue: number | undefined = value === '' ? undefined : parseInt(value, 10);
+    
+    // Validation based on field
+    if (numValue !== undefined) {
+      if (isNaN(numValue)) {
+        return; // Invalid value
+      }
+      if (field === 'max_rows') {
+        if (numValue < 100) {
+          return; // Invalid value for max_rows
+        }
+      } else {
+        if (numValue < 1 || numValue > 10) {
+          return; // Invalid value for retries
+        }
+      }
     }
     
     setEditingSettings(prev => ({
@@ -259,6 +272,67 @@ export function AgentManagement() {
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         Maximum execution retry attempts
+                      </p>
+                    </div>
+                  </div>
+                  {editingAgentSettings && (
+                    <div className="mt-4">
+                      <Button
+                        onClick={() => handleUpdateSettings(agentName)}
+                        disabled={saving === `${agentName}-settings`}
+                        size="sm"
+                      >
+                        {saving === `${agentName}-settings` ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save Settings
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setEditingSettings(prev => {
+                            const next = { ...prev };
+                            delete next[agentName];
+                            return next;
+                          });
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="ml-2"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Settings (for Summary) */}
+              {agentName === 'summary' && agentSettings && (
+                <div className="border-t pt-4">
+                  <h3 className="text-sm font-medium mb-3">REST API Settings</h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    <div>
+                      <Label htmlFor={`max-rows-${agentName}`}>
+                        Max Rows (REST)
+                      </Label>
+                      <Input
+                        id={`max-rows-${agentName}`}
+                        type="number"
+                        min="100"
+                        value={currentSettings?.max_rows?.toString() || ''}
+                        onChange={(e) => handleSettingsChange(agentName, 'max_rows', e.target.value)}
+                        placeholder="5000"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Maximum rows per view when fetching data via REST API fallback (min 100)
                       </p>
                     </div>
                   </div>

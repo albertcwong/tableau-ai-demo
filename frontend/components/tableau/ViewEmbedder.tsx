@@ -92,8 +92,9 @@ export function ViewEmbedder({
                           (err?.response?.status === 400 && errorMessage.includes('embedding'));
         
         if (isPATError) {
-          const patErrorMsg = 'View embedding is not supported when using Personal Access Token authentication. Please connect with Connected App to embed views.';
-          setError(patErrorMsg);
+          const patErrorMsg = 'View embedding is not supported with PAT. Connect with Connected App to embed views.';
+          const fallbackMsg = 'View is in context. Data will be fetched via server when using Summary.';
+          setError(`${patErrorMsg} ${fallbackMsg}`);
           setLoading(false);
           onError?.(new Error(patErrorMsg));
           return;

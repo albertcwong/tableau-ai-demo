@@ -10,6 +10,7 @@ class SummaryAgentState(BaseAgentState):
     conversation_id: Optional[int]  # For cache access
     invalidate_cache: Optional[bool]  # Flag to invalidate cache before processing
     
+    
     # View data (backward compatibility - single view)
     view_data: Optional[dict]
     view_metadata: Optional[dict]

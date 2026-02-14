@@ -29,6 +29,8 @@ from app.api.models import (
     PaginatedDatasourcesResponse,
     PaginatedWorkbooksResponse,
     PaginatedViewsResponse,
+    ViewSummaryDataResponse,
+    ViewSummaryExpandedResponse,
 )
 from app.services.tableau.client import (
     TableauClient,
@@ -634,6 +636,192 @@ async def get_view_embed_url(
         )
     except Exception as e:
         logger.exception(f"Unexpected error getting embed URL: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        )
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/views/{view_id}/summary-data",
+    response_model=ViewSummaryDataResponse,
+    summary="Get view summary data",
+    description="Get summary data (columns, data, row_count) from a view using REST API. Works with PAT and standard auth.",
+    responses={
+        200: {"description": "View summary data"},
+        401: {"model": ErrorResponse, "description": "Authentication failed"},
+        404: {"model": ErrorResponse, "description": "View not found"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def get_view_summary_data(
+    view_id: str,
+    max_rows: Optional[int] = Query(None, ge=100, description="Maximum rows to return (overrides agent setting)"),
+    filters: Optional[str] = Query(None, description="Optional filters as JSON string (e.g., '{\"Region\":\"West\"}')"),
+    client: TableauClient = Depends(get_tableau_client),
+) -> ViewSummaryDataResponse:
+    """
+    Get summary data from a view using Tableau REST API.
+    
+    Returns columns, data, and row_count in the same format as embedded summary_data.
+    Works with PAT and standard auth (view data endpoint is separate from embed).
+    
+    Args:
+        view_id: View LUID
+        max_rows: Optional max rows (defaults to agent setting if not provided)
+        filters: Optional filters as JSON string
+    """
+    try:
+        clean_view_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        
+        # Parse filters if provided
+        parsed_filters = None
+        if filters:
+            import json
+            try:
+                parsed_filters = json.loads(filters)
+            except json.JSONDecodeError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid JSON in filters parameter: {str(e)}",
+                )
+        
+        # Use provided max_rows or default (will be overridden by agent setting in data_fetcher)
+        data = await client.get_view_data(
+            clean_view_id,
+            max_rows=max_rows or 5000,
+            filters=parsed_filters
+        )
+        
+        # Get view name for better response
+        try:
+            view_meta = await client.get_view(clean_view_id)
+            view_name = view_meta.get("name")
+        except Exception:
+            view_name = None
+        
+        return ViewSummaryDataResponse(
+            view_id=clean_view_id,
+            name=view_name,
+            columns=data["columns"],
+            data=data["data"],
+            row_count=data["row_count"]
+        )
+        
+    except TableauAuthenticationError as e:
+        logger.error(f"Authentication error getting view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Tableau authentication failed: {str(e)}",
+        )
+    except TableauAPIError as e:
+        error_msg = str(e)
+        if "404" in error_msg or "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"View '{view_id}' not found",
+            )
+        logger.error(f"API error getting view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tableau API error: {str(e)}",
+        )
+    except TableauClientError as e:
+        logger.error(f"Client error getting view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Tableau client error: {str(e)}",
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error getting view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        )
+    finally:
+        await client.close()
+
+
+@router.get(
+    "/views/{view_id}/summary-data/expanded",
+    response_model=ViewSummaryExpandedResponse,
+    summary="Get expanded view summary data (Dashboard with Sheets)",
+    description="Get summary data for a Dashboard by expanding to all containing Sheet objects via Metadata API. Falls back to single view if not a Dashboard.",
+    responses={
+        200: {"description": "Expanded view summary data"},
+        401: {"model": ErrorResponse, "description": "Authentication failed"},
+        404: {"model": ErrorResponse, "description": "View not found"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
+async def get_view_summary_expanded(
+    view_id: str,
+    max_rows: Optional[int] = Query(None, ge=100, description="Maximum rows per view (overrides agent setting)"),
+    client: TableauClient = Depends(get_tableau_client),
+) -> ViewSummaryExpandedResponse:
+    """
+    Get expanded summary data for a Dashboard view.
+    
+    Uses Metadata API GraphQL to get Dashboard's containing Sheet objects,
+    then fetches data for each Sheet via REST API. Falls back to single-view
+    fetch if Metadata API fails or view is a Sheet (not Dashboard).
+    
+    Args:
+        view_id: View LUID (Dashboard or Sheet)
+        max_rows: Optional max rows per view (defaults to agent setting)
+    """
+    try:
+        clean_view_id = view_id.split(",")[0].strip() if "," in view_id else view_id
+        
+        result = await client.get_view_summary_expanded(
+            clean_view_id,
+            max_rows_per_view=max_rows or 5000
+        )
+        
+        views = [
+            ViewSummaryDataResponse(
+                view_id=v["view_id"],
+                name=v.get("name"),
+                columns=v["columns"],
+                data=v["data"],
+                row_count=v["row_count"]
+            )
+            for v in result["views"]
+        ]
+        
+        return ViewSummaryExpandedResponse(
+            views=views,
+            total_rows=result["total_rows"]
+        )
+        
+    except TableauAuthenticationError as e:
+        logger.error(f"Authentication error getting expanded view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Tableau authentication failed: {str(e)}",
+        )
+    except TableauAPIError as e:
+        error_msg = str(e)
+        if "404" in error_msg or "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"View '{view_id}' not found",
+            )
+        logger.error(f"API error getting expanded view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tableau API error: {str(e)}",
+        )
+    except TableauClientError as e:
+        logger.error(f"Client error getting expanded view summary data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Tableau client error: {str(e)}",
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error getting expanded view summary data: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",

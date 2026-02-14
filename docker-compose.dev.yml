@@ -6,6 +6,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+    environment:
+      - LOG_DIR=/app/logs
     volumes:
       - ./backend/app:/app/app
       - ./backend/mcp_server:/app/mcp_server

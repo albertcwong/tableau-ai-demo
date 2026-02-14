@@ -1534,6 +1534,15 @@ async def send_message(
             
             graph = AgentGraphFactory.create_summary_graph()
             
+            # Diagnostic logging for REST fallback debugging
+            logger.info(f"Summary agent: stream={request.stream}, tableau_client={'present' if tableau_client else 'None'}, views={len(view_ids)}")
+            
+            # Get max_rows from agent settings for REST fallback
+            from app.services.agent_config_service import AgentConfigService
+            agent_config_service = AgentConfigService(db)
+            summary_settings = agent_config_service.get_agent_settings("summary")
+            max_rows = summary_settings.get("max_rows", 5000)
+            
             # Initialize state for Summary agent
             summary_mode = request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full"
             initial_state = {
@@ -1568,8 +1577,14 @@ async def send_message(
                     stream_start_time = time.time()  # Track when streaming starts
                     stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
                     try:
-                        # Provide config with thread_id only (Summary agent uses embedded_state only, no REST API)
-                        config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
+                        # Pass tableau_client and max_rows in configurable (not state - state gets checkpointed, TableauClient isn't picklable)
+                        config = {
+                            "configurable": {
+                                "thread_id": f"summary-{request.conversation_id}",
+                                "tableau_client": tableau_client,
+                                "max_rows": max_rows,
+                            }
+                        }
                         async for state_update in graph.astream(initial_state, config=config):
                             # LangGraph astream returns updates keyed by node name
                             # Each update contains the state dictionary for that node
@@ -1789,8 +1804,14 @@ async def send_message(
                 )
             else:
                 # Non-streaming: execute graph and return result
-                # Provide config with thread_id only (Summary agent uses embedded_state only, no REST API)
-                config = {"configurable": {"thread_id": f"summary-{request.conversation_id}"}}
+                # Pass tableau_client and max_rows in configurable (not state - state gets checkpointed, TableauClient isn't picklable)
+                config = {
+                    "configurable": {
+                        "thread_id": f"summary-{request.conversation_id}",
+                        "tableau_client": tableau_client,
+                        "max_rows": max_rows,
+                    }
+                }
                 final_state = await graph.ainvoke(initial_state, config=config)
                 execution_time = time.time() - execution_start
                 

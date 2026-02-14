@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     APPLE_ENDOR_API_KEY: str = ""
     APPLE_ENDOR_ENDPOINT: str = ""
     
+    # Logging (set LOG_DIR=/app/logs in Docker so logs write to mounted volume)
+    LOG_DIR: Optional[str] = None
+
     # MCP Server
     MCP_SERVER_NAME: str = "tableau-ai-demo-mcp"
     MCP_TRANSPORT: str = "stdio"  # stdio or sse
