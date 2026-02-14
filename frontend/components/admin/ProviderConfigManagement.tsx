@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Pencil, Trash2, Plus, X } from 'lucide-react';
+import { Pencil, Trash2, Plus, X, Play } from 'lucide-react';
 import { extractErrorMessage } from '@/lib/utils';
 
 const PROVIDER_TYPES = [
@@ -25,6 +25,8 @@ export function ProviderConfigManagement() {
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingConfigId, setEditingConfigId] = useState<number | null>(null);
+  const [testingConfigId, setTestingConfigId] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<{ configId: number; success: boolean; message: string } | null>(null);
   const [formData, setFormData] = useState<ProviderConfigCreate>({
     name: '',
     provider_type: 'openai',
@@ -42,6 +44,7 @@ export function ProviderConfigManagement() {
     apple_endor_other_app: undefined,
     apple_endor_context: '',
     apple_endor_one_time_token: false,
+    apple_endor_verify_ssl: true,
   });
 
   useEffect(() => {
@@ -79,6 +82,7 @@ export function ProviderConfigManagement() {
       apple_endor_other_app: undefined,
       apple_endor_context: '',
       apple_endor_one_time_token: false,
+      apple_endor_verify_ssl: true,
     });
     setEditingConfigId(null);
     setShowCreateForm(false);
@@ -102,6 +106,7 @@ export function ProviderConfigManagement() {
       apple_endor_other_app: config.apple_endor_other_app || undefined,
       apple_endor_context: config.apple_endor_context || '',
       apple_endor_one_time_token: config.apple_endor_one_time_token || false,
+      apple_endor_verify_ssl: config.apple_endor_verify_ssl ?? true,
     });
     setEditingConfigId(config.id);
     setShowCreateForm(true);
@@ -119,8 +124,12 @@ export function ProviderConfigManagement() {
           return;
         }
       } else if (formData.provider_type === 'apple_endor') {
-        if (!formData.apple_endor_app_id || !formData.apple_endor_app_password) {
-          setError('App ID and App Password are required for Endor');
+        if (!formData.apple_endor_app_id) {
+          setError('App ID is required for Endor');
+          return;
+        }
+        if (!editingConfigId && !formData.apple_endor_app_password) {
+          setError('App Password is required when creating a new Endor config');
           return;
         }
       } else if (formData.provider_type === 'salesforce') {
@@ -154,6 +163,7 @@ export function ProviderConfigManagement() {
           apple_endor_other_app: formData.apple_endor_other_app || undefined,
           apple_endor_context: formData.apple_endor_context || undefined,
           apple_endor_one_time_token: formData.apple_endor_one_time_token || undefined,
+          apple_endor_verify_ssl: formData.apple_endor_verify_ssl ?? true,
         };
         await adminApi.updateProviderConfig(editingConfigId, updateData);
       } else {
@@ -164,6 +174,26 @@ export function ProviderConfigManagement() {
       loadConfigs();
     } catch (err: unknown) {
       setError(extractErrorMessage(err, `Failed to ${editingConfigId ? 'update' : 'create'} configuration`));
+    }
+  };
+
+  const handleTestConfig = async (config: ProviderConfigResponse) => {
+    try {
+      setTestingConfigId(config.id);
+      setTestResult(null);
+      const result = await adminApi.testProviderConfig(config.id);
+      const msg = result.error
+        ? `Fetched ${result.count} models (warning: ${result.error})`
+        : `Success: ${result.count} model(s) available`;
+      setTestResult({ configId: config.id, success: result.count > 0, message: msg });
+    } catch (err: unknown) {
+      setTestResult({
+        configId: config.id,
+        success: false,
+        message: extractErrorMessage(err, 'Connection test failed'),
+      });
+    } finally {
+      setTestingConfigId(null);
     }
   };
 
@@ -426,6 +456,23 @@ export function ProviderConfigManagement() {
                     </p>
                   </div>
                   <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        id="apple_endor_verify_ssl"
+                        type="checkbox"
+                        checked={formData.apple_endor_verify_ssl !== false}
+                        onChange={(e) => setFormData({ ...formData, apple_endor_verify_ssl: e.target.checked })}
+                        className="h-4 w-4"
+                      />
+                      <Label htmlFor="apple_endor_verify_ssl" className="cursor-pointer">
+                        Verify SSL (idmsac.corp.apple.com)
+                      </Label>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Uncheck if corp certs are not in the default trust store
+                    </p>
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="apple_endor_endpoint">Endpoint URL</Label>
                     <Input
                       id="apple_endor_endpoint"
@@ -484,7 +531,20 @@ export function ProviderConfigManagement() {
                   </span>
                 </td>
                 <td className="px-4 py-2">
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleTestConfig(config)}
+                      disabled={testingConfigId !== null}
+                      title="Test Connection"
+                    >
+                      {testingConfigId === config.id ? (
+                        <span className="animate-pulse">...</span>
+                      ) : (
+                        <Play className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -501,6 +561,11 @@ export function ProviderConfigManagement() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
+                    {testResult?.configId === config.id && (
+                      <span className={`text-sm ${testResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                        {testResult.message}
+                      </span>
+                    )}
                   </div>
                 </td>
               </tr>

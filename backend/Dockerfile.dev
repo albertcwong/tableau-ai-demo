@@ -18,11 +18,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY alembic.ini .
 COPY alembic/ ./alembic/
 COPY pytest.ini .
+COPY scripts/ ./scripts/
 
 # Create directories for mounts
 RUN mkdir -p /app/app /app/mcp_server /app/credentials /app/logs
+RUN chmod +x /app/scripts/start.sh
 
 EXPOSE 8000
 
-# Hot reload - watch app/ and mcp_server/ (mounted volumes)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Run migrations then start uvicorn
+CMD ["/app/scripts/start.sh", "--reload"]

@@ -137,8 +137,9 @@ async def chat_completions(
         context = resolve_context(request.model, request.provider)
         logger.info(f"Resolved context: provider={context.provider}, auth_type={context.auth_type}, model_name={context.model_name}, endpoint={context.endpoint}")
         
-        # Get authenticator and token
+        # Get authenticator and token; request_verify_ssl for outbound HTTP (Endor corp certs)
         app_id = None  # For Endor
+        request_verify_ssl = True
         if context.auth_type == "direct":
             authenticator = DirectAuthenticator()
             token = await authenticator.get_token(authorization, context, db=db)
@@ -174,11 +175,15 @@ async def chat_completions(
                 other_app=endor_config.apple_endor_other_app,
                 context=endor_config.apple_endor_context,
                 one_time_token=endor_config.apple_endor_one_time_token or False,
+                verify_ssl=getattr(endor_config, 'apple_endor_verify_ssl', None),
                 db=db
             )
             # Use optional frontend-passed A3 token, or generate from app_id+app_password
             token = await authenticator.get_token(authorization, context, optional_a3_token=x_apple_idms_a3_token)
             app_id = authenticator.get_app_id()
+            request_verify_ssl = getattr(endor_config, 'apple_endor_verify_ssl', None)
+            if request_verify_ssl is None:
+                request_verify_ssl = getattr(settings, "APPLE_ENDOR_VERIFY_SSL", True)
         else:
             raise HTTPException(
                 status_code=400,
@@ -214,7 +219,7 @@ async def chat_completions(
         if request.stream:
             # Streaming response
             async def generate_stream():
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                async with httpx.AsyncClient(timeout=60.0, verify=request_verify_ssl) as client:
                     async with client.stream(
                         "POST",
                         url,
@@ -267,7 +272,7 @@ async def chat_completions(
             )
         else:
             # Non-streaming response
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=60.0, verify=request_verify_ssl) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 response_data = response.json()
@@ -287,7 +292,19 @@ async def chat_completions(
     except httpx.HTTPStatusError as e:
         error_text = e.response.text
         logger.error(f"Provider API error: {e.response.status_code} - {error_text}")
-        
+        if "contents cannot be empty" in error_text:
+            try:
+                summary = []
+                for m in payload.get("messages", []):
+                    r = m.get("role")
+                    if m.get("contents"):
+                        t = (m["contents"][0].get("text", "")) if m["contents"] else ""
+                        summary.append({"role": r, "len": len(t)})
+                    else:
+                        summary.append({"role": r, "len": len(m.get("tool_result", ""))})
+                logger.info(f"Endor payload on 'contents empty' error: {summary}")
+            except Exception:
+                pass
         # Check if it's a function calling error
         if "functions is not supported" in error_text.lower() or "function calling" in error_text.lower():
             # Try to parse the error to get model name
@@ -642,7 +659,7 @@ async def fetch_vertex_models(authorization: Optional[str] = None) -> list[str]:
     return sorted(known_models)
 
 
-async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[Session] = None, optional_a3_token: Optional[str] = None) -> list[str]:
+async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[Session] = None, optional_a3_token: Optional[str] = None, config_id: Optional[int] = None) -> list[str]:
     """
     Fetch models from Endor API.
     
@@ -668,10 +685,13 @@ async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[S
     
     try:
         # Get Endor config from database (Admin Console)
-        provider_config = db.query(ProviderConfig).filter(
+        query = db.query(ProviderConfig).filter(
             ProviderConfig.provider_type == "apple_endor",
             ProviderConfig.is_active == True
-        ).first()
+        )
+        if config_id:
+            query = query.filter(ProviderConfig.id == config_id)
+        provider_config = query.first()
         
         if not provider_config:
             all_endor = db.query(ProviderConfig).filter(
@@ -689,18 +709,24 @@ async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[S
         
         if not provider_config.apple_endor_app_id:
             raise ValueError("Endor App ID not configured")
+        if not provider_config.apple_endor_app_password or not str(provider_config.apple_endor_app_password).strip():
+            raise ValueError(
+                "Endor App Password not configured. Edit this config and enter the App Password, then save."
+            )
         
         from app.services.gateway.auth.endor import EndorAuthenticator
+        from app.services.gateway.router import ProviderContext
         authenticator = EndorAuthenticator(
             app_id=provider_config.apple_endor_app_id,
             app_password=provider_config.apple_endor_app_password,
             other_app=provider_config.apple_endor_other_app,
             context=provider_config.apple_endor_context,
             one_time_token=provider_config.apple_endor_one_time_token or False,
+            verify_ssl=getattr(provider_config, 'apple_endor_verify_ssl', None),
             db=db
         )
-        
-        a3_token = await authenticator.get_token(optional_a3_token=optional_a3_token)
+        ctx = ProviderContext(provider="apple", auth_type="endor_a3", model_name="", config_id=provider_config.id)
+        a3_token = await authenticator.get_token(optional_a3_token=optional_a3_token, context=ctx)
         app_id = authenticator.get_app_id()
         
         # Validate token and app_id before request
@@ -721,9 +747,13 @@ async def fetch_endor_models(authorization: Optional[str] = None, db: Optional[S
             "X-Apple-IDMS-A3-Token": token_str
         }
         
-        logger.info(f"Fetching Endor models from {url} (app_id={app_id_str[:8]}..., token_len={len(token_str)})")
+        verify_ssl = getattr(provider_config, 'apple_endor_verify_ssl', None)
+        if verify_ssl is None:
+            from app.core.config import settings
+            verify_ssl = getattr(settings, "APPLE_ENDOR_VERIFY_SSL", True)
+        logger.info(f"Fetching Endor models from {url} (app_id={app_id_str[:8]}..., token_len={len(token_str)}, verify_ssl={verify_ssl})")
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
             try:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()

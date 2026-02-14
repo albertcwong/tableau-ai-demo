@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import httpx
+from app.core.config import settings
 from app.services.gateway.router import ProviderContext
 from app.services.gateway.cache import token_cache
 from app.models.user import ProviderConfig
@@ -25,6 +26,7 @@ class EndorAuthenticator:
         other_app: Optional[int] = None,
         context: Optional[str] = None,
         one_time_token: bool = False,
+        verify_ssl: Optional[bool] = None,
         db: Optional[Session] = None
     ):
         """Initialize Endor authenticator.
@@ -42,6 +44,7 @@ class EndorAuthenticator:
         self.other_app = other_app or 199323
         self.context = context or "endor"
         self.one_time_token = one_time_token
+        self.verify_ssl = verify_ssl  # From ProviderConfig; None = use settings
         self.db = db
         self.idms_token_url = "https://idmsac.corp.apple.com/auth/apptoapp/token/generate"
     
@@ -82,6 +85,8 @@ class EndorAuthenticator:
                 self.context = config.apple_endor_context
             if config.apple_endor_one_time_token is not None:
                 self.one_time_token = config.apple_endor_one_time_token
+            if hasattr(config, 'apple_endor_verify_ssl') and config.apple_endor_verify_ssl is not None:
+                self.verify_ssl = config.apple_endor_verify_ssl
             
             return True
         except Exception as e:
@@ -119,14 +124,18 @@ class EndorAuthenticator:
             "oneTimeToken": self.one_time_token
         }
         
-        logger.info(f"Generating A3 token for App ID: {app_id_str[:10]}...")
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        pw_len = len(app_password_str) if app_password_str else 0
+        logger.info(f"Generating A3 token for App ID: {app_id_str[:10]}... (password len={pw_len})")
+        verify_ssl = self.verify_ssl if self.verify_ssl is not None else getattr(settings, "APPLE_ENDOR_VERIFY_SSL", True)
+        async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
             response = await client.post(
                 self.idms_token_url,
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
+            if response.status_code == 401:
+                err_body = response.text[:300] if response.text else ""
+                logger.error(f"IDMS 401: app_id prefix={app_id_str[:8]}..., password_len={pw_len}, body={err_body}")
             response.raise_for_status()
             token_data = response.json()
             

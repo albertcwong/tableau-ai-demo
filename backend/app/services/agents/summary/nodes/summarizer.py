@@ -171,21 +171,10 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
 
         model = state.get("model", "gpt-4")
         provider = state.get("provider", "openai")
-        has_vision = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "claude", "vision"])
-
-        if view_images and not has_vision:
-            return {
-                **state,
-                "error": "Image analysis requires a vision-capable model (e.g. gpt-4o, claude-3). Please switch model.",
-                "final_answer": "Image analysis requires a vision-capable model.",
-                "executive_summary": None,
-                "detailed_analysis": None,
-                "current_thought": None,
-            }
 
         ai_client = UnifiedAIClient(gateway_url=settings.BACKEND_API_URL)
 
-        if view_images and has_vision:
+        if view_images:
             user_content = [{"type": "text", "text": user_message + "\n\n" + view_data_str}]
             for view_id, b64 in view_images.items():
                 name = views_metadata.get(view_id, {}).get("name", view_id)

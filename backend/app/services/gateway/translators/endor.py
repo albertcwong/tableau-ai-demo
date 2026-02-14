@@ -1,4 +1,5 @@
 """Endor translator - transforms to/from Endor native format."""
+import json
 import logging
 from typing import Dict, Any, Tuple, Optional
 from app.services.gateway.translators.base import BaseTranslator
@@ -73,6 +74,7 @@ class EndorTranslator(BaseTranslator):
         }
         if tools:
             payload["tool_config"] = {"tools": tools}
+        logger.debug(f"Endor payload: {len(endor_messages)} msgs, roles={[m.get('role') for m in endor_messages]}")
         
         # Headers - will be augmented with A3 token by authenticator
         if stream:
@@ -90,18 +92,50 @@ class EndorTranslator(BaseTranslator):
         return url, payload, headers
     
     def _messages_to_endor_format(self, messages: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
-        """Convert OpenAI messages to Endor format with contents array."""
+        """Convert OpenAI messages to Endor format. Endor uses 'tool' role with tool_result field."""
         out = []
-        for msg in messages:
-            content = msg.get("content", "")
+        _empty = "."  # Endor rejects empty contents; use non-whitespace placeholder
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "user")
+            content = msg.get("content")
+            if content is None:
+                content = ""
             if isinstance(content, list):
-                text = "".join(
-                    c.get("text", "") if isinstance(c, dict) else str(c)
-                    for c in content
-                )
+                parts = []
+                for c in content:
+                    if isinstance(c, dict):
+                        parts.append(c.get("text") or c.get("content") or "")
+                    else:
+                        parts.append(str(c))
+                text = "".join(str(p) for p in parts)
             else:
-                text = str(content)
-            out.append({"role": msg.get("role", "user"), "contents": [{"text": text}]})
+                text = str(content) if content is not None else ""
+            text = (text or "").strip()
+            # For assistant with tool_calls or function_call and empty content: synthesize from tool/function name
+            if not text and role == "assistant":
+                if msg.get("tool_calls"):
+                    names = [tc.get("function", {}).get("name", "") for tc in msg["tool_calls"] if tc.get("function")]
+                    text = "Calling " + ", ".join(n for n in names if n) or _empty
+                elif msg.get("function_call"):
+                    fc = msg["function_call"]
+                    name = fc.get("name", "") if isinstance(fc, dict) else ""
+                    if not name and isinstance(fc, str):
+                        try:
+                            fc_obj = json.loads(fc)
+                            name = fc_obj.get("name", "")
+                        except Exception:
+                            pass
+                    text = f"Calling {name}" if name else _empty
+            orig_empty = not text
+            text = text or _empty
+            if orig_empty:
+                logger.info(f"Endor msg[{i}] role={role} had empty content, synthesized/placeholder len={len(text)}")
+            if role == "function":
+                out.append({"role": "tool", "tool_result": text})
+            elif role == "tool":
+                out.append({"role": "tool", "tool_result": text})
+            else:
+                out.append({"role": role, "contents": [{"text": text}]})
         return out
 
     def normalize_response(
@@ -112,13 +146,11 @@ class EndorTranslator(BaseTranslator):
         """
         Normalize Endor response to OpenAI-compatible format.
         
-        Endor format:
+        Endor non-streaming format:
         {
-            "model": "...",
-            "id": "...",
-            "created": ...,
-            "object": "text_completion",
-            "choices": [{"index": 0, "text": "...", "logprobs": null}]
+            "generation_id": "...",
+            "choices": [{"index": 0, "message": {"role": "assistant", "text": "..."}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
         }
         
         OpenAI format:
@@ -138,31 +170,47 @@ class EndorTranslator(BaseTranslator):
         Returns:
             OpenAI-compatible response dict
         """
-        # Extract Endor fields
+        # Endor non-streaming: generation_id, choices[].message.text, usage
+        response_id = response.get("generation_id") or response.get("id", "")
         model = response.get("model", "")
-        response_id = response.get("id", "")
         created = response.get("created", 0)
         choices = response.get("choices", [])
+        usage = response.get("usage", {})
         
-        # Convert choices from Endor format to OpenAI format
-        # Chat completions: choice.message.text, choice.message.reasoning_content
-        # Plain completions: choice.text
         openai_choices = []
         for choice in choices:
             msg = choice.get("message", {})
             text = msg.get("text", "") or msg.get("content", "") or choice.get("text", "")
             text = text or msg.get("reasoning_content", "")
             index = choice.get("index", 0)
-            openai_choices.append({
-                "index": index,
-                "message": {
-                    "role": "assistant",
-                    "content": text
-                },
-                "finish_reason": "stop"
-            })
+            finish_reason = choice.get("finish_reason", "stop")
+            # Build normalized message - include tool_calls when present (Endor may use tool_calls or tool_invocation)
+            norm_msg: Dict[str, Any] = {"role": "assistant", "content": text}
+            tool_calls = msg.get("tool_calls") or msg.get("tool_invocation") or msg.get("tool_invocations")
+            if finish_reason == "tool_calls" or tool_calls:
+                if not tool_calls:
+                    logger.warning(f"Endor finish_reason=tool_calls but no tool_calls in message. msg_keys={list(msg.keys())}")
+                elif isinstance(tool_calls, list) and tool_calls:
+                    # OpenAI format: [{id, type, function: {name, arguments}}]
+                    norm_msg["tool_calls"] = [
+                        {
+                            "id": tc.get("id", f"call_{i}"),
+                            "type": tc.get("type", "function"),
+                            "function": tc.get("function", {"name": tc.get("name", ""), "arguments": tc.get("arguments", "{}")})
+                            if isinstance(tc.get("function"), dict) else {"name": tc.get("name", ""), "arguments": tc.get("arguments", "{}")}
+                        }
+                        for i, tc in enumerate(tool_calls)
+                    ]
+                    logger.info(f"Endor normalize: forwarding {len(norm_msg['tool_calls'])} tool_calls")
+                elif isinstance(tool_calls, dict):
+                    # Single tool call as dict
+                    fn = tool_calls.get("function", tool_calls)
+                    name = fn.get("name", "") if isinstance(fn, dict) else tool_calls.get("name", "")
+                    args = fn.get("arguments", "{}") if isinstance(fn, dict) else tool_calls.get("arguments", "{}")
+                    norm_msg["tool_calls"] = [{"id": "call_0", "type": "function", "function": {"name": name, "arguments": args if isinstance(args, str) else json.dumps(args)}}]
+                    logger.info(f"Endor normalize: forwarding 1 tool_call (dict format): {name}")
+            openai_choices.append({"index": index, "message": norm_msg, "finish_reason": finish_reason})
         
-        # Build OpenAI-compatible response
         return {
             "id": response_id,
             "object": "chat.completion",
@@ -170,9 +218,9 @@ class EndorTranslator(BaseTranslator):
             "model": model,
             "choices": openai_choices,
             "usage": {
-                "prompt_tokens": 0,  # Endor doesn't provide token counts
-                "completion_tokens": 0,
-                "total_tokens": 0
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0)
             }
         }
     

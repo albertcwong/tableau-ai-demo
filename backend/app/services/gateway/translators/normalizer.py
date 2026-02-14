@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from app.services.gateway.translators.openai import OpenAITranslator
 from app.services.gateway.translators.salesforce import SalesforceTranslator
 from app.services.gateway.translators.vertex import VertexTranslator
+from app.services.gateway.translators.endor import EndorTranslator
 from app.services.gateway.router import ProviderContext
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ def normalize_response(
         translator = SalesforceTranslator()
     elif provider == "vertex":
         translator = VertexTranslator()
+    elif provider in ("apple", "endor"):
+        translator = EndorTranslator()
     else:
         logger.warning(f"Unknown provider {provider}, using OpenAI translator")
         translator = OpenAITranslator()
@@ -73,6 +76,8 @@ def normalize_stream_chunk(
         translator = SalesforceTranslator()
     elif provider == "vertex":
         translator = VertexTranslator()
+    elif provider in ("apple", "endor"):
+        translator = EndorTranslator()
     else:
         logger.warning(f"Unknown provider {provider}, using OpenAI translator")
         translator = OpenAITranslator()

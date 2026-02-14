@@ -175,7 +175,7 @@ Your action: Use filter with ["Houston", "Philadelphia", "Seattle"]"""
             
             # Check if model requires new tools format (instead of old functions format)
             # Newer models (gpt-4o, gpt-4-turbo, gpt-5, etc.) use tools format
-            use_tools_format = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "o1", "o3"])
+            use_tools_format = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "o1", "o3", "endor", "gemini"])
             
             # Track reasoning: what the LLM is thinking
             if tool_calls_made:

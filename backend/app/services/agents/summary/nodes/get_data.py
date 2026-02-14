@@ -37,6 +37,9 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 "view_images": {},
             }
 
+        emb_status = {k: {"has_data": bool(v.get("summary_data") or v.get("sheets_data")), "capture_error": v.get("capture_error")} for k, v in (embedded_state or {}).items()}
+        logger.info(f"get_data START view_ids={view_ids} embedded_keys={list(embedded_state.keys())} emb_status={emb_status}")
+
         # Include embedded_state keys for tool validation
         all_view_ids = list(set(view_ids + [_sanitize_view_id(k) for k in embedded_state]))
 
@@ -46,8 +49,10 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
             try:
                 tableau_client = TableauClient()
                 await tableau_client._ensure_authenticated()
+                logger.info("get_data tableau_client created")
             except Exception as e:
                 logger.warning(f"TableauClient init failed: {e}")
+        logger.info(f"get_data tableau_client={'present' if tableau_client else 'MISSING'}")
 
         tools = SummaryTools(
             embedded_state=embedded_state,
@@ -77,10 +82,57 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 logger.info(f"Pre-populated views_data from embedded_state for view {vid} ({len(vd)} sheet(s))")
 
         views_needing_data = [v for v in view_ids if not _has_data_for_view(v)]
+        logger.info(f"get_data after_embedded views_data_keys={list(views_data.keys())} views_needing_data={views_needing_data}")
         if not views_needing_data:
             thought = f"Retrieved data for {len(views_data)} view(s) from embedded state."
             return {**state, "views_data": views_data, "views_metadata": views_metadata, "view_images": view_images, "current_thought": thought}
 
+        # Views not on canvas or capture failed: fetch via REST (per rest_api_view_summary_fallback)
+        def _not_on_canvas(vid: str) -> bool:
+            emb = embedded_state.get(vid) or embedded_state.get(_sanitize_view_id(vid))
+            return not emb or bool(emb.get("capture_error"))
+
+        rest_candidates = [v for v in views_needing_data if _not_on_canvas(v)]
+        logger.info(f"get_data REST_fallback candidates={rest_candidates} tableau_client={'yes' if tableau_client else 'no'}")
+        for vid in rest_candidates:
+            if not tableau_client:
+                logger.info("get_data REST_fallback skipped: no tableau_client")
+                break
+            cid = _sanitize_view_id(vid)
+            try:
+                meta = await tools._query_view_metadata(cid)
+                logger.info(f"get_data REST_fallback {vid} query_view_metadata={meta}")
+                if "error" in meta:
+                    logger.info(f"get_data REST_fallback {vid} meta error, skip")
+                    continue
+                vt = meta.get("view_type", "worksheet")
+                if vt == "dashboard":
+                    res = await tools._get_exported_image(cid, None, None)
+                    logger.info(f"get_data REST_fallback {vid} get_exported_image has_error={bool(res.get('error'))} has_b64={bool(res.get('image_base64'))}")
+                    if "error" not in res and res.get("image_base64"):
+                        view_images[cid] = res["image_base64"]
+                        views_metadata[cid] = views_metadata.get(cid) or {"id": cid, "name": meta.get("name", cid)}
+                else:
+                    res = await tools._get_rest_summary_data(cid)
+                    logger.info(f"get_data REST_fallback {vid} get_rest_summary_data has_error={bool(res.get('error'))} has_sheets={bool(res.get('sheets'))} has_data={bool(res.get('data'))}")
+                    if "error" not in res:
+                        if "sheets" in res:
+                            for k, d in res["sheets"].items():
+                                views_data[k] = {"columns": d.get("columns", []), "data": d.get("data", []), "row_count": d.get("row_count", 0)}
+                                views_metadata[k] = {"id": k, "name": d.get("name", k)}
+                        else:
+                            views_data[cid] = {"columns": res.get("columns", []), "data": res.get("data", []), "row_count": res.get("row_count", 0)}
+                            views_metadata[cid] = {"id": cid, "name": res.get("name", cid)}
+                logger.info(f"REST fallback for {vid} ({vt})")
+            except Exception as e:
+                logger.warning(f"REST fallback failed for {vid}: {e}")
+        views_needing_data = [v for v in views_needing_data if not _has_data_for_view(v)]
+        logger.info(f"get_data after_REST views_data_keys={list(views_data.keys())} view_images_keys={list(view_images.keys())} views_needing_data={views_needing_data}")
+        if not views_needing_data:
+            thought = f"Retrieved data for {len(views_data) + len(view_images)} view(s) via REST."
+            return {**state, "views_data": views_data, "views_metadata": views_metadata, "view_images": view_images, "current_thought": thought}
+
+        logger.info(f"get_data entering LLM loop for views_needing_data={views_needing_data}")
         system_prompt = prompt_registry.get_prompt("agents/summary/get_data.txt")
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -96,7 +148,7 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
 
         model = state.get("model", "gpt-4")
         provider = state.get("provider", "openai")
-        use_tools_format = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "o1", "o3", "claude"])
+        use_tools_format = model and any(x in model.lower() for x in ["gpt-4o", "gpt-4-turbo", "gpt-5", "o1", "o3", "claude", "endor", "gemini"])
         tool_defs = tools.get_tool_definitions()
         tools_payload = [{"type": "function", "function": f} for f in tool_defs] if use_tools_format else tool_defs
 
@@ -104,8 +156,12 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         tool_calls_made = []
         iteration = 0
 
+        def _msg_summary(msgs):
+            return [{"role": m.get("role"), "len": len(str(m.get("content", ""))), "has_tc": bool(m.get("tool_calls")), "has_fc": bool(m.get("function_call"))} for m in msgs]
+
         while iteration < MAX_ITERATIONS:
             iteration += 1
+            logger.info(f"get_data iter={iteration} provider={provider} model={model} use_tools={use_tools_format} msgs={_msg_summary(messages)}")
             try:
                 if use_tools_format:
                     response = await ai_client.chat(
@@ -124,10 +180,11 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                         function_call="auto",
                     )
             except Exception as e:
-                logger.error(f"LLM call failed: {e}", exc_info=True)
+                logger.error(f"get_data iter={iteration} LLM call failed: {e}", exc_info=True)
                 return {**state, "error": str(e), "views_data": views_data, "views_metadata": views_metadata, "view_images": view_images}
 
             if not response.function_call:
+                logger.info(f"get_data iter={iteration} LLM returned NO function_call, breaking")
                 break
 
             tool_name = response.function_call.name
@@ -143,6 +200,7 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 result = {"error": str(e)}
 
             tool_calls_made.append({"tool": tool_name, "arguments": args, "result": result})
+            logger.info(f"get_data iter={iteration} tool={tool_name} view_id={view_id} has_error={bool(result.get('error'))}")
 
             if tool_name in ("get_embed_data", "get_rest_summary_data") and "error" not in result:
                 if "sheets" in result:
@@ -183,13 +241,17 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
 
             has_all = all(_has_data_for_view(vid) for vid in view_ids) if view_ids else False
             if has_all and (views_data or view_images):
+                logger.info(f"get_data iter={iteration} has_all=True, breaking")
                 break
 
+        logger.info(f"get_data EXIT iter={iteration} views_data={bool(views_data)} view_images={bool(view_images)} tool_calls_count={len(tool_calls_made)}")
         if not views_data and not view_images:
             if tool_calls_made:
                 last = tool_calls_made[-1]
                 if "error" in last.get("result", {}):
+                    logger.info(f"get_data returning last_tool_error: {last['result']['error']}")
                     return {**state, "error": last["result"]["error"], "views_data": {}, "views_metadata": {}, "view_images": {}, "tool_calls": tool_calls_made}
+            logger.info("get_data returning generic 'No view data' (no tool_calls or last had no error)")
             return {**state, "error": "No view data available. Ensure embedded capture completed or the view is visible.", "views_data": {}, "views_metadata": {}, "view_images": {}, "tool_calls": tool_calls_made}
 
         thought = f"Retrieved data for {len(views_data) + len(view_images)} view(s)" if (views_data or view_images) else "Retrieving view data..."

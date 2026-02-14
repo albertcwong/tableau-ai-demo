@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # Apple Endor
     APPLE_ENDOR_API_KEY: str = ""
     APPLE_ENDOR_ENDPOINT: str = ""
+    APPLE_ENDOR_VERIFY_SSL: bool = True  # Set False if idmsac.corp.apple.com uses corp certs not in default trust store
     
     # Logging (set LOG_DIR=/app/logs in Docker so logs write to mounted volume)
     LOG_DIR: Optional[str] = None

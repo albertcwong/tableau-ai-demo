@@ -177,6 +177,7 @@ class ProviderConfigCreate(BaseModel):
     apple_endor_other_app: Optional[int] = None
     apple_endor_context: Optional[str] = None
     apple_endor_one_time_token: Optional[bool] = None
+    apple_endor_verify_ssl: Optional[bool] = None
 
 
 class ProviderConfigUpdate(BaseModel):
@@ -197,6 +198,7 @@ class ProviderConfigUpdate(BaseModel):
     apple_endor_other_app: Optional[int] = None
     apple_endor_context: Optional[str] = None
     apple_endor_one_time_token: Optional[bool] = None
+    apple_endor_verify_ssl: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -222,6 +224,7 @@ class ProviderConfigResponse(BaseModel):
     apple_endor_other_app: Optional[int] = None
     apple_endor_context: Optional[str] = None
     apple_endor_one_time_token: Optional[bool] = None
+    apple_endor_verify_ssl: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -791,10 +794,11 @@ async def list_provider_configs(
         vertex_service_account_path=c.vertex_service_account_path,
         apple_endor_endpoint=c.apple_endor_endpoint,
         apple_endor_app_id=c.apple_endor_app_id,
-        apple_endor_app_password=c.apple_endor_app_password,
+        apple_endor_app_password=None,  # Never expose in list
         apple_endor_other_app=c.apple_endor_other_app,
         apple_endor_context=c.apple_endor_context,
         apple_endor_one_time_token=c.apple_endor_one_time_token,
+        apple_endor_verify_ssl=getattr(c, 'apple_endor_verify_ssl', None),
     ) for c in configs]
 
 
@@ -834,6 +838,7 @@ async def create_provider_config(
         apple_endor_other_app=config_data.apple_endor_other_app,
         apple_endor_context=config_data.apple_endor_context,
         apple_endor_one_time_token=config_data.apple_endor_one_time_token,
+        apple_endor_verify_ssl=config_data.apple_endor_verify_ssl,
         is_active=True,
         created_by=current_user.id
     )
@@ -858,10 +863,11 @@ async def create_provider_config(
         vertex_service_account_path=new_config.vertex_service_account_path,
         apple_endor_endpoint=new_config.apple_endor_endpoint,
         apple_endor_app_id=new_config.apple_endor_app_id,
-        apple_endor_app_password=new_config.apple_endor_app_password,
+        apple_endor_app_password=None,  # Never expose
         apple_endor_other_app=new_config.apple_endor_other_app,
         apple_endor_context=new_config.apple_endor_context,
         apple_endor_one_time_token=new_config.apple_endor_one_time_token,
+        apple_endor_verify_ssl=getattr(new_config, 'apple_endor_verify_ssl', None),
     )
 
 
@@ -895,10 +901,11 @@ async def get_provider_config(
         vertex_service_account_path=config.vertex_service_account_path,
         apple_endor_endpoint=config.apple_endor_endpoint,
         apple_endor_app_id=config.apple_endor_app_id,
-        apple_endor_app_password=config.apple_endor_app_password,
+        apple_endor_app_password=None,  # Never expose
         apple_endor_other_app=config.apple_endor_other_app,
         apple_endor_context=config.apple_endor_context,
         apple_endor_one_time_token=config.apple_endor_one_time_token,
+        apple_endor_verify_ssl=getattr(config, 'apple_endor_verify_ssl', None),
     )
 
 
@@ -949,7 +956,8 @@ async def update_provider_config(
         config.apple_endor_endpoint = config_data.apple_endor_endpoint
     if config_data.apple_endor_app_id is not None:
         config.apple_endor_app_id = config_data.apple_endor_app_id
-    if config_data.apple_endor_app_password is not None:
+    # Only update password when a non-empty value is provided (empty string = keep existing)
+    if config_data.apple_endor_app_password is not None and str(config_data.apple_endor_app_password).strip():
         config.apple_endor_app_password = config_data.apple_endor_app_password
     if config_data.apple_endor_other_app is not None:
         config.apple_endor_other_app = config_data.apple_endor_other_app
@@ -957,6 +965,8 @@ async def update_provider_config(
         config.apple_endor_context = config_data.apple_endor_context
     if config_data.apple_endor_one_time_token is not None:
         config.apple_endor_one_time_token = config_data.apple_endor_one_time_token
+    if config_data.apple_endor_verify_ssl is not None:
+        config.apple_endor_verify_ssl = config_data.apple_endor_verify_ssl
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
     
@@ -980,10 +990,11 @@ async def update_provider_config(
         vertex_service_account_path=config.vertex_service_account_path,
         apple_endor_endpoint=config.apple_endor_endpoint,
         apple_endor_app_id=config.apple_endor_app_id,
-        apple_endor_app_password=config.apple_endor_app_password,
+        apple_endor_app_password=None,  # Never expose
         apple_endor_other_app=config.apple_endor_other_app,
         apple_endor_context=config.apple_endor_context,
         apple_endor_one_time_token=config.apple_endor_one_time_token,
+        apple_endor_verify_ssl=getattr(config, 'apple_endor_verify_ssl', None),
     )
 
 
@@ -1003,6 +1014,32 @@ async def delete_provider_config(
     
     config.is_active = False
     safe_commit(db)
+
+
+@router.get("/admin/provider-configs/{config_id}/test")
+async def test_provider_config(
+    config_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Test a specific provider config by fetching models. Uses the exact config (e.g. verify_ssl for Endor)."""
+    config = db.query(ProviderConfig).filter(ProviderConfig.id == config_id).first()
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configuration not found")
+    provider_type = get_provider_type_value(config.provider_type)
+    try:
+        if provider_type == "apple_endor":
+            from app.services.gateway.api import fetch_endor_models
+            models = await fetch_endor_models(db=db, config_id=config_id)
+        else:
+            from app.services.gateway.api import fetch_models_from_provider
+            provider = "apple" if provider_type == "apple_endor" else provider_type
+            api_key = config.api_key if hasattr(config, "api_key") else None
+            models = await fetch_models_from_provider(provider, api_key, db)
+        return {"models": sorted(models), "count": len(models)}
+    except Exception as e:
+        logger.exception(f"Provider config test failed for config_id={config_id}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
 
 # Feedback management models

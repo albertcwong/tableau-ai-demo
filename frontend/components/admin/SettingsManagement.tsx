@@ -23,7 +23,6 @@ export function SettingsManagement() {
     mcp_log_level: '',
     redis_token_ttl: undefined as number | undefined,
   });
-
   useEffect(() => {
     loadConfig();
   }, []);

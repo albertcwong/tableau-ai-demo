@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node server.js",
+    "dev": "node dev-server.js",
     "dev:http": "next dev",
     "dev:http-only": "USE_HTTP_ONLY=1 node server.js",
     "dev:https": "next dev --experimental-https --experimental-https-key ./localhost-key.pem --experimental-https-cert ./localhost.pem -H 0.0.0.0",

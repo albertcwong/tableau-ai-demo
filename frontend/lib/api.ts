@@ -1134,6 +1134,7 @@ export interface ProviderConfigCreate {
   apple_endor_other_app?: number;
   apple_endor_context?: string;
   apple_endor_one_time_token?: boolean;
+  apple_endor_verify_ssl?: boolean;
 }
 
 export interface ProviderConfigUpdate {
@@ -1153,6 +1154,7 @@ export interface ProviderConfigUpdate {
   apple_endor_other_app?: number;
   apple_endor_context?: string;
   apple_endor_one_time_token?: boolean;
+  apple_endor_verify_ssl?: boolean;
   is_active?: boolean;
 }
 
@@ -1177,6 +1179,7 @@ export interface ProviderConfigResponse {
   apple_endor_other_app?: number | null;
   apple_endor_context?: string | null;
   apple_endor_one_time_token?: boolean | null;
+  apple_endor_verify_ssl?: boolean | null;
 }
 
 export interface ContextObjectResponse {
@@ -1430,6 +1433,13 @@ export const adminApi = {
 
   deleteProviderConfig: async (configId: number): Promise<void> => {
     await apiClient.delete(`/api/v1/admin/provider-configs/${configId}`);
+  },
+
+  testProviderConfig: async (configId: number): Promise<{ models: string[]; count: number; error?: string }> => {
+    const response = await apiClient.get<{ models: string[]; count: number; error?: string }>(
+      `/api/v1/admin/provider-configs/${configId}/test`
+    );
+    return response.data;
   },
 
   // Feedback management

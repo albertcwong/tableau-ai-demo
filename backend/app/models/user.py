@@ -292,6 +292,7 @@ class ProviderConfig(Base):
     apple_endor_other_app = Column(Integer, nullable=True, comment="Apple Endor otherApp parameter (default: 199323)")
     apple_endor_context = Column(String(100), nullable=True, comment="Apple Endor context parameter (default: 'endor')")
     apple_endor_one_time_token = Column(Boolean, nullable=True, default=False, comment="Apple Endor oneTimeToken flag")
+    apple_endor_verify_ssl = Column(Boolean, nullable=True, comment="Verify SSL for idmsac.corp.apple.com; False if corp certs not in trust store")
     
     # Relationships
     created_by_user = relationship("User", back_populates="provider_configs")
