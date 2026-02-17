@@ -1,6 +1,6 @@
 """IdP-agnostic user service. Supports Auth0, Entra, Okta, etc."""
 import logging
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,10 @@ class IdpAdapter(Protocol):
 
     def get_user_id(self, claims: dict) -> str | None:
         """Extract stable user identifier from claims (e.g. sub, oid)."""
+        ...
+
+    def enrich_claims(self, claims: dict, token: str, config: Any) -> dict:
+        """Fetch additional user info when token lacks standard claims (e.g. email). Default: return claims unchanged."""
         ...
 
     def get_or_create_user(self, db: Session, claims: dict) -> User:

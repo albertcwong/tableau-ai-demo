@@ -1,5 +1,8 @@
 """Auth0 IdP adapter."""
 import logging
+from typing import Any, Optional
+
+import requests
 from sqlalchemy.orm import Session
 
 from app.core.database import safe_commit
@@ -8,6 +11,36 @@ from app.services.auth_config_service import get_auth_config
 from app.services.claims import extract_claim_value
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_domain(domain: Optional[str]) -> str:
+    """Strip protocol and trailing slash for URL construction."""
+    if not domain:
+        return ""
+    d = domain.strip().rstrip("/")
+    for prefix in ("https://", "http://"):
+        if d.lower().startswith(prefix):
+            d = d[len(prefix) :].split("/")[0]
+            break
+    return d
+
+
+def _fetch_userinfo(token: str, domain: str) -> Optional[dict]:
+    """Fetch user profile from Auth0 /userinfo when JWT lacks email (common for access tokens)."""
+    if not domain or not token:
+        return None
+    url = f"https://{domain}/userinfo"
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning("Auth0 userinfo fetch failed: status=%s error=%s", status_code, e)
+        return None
+    except Exception as e:
+        logger.warning("Auth0 userinfo fetch failed: %s", e)
+        return None
 
 
 def _json_safe(obj):
@@ -26,6 +59,19 @@ class Auth0IdpAdapter:
 
     def get_user_id(self, claims: dict) -> str | None:
         return claims.get("sub")
+
+    def enrich_claims(self, claims: dict, token: str, config: Any) -> dict:
+        """When access token lacks email, fetch from Auth0 /userinfo."""
+        if claims.get("email"):
+            return claims
+        domain = getattr(config, "auth0_domain", None)
+        if not domain or not token:
+            return claims
+        domain = _normalize_domain(domain)
+        userinfo = _fetch_userinfo(token, domain)
+        if userinfo:
+            return {**claims, **{k: v for k, v in userinfo.items() if v is not None}}
+        return claims
 
     def get_or_create_user(self, db: Session, claims: dict) -> User:
         user_id = self.get_user_id(claims)

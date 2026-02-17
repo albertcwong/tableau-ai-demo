@@ -191,17 +191,3 @@ def validate_auth0_token(token: str, auth0_domain: Optional[str] = None, auth0_a
     except Exception as e:
         logger.error(f"Unexpected error validating Auth0 token: {type(e).__name__}: {str(e)}")
         return None
-
-
-def fetch_auth0_userinfo(token: str, domain: str) -> Optional[dict]:
-    """Fetch user profile from Auth0 /userinfo when JWT lacks email (common for access tokens)."""
-    if not domain or not token:
-        return None
-    url = f"https://{domain}/userinfo"
-    try:
-        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logger.warning(f"Auth0 userinfo fetch failed: {e}")
-        return None
