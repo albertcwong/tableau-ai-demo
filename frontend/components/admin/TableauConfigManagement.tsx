@@ -8,7 +8,6 @@ import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pencil, Trash2, Plus, X } from 'lucide-react';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { extractErrorMessage } from '@/lib/utils';
 
 export function TableauConfigManagement() {
@@ -276,7 +275,7 @@ export function TableauConfigManagement() {
                   id="client_id"
                   value={formData.client_id ?? ''}
                   onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
-                  placeholder="Required for Connected App auth, or enable PAT auth below"
+                  placeholder="Required for Connected App Direct Trust, or enable PAT auth below"
                 />
               </div>
               <div className="space-y-2">
@@ -286,7 +285,7 @@ export function TableauConfigManagement() {
                   type="password"
                   value={formData.client_secret ?? ''}
                   onChange={(e) => setFormData({ ...formData, client_secret: e.target.value })}
-                  placeholder={editingConfigId ? "Leave empty to keep existing secret" : "Required for Connected App auth, or enable PAT auth below"}
+                  placeholder={editingConfigId ? "Leave empty to keep existing secret" : "Required for Connected App Direct Trust, or enable PAT auth below"}
                 />
                 {editingConfigId && (
                   <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -347,7 +346,7 @@ export function TableauConfigManagement() {
                     className="h-4 w-4"
                   />
                   <Label htmlFor="allow_connected_app_oauth" className="cursor-pointer">
-                    Allow Connected App OAuth Trust (EAS-issued JWT)
+                    Allow Connected App OAuth
                   </Label>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -402,27 +401,21 @@ export function TableauConfigManagement() {
                       placeholder="Auto-discovered from issuer if empty"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="eas_sub_claim_field">EAS JWT Sub Claim</Label>
-                    <Select
-                      value={formData.eas_sub_claim_field ?? 'email'}
-                      onValueChange={(v) => setFormData({ ...formData, eas_sub_claim_field: v })}
-                    >
-                      <SelectTrigger id="eas_sub_claim_field">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="email">email</SelectItem>
-                        <SelectItem value="tableau_username">tableau_username</SelectItem>
-                        <SelectItem value="name">name</SelectItem>
-                        <SelectItem value="sub">sub (Auth0 default)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Claim/field from Auth0 user that becomes the JWT &apos;sub&apos; sent to Tableau. Use &apos;email&apos; for Tableau OIDC; &apos;tableau_username&apos; for direct mapping.
-                    </p>
-                  </div>
                 </>
+              )}
+              {((formData.client_id ?? '') || (formData.allow_connected_app_oauth || false)) && (
+                <div className="space-y-2">
+                  <Label htmlFor="eas_sub_claim_field">Connected App User Claim</Label>
+                  <Input
+                    id="eas_sub_claim_field"
+                    value={formData.eas_sub_claim_field ?? 'email'}
+                    onChange={(e) => setFormData({ ...formData, eas_sub_claim_field: e.target.value })}
+                    placeholder="email, tableau_username, name, or sub"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    IdP claim used to identify the user for both Direct Trust and OAuth 2.0 Trust. Sole source of truth for JWT &apos;sub&apos;.
+                  </p>
+                </div>
               )}
               <div className="space-y-2">
                 <Label htmlFor="ssl_cert_path">SSL Certificate Path (optional)</Label>

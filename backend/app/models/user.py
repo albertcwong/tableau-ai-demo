@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import enum
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Index, Enum as SQLEnum, ForeignKey, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -85,9 +86,10 @@ class User(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
-    # Auth0 integration (MVP)
-    auth0_user_id = Column(String(255), unique=True, nullable=True, index=True, comment="Auth0 user ID (sub claim)")
-    tableau_username = Column(String(255), nullable=True, comment="Tableau username extracted from Auth0 metadata")
+    # IdP integration (Auth0, Entra, Okta, etc.)
+    auth0_user_id = Column(String(255), unique=True, nullable=True, index=True, comment="IdP user ID (sub/oid)")
+    idp_claims = Column(JSONB, nullable=True, comment="IdP claims cached at login for generic claim resolution")
+    tableau_username = Column(String(255), nullable=True, comment="Tableau username from IdP metadata (legacy)")
     
     # User preferences for AI agent
     preferred_provider = Column(String(50), nullable=True, comment="Preferred AI provider (e.g., 'openai', 'anthropic')")

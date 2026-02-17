@@ -15,7 +15,7 @@ type AuthType = 'connected_app' | 'connected_app_oauth' | 'pat' | 'standard';
 
 const AUTH_OPTIONS: { value: AuthType; label: string }[] = [
   { value: 'connected_app', label: 'Connected App Direct Trust' },
-  { value: 'connected_app_oauth', label: 'Connected App OAuth Trust' },
+  { value: 'connected_app_oauth', label: 'Connected App OAuth' },
   { value: 'pat', label: 'Personal Access Token' },
   { value: 'standard', label: 'Username/Password' },
 ];

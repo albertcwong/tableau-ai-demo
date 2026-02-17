@@ -296,7 +296,7 @@ export function AuthConfigManagement() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Connected App OAuth Trust / EAS URLs</CardTitle>
+            <CardTitle>Connected App OAuth / EAS URLs</CardTitle>
             <CardDescription>
               Backend and frontend URLs for OAuth callback. EAS JWT key for backend-constructed JWTs.
             </CardDescription>

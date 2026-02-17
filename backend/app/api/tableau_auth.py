@@ -18,7 +18,7 @@ from app.api.tableau_client_factory import (
     resolve_tableau_username,
     site_id_from_config,
 )
-from app.services.auth0_user_service import extract_metadata_value
+from app.services.claims import extract_claim_value
 from app.services.eas_jwt_builder import build_tableau_jwt
 from app.core.config import settings
 from app.core.database import get_db
@@ -589,13 +589,7 @@ async def get_oauth_authorize_url(
     state = generate_state()
     redirect_uri = _oauth_callback_url(db)
     store_oauth_state(state, config_id, current_user.id)
-    from app.services.auth_config_service import get_auth_config
-    auth_config = get_auth_config(db)
-    sub_field = (
-        (getattr(config, "eas_sub_claim_field", None) or "")
-        or (getattr(auth_config, "tableau_username_field", None) or "")
-        or "email"
-    ).strip()
+    sub_field = (getattr(config, "eas_sub_claim_field", None) or "").strip() or "email"
     authorize_url = await get_authorization_url(config, redirect_uri, state, sub_claim=sub_field)
     return OAuthAuthorizeUrlResponse(authorize_url=authorize_url)
 
@@ -667,14 +661,8 @@ async def oauth_callback(
             logger.warning("OAuth callback user not found: user_id=%s", user_id)
             return RedirectResponse(url=_frontend_redirect_url(False, db, error="user_not_found"))
         auth0_payload = jwt.decode(eas_jwt, options={"verify_signature": False})
-        from app.services.auth_config_service import get_auth_config
-        auth_config = get_auth_config(db)
-        sub_field = (
-            (getattr(config, "eas_sub_claim_field", None) or "")
-            or (getattr(auth_config, "tableau_username_field", None) or "")
-            or "email"
-        ).strip()
-        sub_value = extract_metadata_value(auth0_payload, sub_field) if sub_field else None
+        sub_field = (getattr(config, "eas_sub_claim_field", None) or "").strip() or "email"
+        sub_value = extract_claim_value(auth0_payload, sub_field) if sub_field else None
         if not sub_value:
             sub_value = resolve_tableau_username(db, config, current_user)
         issuer = get_resolved_backend_api_url(db).rstrip("/")

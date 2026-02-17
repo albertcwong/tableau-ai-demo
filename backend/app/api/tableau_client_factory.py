@@ -1,9 +1,13 @@
 """Tableau client factory - shared logic for building TableauClient from config/token."""
+import logging
 from typing import Optional, Callable, Any
 
 from sqlalchemy.orm import Session
 
 from app.models.user import UserTableauServerMapping
+from app.services.claims import extract_claim_value
+
+logger = logging.getLogger(__name__)
 from app.services.tableau.client import TableauClient
 from app.services.tableau.token_store import TokenEntry
 
@@ -90,13 +94,28 @@ def create_tableau_client_for_credential_signin(
 
 
 def resolve_tableau_username(db: Session, config: Any, current_user: Any) -> str:
-    """Resolve tableau username: mapping > Auth0 metadata > app username."""
+    """Resolve tableau username: mapping > claim (eas_sub_claim_field from idp_claims) > fallback."""
     mapping = db.query(UserTableauServerMapping).filter(
         UserTableauServerMapping.user_id == current_user.id,
         UserTableauServerMapping.tableau_server_config_id == config.id,
     ).first()
     if mapping:
+        logger.info("Tableau sign-in username: value=%r source=mapping", mapping.tableau_username)
         return mapping.tableau_username
-    if getattr(current_user, "tableau_username", None):
-        return current_user.tableau_username
-    return current_user.username
+    claim = (getattr(config, "eas_sub_claim_field", None) or "").strip() or "email"
+    idp_claims = getattr(current_user, "idp_claims", None) or {}
+    val = extract_claim_value(idp_claims, claim)
+    if not val and claim == "email":
+        for alt in ("preferred_username", "upn", "unique_name"):
+            val = extract_claim_value(idp_claims, alt)
+            if val and "@" in val:
+                break
+    if val:
+        logger.info("Tableau sign-in username: value=%r source=claim claim=%r", val, claim)
+        return val
+    if claim == "email" and "@" in getattr(current_user, "username", ""):
+        logger.info("Tableau sign-in username: value=%r source=username_as_email", current_user.username)
+        return current_user.username
+    fallback = getattr(current_user, "tableau_username", None) or current_user.username
+    logger.info("Tableau sign-in username: value=%r source=fallback claim=%r idp_claims_keys=%s", fallback, claim, list(idp_claims.keys()) if idp_claims else "empty")
+    return fallback

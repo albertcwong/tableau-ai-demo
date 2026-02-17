@@ -8,4 +8,8 @@ if [ ! -f "$MAIN_ROOT/.env" ]; then
   exit 1
 fi
 ln -sf "$MAIN_ROOT/.env" .env
-echo "Linked .env -> $MAIN_ROOT/.env"
+ln -sf "$MAIN_ROOT/frontend/localhost-key.pem" frontend/localhost-key.pem
+ln -sf "$MAIN_ROOT/frontend/localhost.pem" frontend/localhost.pem
+echo "CERT_PATH=$MAIN_ROOT/frontend" > .env.worktree
+echo "Linked .env and frontend certs from $MAIN_ROOT"
+echo "For Docker: docker compose --env-file .env --env-file .env.worktree -f docker-compose.yml -f docker-compose.dev.yml up -d"

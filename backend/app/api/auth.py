@@ -7,9 +7,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db, safe_commit
-from app.core.auth import verify_password, create_access_token, decode_access_token, validate_auth0_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.core.auth import verify_password, create_access_token, decode_access_token, validate_auth0_token, fetch_auth0_userinfo, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.models.user import User, UserRole
-from app.services.auth0_user_service import get_or_create_user_from_auth0
+from app.services.idp_user_service import get_or_create_user
 from app.services.auth_config_service import get_auth_config
 
 logger = logging.getLogger(__name__)
@@ -93,9 +93,12 @@ def get_current_user(
         )
         if auth0_claims:
             logger.debug("Token validated as Auth0 token")
-            # Get or create user from Auth0 claims
+            if not auth0_claims.get("email") and auth_config.auth0_domain:
+                userinfo = fetch_auth0_userinfo(token, auth_config.auth0_domain)
+                if userinfo:
+                    auth0_claims = {**auth0_claims, **{k: v for k, v in userinfo.items() if v is not None}}
             try:
-                user = get_or_create_user_from_auth0(db, auth0_claims)
+                user = get_or_create_user(db, auth0_claims, provider="auth0")
                 if not user.is_active:
                     logger.warning(f"Auth0 user is inactive: {user.username}")
                     raise HTTPException(

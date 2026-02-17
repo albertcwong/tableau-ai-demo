@@ -1,11 +1,17 @@
 {
   "setup-worktree-unix": [
-    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env"
+    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env",
+    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost.pem\" frontend/localhost.pem"
   ],
   "setup-worktree-windows": [
-    "copy \"%ROOT_WORKTREE_PATH%\\.env\" .env"
+    "copy \"%ROOT_WORKTREE_PATH%\\.env\" .env",
+    "mklink frontend\\localhost-key.pem \"%ROOT_WORKTREE_PATH%\\frontend\\localhost-key.pem\"",
+    "mklink frontend\\localhost.pem \"%ROOT_WORKTREE_PATH%\\frontend\\localhost.pem\""
   ],
   "setup-worktree": [
-    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env"
+    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env",
+    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost.pem\" frontend/localhost.pem"
   ]
 }

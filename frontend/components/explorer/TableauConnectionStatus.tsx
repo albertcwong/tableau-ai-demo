@@ -457,7 +457,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
               <SelectContent>
                 {supportedAuthTypes.map((t) => (
                   <SelectItem key={t} value={t}>
-                    {t === 'standard' ? 'Username/password' : t === 'pat' ? 'PAT' : t === 'connected_app' ? 'Connected App' : 'OAuth'}
+                    {t === 'standard' ? 'Username/password' : t === 'pat' ? 'PAT' : t === 'connected_app' ? 'Connected App Direct Trust' : 'Connected App OAuth'}
                   </SelectItem>
                 ))}
               </SelectContent>
