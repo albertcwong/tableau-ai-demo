@@ -1,0 +1,11 @@
+{
+  "setup-worktree-unix": [
+    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env"
+  ],
+  "setup-worktree-windows": [
+    "copy \"%ROOT_WORKTREE_PATH%\\.env\" .env"
+  ],
+  "setup-worktree": [
+    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env"
+  ]
+}
