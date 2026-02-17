@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { getViewEmbedUrl, sanitizeViewId } from '@/lib/tableau';
+import { extractErrorMessage } from '@/lib/utils';
 import type { TableauEmbedUrl } from '@/types';
 
 // Declare tableau-viz web component type
@@ -28,6 +29,8 @@ interface ViewEmbedderProps {
   hideToolbar?: boolean;
   device?: 'desktop' | 'phone' | 'tablet';
   onError?: (error: Error) => void;
+  onUserAction?: (type: string, description: string, durationMs: number) => void;
+  lastEventTsRef?: React.MutableRefObject<number>;
   className?: string;
 }
 
@@ -35,6 +38,92 @@ interface ViewEmbedderProps {
  * ViewEmbedder component for embedding Tableau views using Embedding API v3
  * Uses the tableau-viz web component for embedding
  */
+function extractEventDescriptionSync(event: Event, eventType: string): string {
+  const d = (event as CustomEvent).detail;
+  if (!d || typeof d !== 'object') return eventType;
+  const field = d.fieldName ?? d.field_name;
+  const vals = d.appliedValues ?? d.applied_values;
+  const sheet = d.sheetName ?? d.sheet_name ?? d.name;
+  const param = d.parameterName ?? d.parameter_name;
+  const val = d.value ?? d.formattedValue ?? d.formatted_value;
+  if (eventType === 'filterchanged' && field) {
+    const v = Array.isArray(vals) ? vals.map((x: { value?: string } | string) => (typeof x === 'object' && x && 'value' in x ? (x as { value?: string }).value : x)).filter(Boolean).join(', ') : vals;
+    return v ? `filter ${field} = ${v}` : `filter ${field} (changed)`;
+  }
+  if (eventType === 'tabswitched' && sheet) return `tab → ${sheet}`;
+  if (eventType === 'parameterchanged' && param) return `parameter ${param} = ${val ?? '(changed)'}`;
+  return eventType;
+}
+
+function serializeFilter(f: { fieldName?: string; appliedValues?: unknown }): [string, string] | null {
+  const field = (f as { fieldName?: string }).fieldName ?? (f as { field_name?: string }).field_name;
+  const vals = (f as { appliedValues?: unknown }).appliedValues ?? (f as { applied_values?: unknown }).applied_values;
+  if (!field) return null;
+  const v = Array.isArray(vals)
+    ? vals.map((x: { value?: string } | string) => (typeof x === 'object' && x && 'value' in x ? (x as { value?: string }).value : x)).filter(Boolean).join(', ')
+    : String(vals ?? '');
+  return [field, v ? `${field}=${v}` : `${field}=(changed)`];
+}
+
+async function extractEventDescriptionAsync(
+  event: Event,
+  eventType: string,
+  lastFilterStateRef?: { current: Record<string, string> | null }
+): Promise<string> {
+  const viz = (event.target as HTMLElement) as unknown as {
+    workbook?: { activeSheet?: { getFiltersAsync?: () => Promise<unknown[]>; name?: string } };
+  };
+  const d = (event as CustomEvent).detail;
+
+  // Prefer event detail for filterchanged - it contains only the changed filter
+  if (eventType === 'filterchanged') {
+    const syncDesc = extractEventDescriptionSync(event, eventType);
+    if (syncDesc !== 'filterchanged') return syncDesc;
+    // Fallback: diff current vs previous to record only what changed
+    if (viz?.workbook?.activeSheet?.getFiltersAsync) {
+      try {
+        const filters = await viz.workbook.activeSheet.getFiltersAsync();
+        if (Array.isArray(filters) && filters.length > 0) {
+          const current: Record<string, string> = {};
+          const parts: string[] = [];
+          for (const f of filters as { fieldName?: string; appliedValues?: unknown }[]) {
+            const pair = serializeFilter(f);
+            if (!pair) continue;
+            const [field, serialized] = pair;
+            current[field] = serialized;
+            const prev = lastFilterStateRef?.current ?? {};
+            if (prev[field] !== serialized) {
+              const val = serialized.split('=').slice(1).join('=');
+              parts.push(val === '(changed)' ? `${field} (changed)` : `${field} = ${val}`);
+            }
+          }
+          if (lastFilterStateRef) lastFilterStateRef.current = current;
+          return parts.length > 0 ? `filter ${parts.join('; ')}` : 'filter (changed)';
+        }
+      } catch (e) {
+        console.warn('[ViewEmbedder] getFiltersAsync failed:', e);
+      }
+    }
+  }
+
+  if (eventType === 'markselectionchanged') {
+    const getMarks = d?.getMarksAsync ?? (typeof d === 'object' && d && 'getMarksAsync' in d ? (d as { getMarksAsync?: () => Promise<unknown> }).getMarksAsync : null);
+    if (typeof getMarks === 'function') {
+      try {
+        const marks = await getMarks.call(d);
+        const data = (marks as { data?: unknown[] })?.data;
+        const first = Array.isArray(data) ? data[0] : undefined;
+        const count = (first as { data?: unknown[] } | undefined)?.data?.length ?? (marks as { totalRowCount?: number })?.totalRowCount;
+        return count != null ? `mark selection (${count} marks)` : 'mark selection';
+      } catch (e) {
+        console.warn('[ViewEmbedder] getMarksAsync failed:', e);
+      }
+    }
+  }
+
+  return extractEventDescriptionSync(event, eventType);
+}
+
 export function ViewEmbedder({
   viewId,
   filters,
@@ -42,14 +131,20 @@ export function ViewEmbedder({
   hideToolbar = false,
   device = 'desktop',
   onError,
+  onUserAction,
+  lastEventTsRef,
   className = '',
 }: ViewEmbedderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [embedInfo, setEmbedInfo] = useState<TableauEmbedUrl | null>(null);
+  const [iframeAuthRetry, setIframeAuthRetry] = useState(false);
   const vizRef = useRef<HTMLElement | null>(null);
   const [containerHeight, setContainerHeight] = useState<number | null>(null);
+  const onUserActionRef = useRef(onUserAction);
+  const lastFilterStateRef = useRef<Record<string, string> | null>(null);
+  onUserActionRef.current = onUserAction;
 
   useEffect(() => {
     let mounted = true;
@@ -58,6 +153,7 @@ export function ViewEmbedder({
       try {
         setLoading(true);
         setError(null);
+        setIframeAuthRetry(false);
 
         const embedData = await getViewEmbedUrl(viewId, filters);
         if (!mounted) return;
@@ -84,22 +180,17 @@ export function ViewEmbedder({
         setEmbedInfo(embedData);
       } catch (err: any) {
         if (!mounted) return;
-        
-        // Check if this is a PAT authentication error
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load embed URL';
+        const errorMessage = extractErrorMessage(err, 'Failed to load embed URL');
         const isPATError = errorMessage.includes('Personal Access Token') || 
                           errorMessage.includes('PAT') ||
                           (err?.response?.status === 400 && errorMessage.includes('embedding'));
-        
         if (isPATError) {
           const patErrorMsg = 'View embedding is not supported with PAT. Connect with Connected App to embed views.';
-          const fallbackMsg = 'View is in context. Data will be fetched via server when using Summary.';
-          setError(`${patErrorMsg} ${fallbackMsg}`);
+          setError(patErrorMsg);
           setLoading(false);
           onError?.(new Error(patErrorMsg));
           return;
         }
-        
         setError(errorMessage);
         setLoading(false);
         onError?.(err instanceof Error ? err : new Error(errorMessage));
@@ -147,10 +238,11 @@ export function ViewEmbedder({
         setLoading(true);
         setError(null);
 
-        // Clear container
+        // Clear container and reset filter state for new viz
         if (containerRef.current) {
           containerRef.current.innerHTML = '';
         }
+        lastFilterStateRef.current = null;
 
         // Get container height for initial sizing
         if (!containerRef.current) return;
@@ -169,7 +261,10 @@ export function ViewEmbedder({
         if (embedInfo.token) {
           viz.setAttribute('token', embedInfo.token);
         }
-        
+        if (iframeAuthRetry) {
+          viz.setAttribute('iframe-auth', '');
+        }
+
         // Optional attributes
         if (hideTabs) {
           viz.setAttribute('hide-tabs', 'true');
@@ -191,37 +286,91 @@ export function ViewEmbedder({
           }
         };
 
-        viz.addEventListener('firstinteractive', markLoaded);
-        viz.addEventListener('tabswitched', markLoaded);
+        const initFilterState = async () => {
+          const wb = (viz as unknown as { workbook?: { activeSheet?: { getFiltersAsync?: () => Promise<unknown[]> } } }).workbook;
+          if (wb?.activeSheet?.getFiltersAsync) {
+            try {
+              const filters = await wb.activeSheet.getFiltersAsync();
+              if (Array.isArray(filters) && filters.length > 0) {
+                const state: Record<string, string> = {};
+                for (const f of filters as { fieldName?: string; appliedValues?: unknown }[]) {
+                  const pair = serializeFilter(f);
+                  if (pair) state[pair[0]] = pair[1];
+                }
+                lastFilterStateRef.current = state;
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+
+        viz.addEventListener('firstinteractive', () => {
+          markLoaded();
+          initFilterState();
+        });
+        viz.addEventListener('tabswitched', () => {
+          markLoaded();
+          initFilterState();
+        });
+
+        const eventTypes = ['filterchanged', 'markselectionchanged', 'tabswitched', 'parameterchanged'];
+        const tsRef = lastEventTsRef ?? { current: Date.now() };
+        const handleUserAction = async (e: Event) => {
+          const now = Date.now();
+          const durationMs = now - tsRef.current;
+          tsRef.current = now;
+          const desc = await extractEventDescriptionAsync(e, e.type, lastFilterStateRef);
+          onUserActionRef.current?.(e.type, desc, durationMs);
+        };
+        if (onUserActionRef.current) {
+          eventTypes.forEach((t) => viz.addEventListener(t, handleUserAction));
+        }
 
         // Listen for errors from the tableau-viz component
         const handleVizError = (event: any) => {
           if (!mounted || viewLoaded) return;
           const errorDetail = event.detail || {};
-          const errorMessage = errorDetail.message || errorDetail.error || 'Unknown error';
-          
-          if (errorMessage.includes('ERR_CERT') || 
-              errorMessage.includes('certificate') || 
-              errorMessage.includes('SSL') ||
-              errorMessage.includes('TLS') ||
-              errorMessage.includes('Common Name')) {
+          const errorMessage = (typeof errorDetail.message === 'string' ? errorDetail.message : errorDetail.error) || 'Unknown error';
+          const errorCode = errorDetail.errorCode;
+          let parsed: { message?: string; errorCode?: string } = {};
+          try {
+            parsed = typeof errorDetail.message === 'string' ? JSON.parse(errorDetail.message) : {};
+          } catch {
+            parsed = {};
+          }
+          const code = errorCode ?? parsed.errorCode;
+          const msg = parsed.message || errorMessage;
+
+          if (msg.includes('ERR_CERT') || msg.includes('certificate') || msg.includes('SSL') || msg.includes('TLS') || msg.includes('Common Name')) {
             const certErrorMsg = 'SSL Certificate Error: The Tableau server\'s SSL certificate is invalid or doesn\'t match the hostname. ' +
-              'This is a browser security restriction. Solutions: ' +
-              '1) Configure your Tableau server with a valid SSL certificate, ' +
-              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or ' +
-              '3) Access the application over HTTP if security allows.';
+              'Solutions: 1) Configure your Tableau server with a valid SSL certificate, ' +
+              '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or 3) Access over HTTP if security allows.';
             setError(certErrorMsg);
             setLoading(false);
             onError?.(new Error(certErrorMsg));
             return;
           }
-          
-          setError(errorMessage);
+
+          // 401 / auth errors - try iframe-auth fallback once, then show actual error
+          if (code === 'unknown-auth-error' || code === 'auth-failed' || msg.includes('401') || msg.includes('unauthorized') || msg.toLowerCase().includes('auth')) {
+            if (!iframeAuthRetry) {
+              setIframeAuthRetry(true);
+              return;
+            }
+            setError(msg);
+            setLoading(false);
+            onError?.(new Error(msg));
+            return;
+          }
+
+          setError(msg);
           setLoading(false);
-          onError?.(new Error(errorMessage));
+          onError?.(new Error(msg));
         };
 
         viz.addEventListener('error', handleVizError);
+        viz.addEventListener('vizloaderror', handleVizError);
 
         // Extended timeout - only show error if view never loaded
         const extendedTimeout = setTimeout(() => {
@@ -247,7 +396,11 @@ export function ViewEmbedder({
         return () => {
           viz.removeEventListener('firstinteractive', markLoaded);
           viz.removeEventListener('tabswitched', markLoaded);
+          if (onUserActionRef.current) {
+            eventTypes.forEach((t) => viz.removeEventListener(t, handleUserAction));
+          }
           viz.removeEventListener('error', handleVizError);
+          viz.removeEventListener('vizloaderror', handleVizError);
           clearTimeout(extendedTimeout);
           clearTimeout(normalTimeout);
         };
@@ -270,7 +423,7 @@ export function ViewEmbedder({
       }
       vizRef.current = null;
     };
-  }, [embedInfo, hideTabs, hideToolbar, device, onError]);
+  }, [embedInfo, hideTabs, hideToolbar, device, onError, iframeAuthRetry]);
 
   return (
     <div className={`relative w-full h-full ${className}`}>

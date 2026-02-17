@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getViews } from '@/lib/tableau';
+import { extractErrorMessage } from '@/lib/utils';
 import type { TableauView } from '@/types';
 
 interface ViewListProps {
@@ -39,13 +40,7 @@ export function ViewList({
         setLoading(false);
       } catch (err: any) {
         if (!mounted) return;
-        let errorMessage = 'Failed to load views';
-        if (err.response?.status === 401 || err.response?.status === 503) {
-          errorMessage = 'Tableau server is not accessible. Please ensure you are connected to the VPN and have authenticated with Tableau.';
-        } else if (err instanceof Error) {
-          errorMessage = err.message;
-        }
-        setError(errorMessage);
+        setError(extractErrorMessage(err, 'Failed to load views'));
         setLoading(false);
       }
     }

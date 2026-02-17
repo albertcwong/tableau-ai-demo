@@ -63,14 +63,20 @@ class Auth0IdpAdapter:
     def enrich_claims(self, claims: dict, token: str, config: Any) -> dict:
         """When access token lacks email, fetch from Auth0 /userinfo."""
         if claims.get("email"):
+            logger.debug("Auth0 enrich_claims: email already in token")
             return claims
         domain = getattr(config, "auth0_domain", None)
         if not domain or not token:
+            logger.debug("Auth0 enrich_claims: no domain/token, skipping userinfo fetch")
             return claims
         domain = _normalize_domain(domain)
         userinfo = _fetch_userinfo(token, domain)
         if userinfo:
-            return {**claims, **{k: v for k, v in userinfo.items() if v is not None}}
+            merged = {**claims, **{k: v for k, v in userinfo.items() if v is not None}}
+            has_email = "email" in merged
+            logger.debug("Auth0 enrich_claims: userinfo keys=%s email_present=%s", list(userinfo.keys()), has_email)
+            return merged
+        logger.warning("Auth0 enrich_claims: userinfo fetch failed or returned empty; claims may lack email")
         return claims
 
     def get_or_create_user(self, db: Session, claims: dict) -> User:

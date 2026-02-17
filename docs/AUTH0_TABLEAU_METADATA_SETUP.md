@@ -8,6 +8,10 @@ When users authenticate via Auth0, the application can automatically extract the
 
 **Note:** `tableau_username` is used for **Connected App (Direct Trust)** sign-in and main app user mapping. **OAuth 2.0 Trust** uses the admin-configured **EAS JWT Sub Claim** (e.g. `email` for Tableau OIDC, `tableau_username` for direct mapping) – see [OAuth 2.0 Trust Setup](./OAUTH_2_0_TRUST_SETUP.md).
 
+### Email claim for Connected App
+
+**Auth0 does NOT include `email` in access tokens by default**—it's a restricted OIDC claim. For Tableau Connected App (which expects email format), you must add it via a Post-Login Action using a namespaced claim: `https://YOUR_AUDIENCE/email`. The app automatically checks this when the configured claim is `email`. See Step 2 below.
+
 ## Step 1: Configure Custom Metadata in Auth0
 
 ### Option A: Using Auth0 Dashboard (Recommended for Testing)
@@ -77,15 +81,18 @@ By default, Auth0 includes `app_metadata` and `user_metadata` in the ID token, b
 2. **Add Code**
    ```javascript
    exports.onExecutePostLogin = async (event, api) => {
-     const namespace = 'https://tableau-ai-demo-api';
+     const namespace = 'https://tableau-ai-demo-api';  // Must match Auth0 Audience
      
-     // Extract tableau_username from app_metadata or user_metadata
+     // Email: required for Tableau Connected App (email claim). Auth0 does NOT include
+     // email in access tokens by default—it's restricted. Add via namespaced claim.
+     api.accessToken.setCustomClaim(`${namespace}/email`, event.user.email);
+     
+     // Extract tableau_username from app_metadata or user_metadata (optional)
      const tableauUsername = 
        event.user.app_metadata?.tableau_username ||
        event.user.user_metadata?.tableau_username;
      
      if (tableauUsername) {
-       // Add as namespaced claim (recommended for access tokens)
        api.idToken.setCustomClaim(`${namespace}/tableau_username`, tableauUsername);
        api.accessToken.setCustomClaim(`${namespace}/tableau_username`, tableauUsername);
      }
@@ -112,7 +119,9 @@ If you're using Rules instead of Actions:
    function (user, context, callback) {
      const namespace = 'https://tableau-ai-demo-api';
      
-     // Extract tableau_username from app_metadata or user_metadata
+     // Email: required for Tableau Connected App
+     context.accessToken[`${namespace}/email`] = user.email;
+     
      const tableauUsername = 
        user.app_metadata?.tableau_username ||
        user.user_metadata?.tableau_username;

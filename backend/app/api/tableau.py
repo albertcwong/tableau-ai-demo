@@ -291,8 +291,12 @@ async def get_tableau_client(
                     ssl_cert_path=getattr(config, "ssl_cert_path", None),
                     on_401_invalidate=invalidate_cb,
                 )
-                await client.sign_in()
-                
+                try:
+                    await client.sign_in()
+                except TableauAuthenticationError:
+                    invalidate_cb()
+                    raise
+
                 # Cache the token
                 expires_at = client.token_expires_at or datetime.now(timezone.utc) + timedelta(minutes=10)
                 token_entry = TokenEntry(
@@ -308,11 +312,23 @@ async def get_tableau_client(
             return TableauClient()
     except HTTPException:
         raise
+    except TableauAuthenticationError as e:
+        err_str = str(e)
+        hint = ""
+        if "(16)" in err_str or "LOGIN_FAILED" in err_str:
+            hint = " Code 16 = LOGIN_FAILED: verify your Tableau username exists on the server and matches auth format (email vs domain\\user). Set per-server username in Settings if needed."
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Tableau authentication failed: {err_str}{hint}",
+        )
     except ValueError as e:
+        err_str = str(e)
         logger.error(f"Tableau client initialization failed: {e}")
+        if "idp_claims" in err_str or "Connected App User Claim" in err_str:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_str)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Tableau service configuration error: {str(e)}. Please check your environment variables or select a Tableau server configuration.",
+            detail=f"Tableau service configuration error: {err_str}",
         )
 
 

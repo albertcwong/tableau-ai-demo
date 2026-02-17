@@ -5,6 +5,7 @@ from typing import Optional, Callable, Any
 from sqlalchemy.orm import Session
 
 from app.models.user import UserTableauServerMapping
+from app.services.auth_config_service import get_auth_config
 from app.services.claims import extract_claim_value
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def create_tableau_client_for_credential_signin(
 
 
 def resolve_tableau_username(db: Session, config: Any, current_user: Any) -> str:
-    """Resolve tableau username: mapping > claim (eas_sub_claim_field from idp_claims) > fallback."""
+    """Resolve tableau username: mapping > claim (eas_sub_claim_field = Connected App User Claim). No fallbacks."""
     mapping = db.query(UserTableauServerMapping).filter(
         UserTableauServerMapping.user_id == current_user.id,
         UserTableauServerMapping.tableau_server_config_id == config.id,
@@ -102,20 +103,51 @@ def resolve_tableau_username(db: Session, config: Any, current_user: Any) -> str
     if mapping:
         logger.info("Tableau sign-in username: value=%r source=mapping", mapping.tableau_username)
         return mapping.tableau_username
+
     claim = (getattr(config, "eas_sub_claim_field", None) or "").strip() or "email"
     idp_claims = getattr(current_user, "idp_claims", None) or {}
+    keys = list(idp_claims.keys()) if isinstance(idp_claims, dict) else []
+    logger.debug("Tableau username resolution: claim=%r idp_claims_keys=%s", claim, keys)
+
     val = extract_claim_value(idp_claims, claim)
     if not val and claim == "email":
         for alt in ("preferred_username", "upn", "unique_name"):
-            val = extract_claim_value(idp_claims, alt)
-            if val and "@" in val:
+            v = extract_claim_value(idp_claims, alt)
+            if v and "@" in v:
+                val = v
                 break
+        if not val:
+            auth_config = get_auth_config(db)
+            audience = getattr(auth_config, "auth0_audience", None) if auth_config else None
+            if audience and audience.strip():
+                ns = audience.strip().rstrip("/")
+                val = extract_claim_value(idp_claims, f"{ns}/email")
+                if val:
+                    logger.debug("Tableau username: resolved from namespaced claim %s/email", ns)
+
     if val:
+        if claim == "email" and "@" not in val:
+            msg = (
+                f"Resolved username '{val}' from claim '{claim}' does not look like an email. "
+                f"Tableau Connected App with email claim expects email format. "
+                f"idp_claims keys: {keys}. "
+                f"Ensure Auth0 returns email (add 'email' scope to your API, check Rules). "
+                f"Or set a per-server mapping with your Tableau email in Settings > Tableau Server Mapping."
+            )
+            logger.error("Tableau username resolution: %s", msg)
+            raise ValueError(msg)
         logger.info("Tableau sign-in username: value=%r source=claim claim=%r", val, claim)
         return val
-    if claim == "email" and "@" in getattr(current_user, "username", ""):
-        logger.info("Tableau sign-in username: value=%r source=username_as_email", current_user.username)
-        return current_user.username
-    fallback = getattr(current_user, "tableau_username", None) or current_user.username
-    logger.info("Tableau sign-in username: value=%r source=fallback claim=%r idp_claims_keys=%s", fallback, claim, list(idp_claims.keys()) if idp_claims else "empty")
-    return fallback
+
+    audience = getattr(get_auth_config(db), "auth0_audience", None) or ""
+    ns_email = f"{audience.strip().rstrip('/')}/email" if audience else "https://YOUR_AUDIENCE/email"
+    msg = (
+        f"Connected App User Claim '{claim}' not found in idp_claims. "
+        f"idp_claims keys: {keys}. "
+        f"Auth0 access tokens do NOT include email by default. Add a Post-Login Action: "
+        f"api.accessToken.setCustomClaim('{ns_email}', event.user.email). "
+        f"See docs/AUTH0_TABLEAU_METADATA_SETUP.md. "
+        f"Or set a per-server mapping in Admin > User Management > Tableau Server Mapping."
+    )
+    logger.error("Tableau username resolution failed: %s", msg)
+    raise ValueError(msg)
