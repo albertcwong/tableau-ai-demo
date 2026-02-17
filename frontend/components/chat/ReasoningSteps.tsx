@@ -7,6 +7,13 @@ import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
+interface DataPreviewItem {
+  id: string;
+  name: string;
+  columns: string[];
+  rows: unknown[][];
+}
+
 interface StepWithTiming {
   text: string;
   duration: number; // Duration in milliseconds
@@ -16,6 +23,8 @@ interface StepWithTiming {
   tokens?: { prompt?: number; completion?: number; total?: number }; // Token usage
   queryDraft?: Record<string, any>; // VizQL query draft for build_query steps
   toolResultSummary?: string; // Optional summary of tool results
+  viewImages?: Array<{ id: string; name: string; base64: string }>; // View screenshots (e.g. dashboards)
+  dataPreview?: DataPreviewItem[]; // Sample rows sent to LLM (for debugging)
 }
 
 interface ReasoningStepsProps {
@@ -25,6 +34,7 @@ interface ReasoningStepsProps {
   isReasoningActive?: boolean; // When true, expand by default; when false, collapse
   streamStartTime?: number | null; // When streaming started (for calculating elapsed time)
   totalTimeMs?: number | null; // Total time from message (includes all processing time)
+  agentType?: 'summary' | 'vizql'; // VizQL agent: no delay when rendering reasoning steps
 }
 
 function parseReasoningSteps(steps: string): string[] {
@@ -121,12 +131,13 @@ interface StreamingTextAreaProps {
   isActive: boolean;
   label: string;
   className?: string;
+  skipStreaming?: boolean; // When true, show all content immediately (no delay)
 }
 
 const LINE_HEIGHT_REM = 1.5;
 const MAX_LINES = 7;
 
-function StreamingTextArea({ content, isActive, label, className }: StreamingTextAreaProps) {
+function StreamingTextArea({ content, isActive, label, className, skipStreaming = false }: StreamingTextAreaProps) {
   const [displayedLength, setDisplayedLength] = useState(0);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const prevContentRef = useRef(content);
@@ -141,10 +152,15 @@ function StreamingTextArea({ content, isActive, label, className }: StreamingTex
     }
   }, [content]);
 
-  // Streaming effect: animate text appearing when active
+  // Streaming effect: animate text appearing when active (skip when skipStreaming)
   useEffect(() => {
     if (!content || content.length === 0) {
       setDisplayedLength(0);
+      return;
+    }
+
+    if (skipStreaming || (!isActive && displayedLength < content.length)) {
+      setDisplayedLength(content.length);
       return;
     }
 
@@ -157,11 +173,8 @@ function StreamingTextArea({ content, isActive, label, className }: StreamingTex
         });
       }, 30); // ~30ms per frame = ~1.5s for full content
       return () => clearInterval(interval);
-    } else if (!isActive && displayedLength < content.length) {
-      // If becomes inactive before streaming completes, show all immediately
-      setDisplayedLength(content.length);
     }
-  }, [content, isActive, displayedLength]);
+  }, [content, isActive, displayedLength, skipStreaming]);
 
   // Auto-grow textarea to fit content, max 7 lines
   useEffect(() => {
@@ -179,7 +192,7 @@ function StreamingTextArea({ content, isActive, label, className }: StreamingTex
   const displayedText = content.slice(0, displayedLength);
 
   return (
-    <div className={cn('mt-1 transition-all duration-300', className)}>
+    <div className={cn('mt-1', className)}>
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">{label}</span>
         {!isActive && displayedLength >= content.length && (
@@ -193,7 +206,7 @@ function StreamingTextArea({ content, isActive, label, className }: StreamingTex
       </div>
       <div
         className={cn(
-          'transition-all duration-300 overflow-hidden',
+          'overflow-hidden',
           isCollapsed ? 'max-h-0' : 'max-h-[10.5rem]'
         )}
       >
@@ -211,9 +224,58 @@ function StreamingTextArea({ content, isActive, label, className }: StreamingTex
           )}
         />
         {isActive && displayedLength < content.length && (
-          <span className="inline-block ml-1 animate-pulse text-gray-400">▋</span>
+          <span className="inline-block ml-1 text-gray-400">▋</span>
         )}
       </div>
+    </div>
+  );
+}
+
+function DataPreviewSection({ items }: { items: DataPreviewItem[] }) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-[10px] font-semibold text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 flex items-center gap-1"
+      >
+        Raw data sent to LLM (first 8 rows per view) {expanded ? '▼' : '▶'}
+      </button>
+      {expanded && (
+        <div className="space-y-3">
+          {items.map((preview) => (
+            <div key={preview.id} className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+              <div className="bg-gray-100 dark:bg-gray-800 px-2 py-1 text-[10px] font-medium text-gray-700 dark:text-gray-300">
+                {preview.name} (id: {preview.id})
+              </div>
+              <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                <table className="w-full text-[10px] border-collapse">
+                  <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800">
+                    <tr>
+                      {preview.columns.map((c, i) => (
+                        <th key={i} className="border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 text-left font-medium whitespace-nowrap">
+                          {c}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((row, ri) => (
+                      <tr key={ri} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                        {(row as unknown[]).map((v, vi) => (
+                          <td key={vi} className="border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 whitespace-nowrap">
+                            {v != null ? String(v).slice(0, 30) : ''}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -225,14 +287,17 @@ interface ReasoningStepItemProps {
   isReasoningActive: boolean;
   currentStepElapsed: number;
   stepTimings?: StepWithTiming[];
+  skipStreaming?: boolean;
 }
 
-function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, currentStepElapsed, stepTimings }: ReasoningStepItemProps) {
+function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, currentStepElapsed, stepTimings, skipStreaming }: ReasoningStepItemProps) {
   const isBuildQueryStep = stepTiming?.nodeName === 'build_query' || stepTiming?.nodeName === 'query_builder';
   const isCurrentStep = isReasoningActive && index === (stepTimings?.length || 0) - 1;
   const hasToolCalls = stepTiming?.toolCalls && stepTiming.toolCalls.length > 0;
   const hasQueryDraft = stepTiming?.queryDraft;
   const hasToolResultSummary = stepTiming?.toolResultSummary;
+  const viewImages = stepTiming?.viewImages || [];
+  const dataPreview = stepTiming?.dataPreview || [];
   
   // Build tool summary text
   const toolSummaryText = useMemo(() => {
@@ -281,8 +346,28 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
             </div>
           )}
         </div>
-        {(hasToolCalls || hasToolResultSummary || hasQueryDraft || stepTiming?.tokens) && (
+        {(hasToolCalls || hasToolResultSummary || hasQueryDraft || viewImages.length > 0 || dataPreview.length > 0 || stepTiming?.tokens) && (
           <div className="mt-1 pl-0 space-y-1">
+            {viewImages.length > 0 && (
+              <div className="space-y-2 min-w-0">
+                <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">View(s) summarized (screenshots):</span>
+                <div className="flex flex-wrap gap-3 min-w-0">
+                  {viewImages.map((img) => (
+                    <div key={img.id} className="flex flex-col min-w-0 flex-1 min-w-[180px]">
+                      <img
+                        src={`data:image/png;base64,${img.base64}`}
+                        alt={img.name}
+                        className="w-full max-h-[min(40vh,500px)] rounded border-2 border-gray-300 dark:border-gray-600 object-contain bg-white dark:bg-gray-900"
+                      />
+                      <span className="text-[10px] font-medium text-gray-600 dark:text-gray-400 mt-0.5">{img.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {dataPreview.length > 0 && (
+              <DataPreviewSection items={dataPreview} />
+            )}
             {stepTiming?.tokens && (
               <div className="text-[10px] text-gray-600 dark:text-gray-400 font-mono">
                 <span className="font-semibold">Tokens:</span>{' '}
@@ -297,6 +382,7 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
                 content={toolSummaryText}
                 isActive={isCurrentStep && isReasoningActive}
                 label="Tool Summary"
+                skipStreaming={skipStreaming}
               />
             )}
             {queryText && (
@@ -304,6 +390,7 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
                 content={queryText}
                 isActive={isCurrentStep && isReasoningActive}
                 label="VizQL Query"
+                skipStreaming={skipStreaming}
               />
             )}
           </div>
@@ -313,7 +400,7 @@ function ReasoningStepItem({ step, stepTiming, index, isReasoningActive, current
   );
 }
 
-export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReasoningActive = false, streamStartTime, totalTimeMs }: ReasoningStepsProps) {
+export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReasoningActive = false, streamStartTime, totalTimeMs, agentType }: ReasoningStepsProps) {
   const [isExpanded, setIsExpanded] = useState(isReasoningActive);
   const prevIsReasoningActiveRef = useRef(isReasoningActive);
   const [currentStepElapsed, setCurrentStepElapsed] = useState<number>(0);
@@ -321,7 +408,6 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
   // Update expansion state when reasoning becomes active or inactive
   useEffect(() => {
     const prevIsReasoningActive = prevIsReasoningActiveRef.current;
-    
     if (isReasoningActive && !prevIsReasoningActive) {
       setIsExpanded(true);
     } else if (!isReasoningActive && prevIsReasoningActive) {
@@ -498,6 +584,7 @@ export function ReasoningSteps({ reasoningSteps, stepTimings, className, isReaso
                     isReasoningActive={isReasoningActive}
                     currentStepElapsed={currentStepElapsed}
                     stepTimings={stepTimings}
+                    skipStreaming={true}
                   />
                 );
               })}

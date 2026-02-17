@@ -1589,46 +1589,38 @@ async def send_message(
                                     last_state = node_state
                                 
                                 # Stream intermediate thoughts as reasoning steps
-                                # Only stream one step per node (from current_thought), not individual tool calls
                                 if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
                                     thought = node_state["current_thought"]
-                                    
-                                    # For build_query node, use build_attempt to create unique key (allow multiple builds)
-                                    # For other nodes, use node name to prevent duplicates
-                                    if node_name == "build_query":
-                                        build_attempt = node_state.get("build_attempt", 1)
-                                        node_thought_key = f"{node_name}_thought_attempt_{build_attempt}"
-                                    else:
-                                        node_thought_key = f"{node_name}_thought"
+                                    node_thought_key = f"{node_name}_thought"
                                     
                                     if node_thought_key not in stream_graph._streamed_node_thoughts:
                                         logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
                                         
-                                        # Extract step metadata if available (tool calls, tokens, query_draft)
                                         step_metadata = dict(node_state.get("step_metadata") or {})
-                                        # Only include query_draft for build_query and pre_validation
-                                        if node_name == "build_query":
-                                            if "query_draft" in node_state:
-                                                step_metadata["query_draft"] = node_state.get("query_draft")
-                                            step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
-                                        elif node_name in ("validate_query", "execute_query"):
-                                            step_metadata.pop("query_draft", None)
-                                        elif node_name == "pre_validation":
-                                            if "query_draft" in node_state:
-                                                step_metadata["query_draft"] = node_state.get("query_draft")
+                                        view_images = step_metadata.pop("view_images", None)  # Send separately to keep reasoning chunk small
                                         
                                         reasoning_chunk = AgentMessageChunk(
                                             message_type="reasoning",
                                             content=AgentMessageContent(type="text", data=thought),
                                             step_name=node_name,
-                                            timestamp=time.time(),  # Unix timestamp in seconds
+                                            timestamp=time.time(),
                                             step_index=reasoningStepIndex,
                                             metadata=step_metadata if step_metadata else None
                                         )
                                         reasoningStepIndex += 1
                                         yield reasoning_chunk.to_sse_format()
+                                        # Only send view_images for get_data - summarizer inherits state and would re-send the same images
+                                        if view_images and node_name == "get_data":
+                                            step_idx = reasoningStepIndex - 1
+                                            logger.info(f"Summary: sending view_images metadata step_index={step_idx} count={len(view_images)}")
+                                            meta_chunk = AgentMessageChunk(
+                                                message_type="metadata",
+                                                content=AgentMessageContent(type="json", data={"view_images": view_images, "step_index": step_idx}),
+                                                timestamp=time.time()
+                                            )
+                                            yield meta_chunk.to_sse_format()
                                         stream_graph._streamed_node_thoughts.add(node_thought_key)
-                                        full_content += " " + thought  # Track to avoid duplicates
+                                        full_content += " " + thought
                                 
                                 # Stream final answer when available
                                 if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):

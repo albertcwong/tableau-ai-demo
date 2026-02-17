@@ -1770,7 +1770,11 @@ class TableauClient:
         name = view.get("name") or view.get("Name") or clean_id
         dashboards = await self._metadata_query_dashboard_sheets(clean_id)
         view_type = "dashboard" if (dashboards and dashboards[0].get("sheets")) else "worksheet"
-        return {"view_type": view_type, "name": name, "id": clean_id}
+        result: Dict[str, Any] = {"view_type": view_type, "name": name, "id": clean_id}
+        if view_type == "dashboard" and dashboards:
+            sheets = dashboards[0].get("sheets", [])
+            result["sheet_names"] = [s.get("name", "") for s in sheets if s.get("name")]
+        return result
 
     async def get_view_image(
         self, view_id: str, width: Optional[int] = None, height: Optional[int] = None

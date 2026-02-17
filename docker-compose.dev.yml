@@ -1,5 +1,10 @@
 # Development overrides - use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
 # Hot reload enabled; source code mounted as volumes
+#
+# If frontend fails with ENOENT package.json (e.g. after moving project):
+# 1. Set PROJECT_ROOT in .env to absolute path: PROJECT_ROOT=/full/path/to/tableau-ai-demo-main
+# 2. Remove stale volume: docker volume rm tableau-ai-demo-main_frontend_node_modules
+# 3. Rebuild: docker compose -f docker-compose.yml -f docker-compose.dev.yml build frontend --no-cache
 
 services:
   backend:
@@ -31,10 +36,10 @@ services:
     healthcheck:
       test: ["CMD", "node", "-e", "require('https').get('https://localhost:3000', {rejectUnauthorized:false}, (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
     volumes:
-      - ./frontend:/app
+      - ${PROJECT_ROOT:-.}/frontend:/app
       - frontend_node_modules:/app/node_modules
-      - ./frontend/localhost-key.pem:/app/localhost-key.pem:ro
-      - ./frontend/localhost.pem:/app/localhost.pem:ro
+      - ${PROJECT_ROOT:-.}/frontend/localhost-key.pem:/app/localhost-key.pem:ro
+      - ${PROJECT_ROOT:-.}/frontend/localhost.pem:/app/localhost.pem:ro
 
 volumes:
   frontend_node_modules:

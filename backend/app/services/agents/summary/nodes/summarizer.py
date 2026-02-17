@@ -1,11 +1,33 @@
 """Summarizer node for generating final summary."""
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Set
 
 from app.services.agents.summary.state import SummaryAgentState
+from app.services.agents.summary.tools import _sanitize_view_id
 
 MAX_DATA_ROWS = 50  # Limit rows per view to avoid token overflow
-MAX_WORDS_CUSTOM = 300  # Hard limit for custom mode (failsafe if API ignores max_tokens)
+
+
+def _key_belongs_to_image_view(key: str, view_images: Dict[str, str]) -> bool:
+    """True if this views_data key belongs to a view that has an image (dashboard)."""
+    if not view_images:
+        return False
+    base_id = key.split("_sheet_")[0] if "_sheet_" in key else key
+    base_clean = _sanitize_view_id(base_id)
+    return base_clean in view_images or any(_sanitize_view_id(k) == base_clean for k in view_images)
+
+
+def _key_belongs_to_context(key: str, context_view_ids: list[str]) -> bool:
+    """True if key is for a view in context (exact or sheet suffix)."""
+    if not context_view_ids:
+        return True
+    clean_keys = {_sanitize_view_id(v) for v in context_view_ids}
+    if key in clean_keys:
+        return True
+    for ck in clean_keys:
+        if key.startswith(f"{ck}_sheet_"):
+            return True
+    return False
 MAX_WORDS_BRIEF = 120  # Hard limit for brief mode (1-2 bullets per sheet, up to 120 words)
 
 
@@ -57,15 +79,26 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             **state,
             "final_answer": state["error"],
             "executive_summary": None,
+            "step_metadata": None,
             "detailed_analysis": None,
             "current_thought": None,
         }
 
     try:
         views_metadata = state.get("views_metadata", {})
-        views_data = state.get("views_data", {})
+        views_data = state.get("views_data", {}) or {}
         view_images = state.get("view_images", {}) or {}
         view_ids = state.get("context_views", [])
+
+        # Only use data for views in context - prevents wrong-view data from leaking in
+        orig_data_keys = set(views_data.keys())
+        orig_img_keys = set(view_images.keys())
+        views_data = {k: v for k, v in views_data.items() if _key_belongs_to_context(k, view_ids)}
+        view_images = {k: v for k, v in view_images.items() if _key_belongs_to_context(k, view_ids)}
+        dropped = (orig_data_keys - set(views_data.keys())) | (orig_img_keys - set(view_images.keys()))
+        if dropped:
+            logger.info(f"Summarizer: filtered out data not in context_views={view_ids}: dropped_keys={dropped}")
+        logger.info(f"Summarizer START: views_data_keys={list(views_data.keys())} view_images_keys={list(view_images.keys())} context_views={view_ids}")
 
         view_info_list = []
         total_row_count = 0
@@ -106,23 +139,25 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
         
         summary_mode = state.get("summary_mode") or "full"
         v_data = views_data or {}
-        if not v_data and state.get("view_data"):
-            vd = state["view_data"]
-            v_data = {"single": {"columns": vd.get("columns", []), "data": vd.get("data", []), "row_count": vd.get("row_count", 0)}}
         v_meta = views_metadata or {}
-        if not v_meta and state.get("view_metadata"):
-            v_meta = {"single": state.get("view_metadata", {})}
-        view_data_str = _format_view_data(v_data, v_meta)
-        if view_images and not v_data:
-            view_data_str = "Dashboard images are attached below. Summarize the visualizations."
-        elif view_images and v_data:
+        # Exclude tabular data for views that have images (dashboards)—image is source of truth for those
+        v_data_tabular = {k: v for k, v in v_data.items() if not _key_belongs_to_image_view(k, view_images)}
+        logger.info(f"Summarizer: v_data_keys={list(v_data.keys())} v_data_tabular_keys={list(v_data_tabular.keys())} view_images_keys={list(view_images.keys())}")
+        view_data_str = _format_view_data(v_data_tabular, v_meta)
+        if view_images and not v_data_tabular:
+            view_data_str = (
+                "Dashboard images are attached below. "
+                "CRITICAL: Describe ONLY what is visible in these images. "
+                "Do NOT use metrics or numbers from conversation history—they may refer to different views."
+            )
+        elif view_images and v_data_tabular:
             view_data_str += "\n\nDashboard images are also attached below."
+        logger.info(f"Summarizer: has_tabular={bool(v_data_tabular)} has_images={bool(view_images)} view_data_str[:200]={view_data_str[:200]}")
         
         # Format message history for prompt (last 10 messages)
         messages = state.get("messages", [])
         message_history_str = None
         if messages:
-            # Take last 10 messages (user + assistant pairs)
             recent_messages = messages[-10:]
             history_lines = []
             for msg in recent_messages:
@@ -133,6 +168,7 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
                     history_lines.append(f"{role_label}: {content}")
             if history_lines:
                 message_history_str = "\n".join(history_lines)
+                logger.info(f"Summarizer: including message_history with {len(recent_messages)} messages, total_chars={len(message_history_str)}")
         
         # Detect if user asked a specific question (for answer placement)
         user_query = state.get("user_query", "summarize this view")
@@ -143,10 +179,14 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
              any(w in user_query.lower() for w in ['what', 'which', 'how', 'how much', 'how many', 'when', 'where', 'who', '?']))
         )
         
+        has_tabular = bool(v_data_tabular)
+        has_images = bool(view_images)
         prompt_vars = {
             "view_name": view_names,
             "row_count": total_row_count,
             "view_data": view_data_str,
+            "image_only": has_images and not has_tabular,
+            "mixed_views": has_images and has_tabular,
             "insights": state.get("key_insights", []),
             "recommendations": state.get("recommendations", []),
             "user_query": user_query,
@@ -168,6 +208,14 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             user_message = f"Generate executive summary and detailed analysis for {view_count_text}: {view_names}." if len(view_info_list) > 1 else "Generate executive summary and detailed analysis."
         
         system_prompt = prompt_registry.get_prompt(template_file, variables=prompt_vars)
+        logger.info(f"Summarizer: system_prompt_len={len(system_prompt)}, contains_data={'Data Tables' in system_prompt or 'row_count' in system_prompt}")
+        if "Data Tables" in system_prompt or ("row" in system_prompt and "columns" in system_prompt):
+            logger.warning(f"Summarizer: system prompt may contain tabular data! Checking view_data section...")
+            # Log a sample to see what's in there
+            if "## View Data" in system_prompt:
+                start = system_prompt.find("## View Data")
+                end = system_prompt.find("## User Query", start) if "## User Query" in system_prompt else start + 500
+                logger.warning(f"View Data section: {system_prompt[start:end]}")
 
         model = state.get("model", "gpt-4")
         provider = state.get("provider", "openai")
@@ -180,12 +228,15 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
                 name = views_metadata.get(view_id, {}).get("name", view_id)
                 user_content.append({"type": "text", "text": f"\n[Image: {name}]"})
                 user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+                logger.info(f"Summarizer: adding image for view {view_id} (name={name}, b64_len={len(b64)}, b64_preview={b64[:100]}...)")
             messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+            logger.info(f"Summarizer: sending {len(view_images)} images, user_text={user_message[:80]}...")
         else:
             messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
+            logger.info(f"Summarizer: sending tabular only, user_message={user_message}")
 
-        apply_word_limit = is_specific_question or summary_mode == "brief"
-        word_limit = MAX_WORDS_BRIEF if summary_mode == "brief" else MAX_WORDS_CUSTOM
+        apply_word_limit = summary_mode == "brief"
+        word_limit = MAX_WORDS_BRIEF
         
         response = await ai_client.chat(
             model=model,
@@ -203,12 +254,14 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
                 summary_text = " ".join(words[:word_limit]) + "..."
                 logger.warning(f"Summarizer: truncated response from {len(words)} to {word_limit} words (API may have ignored max_tokens)")
         
+        view_names = ", ".join(v["name"] for v in view_info_list) if view_info_list else "view"
         return {
             **state,
             "executive_summary": summary_text,
             "detailed_analysis": summary_text,
             "final_answer": summary_text,
-            "current_thought": "Summarized view data and metrics."
+            "current_thought": f"Summarized {view_names}.",
+            "step_metadata": None,  # Clear get_data's metadata so it doesn't appear under this step
         }
     except Exception as e:
         logger.error(f"Error generating summary: {e}", exc_info=True)
@@ -218,5 +271,6 @@ async def summarize_node(state: SummaryAgentState) -> Dict[str, Any]:
             "error": f"Failed to generate summary: {err_msg}",
             "executive_summary": None,
             "detailed_analysis": None,
-            "final_answer": f"Summary generation failed: {err_msg}"
+            "final_answer": f"Summary generation failed: {err_msg}",
+            "step_metadata": None,
         }

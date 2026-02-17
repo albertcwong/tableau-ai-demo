@@ -23,6 +23,11 @@ docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ## Prerequisites
 
 1. **Environment**: Copy `.env.example` to `.env` and configure
+
+### Worktree setup
+
+- **Cursor worktrees**: `.env` is linked automatically via `.cursor/worktrees.json` when Cursor creates a worktree on demand.
+- **Manual worktrees** (`git worktree add`): Run `./scripts/setup-worktree-env.sh` once to symlink `.env` from the main worktree.
 2. **Certificates** (optional): For HTTPS, run `cd frontend && ./generate-cert.sh`
 3. **Database**: Run migrations on first run:
    ```bash

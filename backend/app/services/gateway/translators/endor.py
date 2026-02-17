@@ -1,7 +1,7 @@
 """Endor translator - transforms to/from Endor native format."""
 import json
 import logging
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from app.services.gateway.translators.base import BaseTranslator
 from app.services.gateway.router import ProviderContext
 
@@ -74,7 +74,17 @@ class EndorTranslator(BaseTranslator):
         }
         if tools:
             payload["tool_config"] = {"tools": tools}
-        logger.debug(f"Endor payload: {len(endor_messages)} msgs, roles={[m.get('role') for m in endor_messages]}")
+        # Log translated payload (images truncated)
+        for mi, m in enumerate(endor_messages):
+            contents = m.get("contents", [])
+            part_summary = []
+            for c in contents:
+                if "text" in c:
+                    part_summary.append(f"text({len(c.get('text',''))})")
+                elif "inline_data" in c:
+                    d = c["inline_data"]
+                    part_summary.append(f"inline_data({len(d.get('data',''))} chars)")
+            logger.info("Endor translated msg[%d] role=%s contents=%s", mi, m.get("role"), part_summary)
         
         # Headers - will be augmented with A3 token by authenticator
         if stream:
@@ -91,8 +101,40 @@ class EndorTranslator(BaseTranslator):
         logger.debug(f"Endor translator: transformed request for model {model_id}")
         return url, payload, headers
     
+    def _content_to_parts(self, content: Any, allow_images: bool = True) -> List[Dict[str, Any]]:
+        """Convert OpenAI content (str or list of parts) to Endor contents format.
+
+        Image support (Gemini, Pixtral, Qwen): images are included inline within the
+        contents array as base64-encoded strings via inline_data.
+        """
+        if isinstance(content, str):
+            return [{"text": content}] if content.strip() else []
+        if not isinstance(content, list):
+            return [{"text": str(content)}]
+        parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and "text" in item:
+                if item["text"].strip():
+                    parts.append({"text": item["text"]})
+            elif allow_images and item.get("type") == "image_url" and "image_url" in item:
+                url = item["image_url"].get("url", "")
+                if url.startswith("data:image"):
+                    try:
+                        header, b64 = url.split(",", 1)
+                        mime = "image/png"
+                        if "jpeg" in header or "jpg" in header:
+                            mime = "image/jpeg"
+                        parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+                    except Exception:
+                        logger.warning("Endor: failed to parse image_url")
+        return parts if parts else [{"text": " "}]
+
     def _messages_to_endor_format(self, messages: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
-        """Convert OpenAI messages to Endor format. Endor uses 'tool' role with tool_result field."""
+        """Convert OpenAI messages to Endor format. Endor uses 'tool' role with tool_result field.
+        Supports multimodal: text + inline_data (images) in contents.
+        """
         out = []
         _empty = "."  # Endor rejects empty contents; use non-whitespace placeholder
         for i, msg in enumerate(messages):
@@ -100,19 +142,26 @@ class EndorTranslator(BaseTranslator):
             content = msg.get("content")
             if content is None:
                 content = ""
-            if isinstance(content, list):
-                parts = []
-                for c in content:
-                    if isinstance(c, dict):
-                        parts.append(c.get("text") or c.get("content") or "")
-                    else:
-                        parts.append(str(c))
-                text = "".join(str(p) for p in parts)
-            else:
-                text = str(content) if content is not None else ""
-            text = (text or "").strip()
-            # For assistant with tool_calls or function_call and empty content: synthesize from tool/function name
-            if not text and role == "assistant":
+            # tool/function roles: text only
+            if role in ("function", "tool"):
+                if isinstance(content, list):
+                    text = "".join(
+                        (p.get("text") or p.get("content") or "")
+                        for p in content if isinstance(p, dict) and (p.get("type") == "text" or "text" in p)
+                    )
+                else:
+                    text = str(content) if content is not None else ""
+                text = (text or "").strip() or _empty
+                out.append({"role": "tool", "tool_result": text})
+                continue
+            # user/assistant/system: multimodal via _content_to_parts
+            allow_images = role in ("user",)  # system typically text-only; assistant has no images
+            endor_parts = self._content_to_parts(content, allow_images=allow_images)
+            # Fallback for empty: synthesize or placeholder
+            text_parts = [p.get("text", "") for p in endor_parts if "text" in p]
+            has_images = any("inline_data" in p for p in endor_parts)
+            text = "".join(text_parts).strip()
+            if not text and not has_images and role == "assistant":
                 if msg.get("tool_calls"):
                     names = [tc.get("function", {}).get("name", "") for tc in msg["tool_calls"] if tc.get("function")]
                     text = "Calling " + ", ".join(n for n in names if n) or _empty
@@ -126,16 +175,19 @@ class EndorTranslator(BaseTranslator):
                         except Exception:
                             pass
                     text = f"Calling {name}" if name else _empty
-            orig_empty = not text
-            text = text or _empty
-            if orig_empty:
-                logger.info(f"Endor msg[{i}] role={role} had empty content, synthesized/placeholder len={len(text)}")
-            if role == "function":
-                out.append({"role": "tool", "tool_result": text})
-            elif role == "tool":
-                out.append({"role": "tool", "tool_result": text})
-            else:
-                out.append({"role": role, "contents": [{"text": text}]})
+            if not text and not has_images:
+                text = _empty
+                logger.info(f"Endor msg[{i}] role={role} had empty content, using placeholder")
+            # Rebuild contents: ensure text first if present, then images
+            final_parts = []
+            if text:
+                final_parts.append({"text": text})
+            for p in endor_parts:
+                if "inline_data" in p:
+                    final_parts.append(p)
+            if not final_parts:
+                final_parts = [{"text": _empty}]
+            out.append({"role": role, "contents": final_parts})
         return out
 
     def normalize_response(

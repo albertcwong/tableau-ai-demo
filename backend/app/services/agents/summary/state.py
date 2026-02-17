@@ -39,3 +39,6 @@ class SummaryAgentState(BaseAgentState):
     # Output
     executive_summary: Optional[str]
     detailed_analysis: Optional[str]
+    
+    # Node metadata (for streaming)
+    step_metadata: Optional[dict]  # Metadata for current step (tool_calls, data_summary, view_images, etc.)

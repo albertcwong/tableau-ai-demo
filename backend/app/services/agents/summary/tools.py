@@ -124,13 +124,13 @@ class SummaryTools:
             },
             {
                 "name": "get_exported_image",
-                "description": "Get PNG image of view via REST API. Use for DASHBOARDS not on canvas (after query_view_metadata returns dashboard).",
+                "description": "Get PNG image of view via REST API. Use for DASHBOARDS not on canvas (after query_view_metadata returns dashboard). Omit width/height for full resolution (recommended for summaries).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "view_id": {"type": "string", "description": "View ID (LUID)"},
-                        "width": {"type": "integer", "description": "Optional width in pixels"},
-                        "height": {"type": "integer", "description": "Optional height in pixels"},
+                        "width": {"type": "integer", "description": "Optional width in pixels. Omit for full resolution."},
+                        "height": {"type": "integer", "description": "Optional height in pixels. Omit for full resolution."},
                     },
                     "required": ["view_id"],
                 },
@@ -152,11 +152,8 @@ class SummaryTools:
         if tool_name == "get_rest_summary_data":
             return await self._get_rest_summary_data(clean_id)
         if tool_name == "get_exported_image":
-            return await self._get_exported_image(
-                clean_id,
-                arguments.get("width"),
-                arguments.get("height"),
-            )
+            # Always use full resolution for summaries (omit width/height)
+            return await self._get_exported_image(clean_id, None, None)
         return {"error": f"Unknown tool: {tool_name}"}
 
     async def _query_view_metadata(self, view_id: str) -> Dict[str, Any]:

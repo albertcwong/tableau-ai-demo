@@ -192,9 +192,28 @@ async def chat_completions(
         
         # Get translator
         translator = get_translator(context.provider, context)
-        
+
         # Transform request
         request_dict = request.model_dump(exclude_none=True)
+
+        # Log incoming messages structure (for debugging image/multimodal)
+        for i, msg in enumerate(request_dict.get("messages", [])):
+            c = msg.get("content", "")
+            if isinstance(c, list):
+                part_summary = []
+                for p in c:
+                    if isinstance(p, dict):
+                        if p.get("type") == "text":
+                            part_summary.append(f"text({len(p.get('text',''))})")
+                        elif p.get("type") == "image_url":
+                            url = (p.get("image_url") or {}).get("url", "")
+                            part_summary.append(f"image_url({len(url)} chars, starts_with={url[:50]!r}...)")
+                        else:
+                            part_summary.append(str(p.get("type", "?")))
+                logger.info("Gateway incoming msg[%d] role=%s content=list parts=%s", i, msg.get("role"), part_summary)
+            else:
+                logger.info("Gateway incoming msg[%d] role=%s content=str len=%d", i, msg.get("role"), len(str(c)))
+
         url, payload, headers = translator.transform_request(request_dict, context)
         
         # Add authorization header

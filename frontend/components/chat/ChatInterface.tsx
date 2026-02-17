@@ -20,6 +20,21 @@ import { cn } from '@/lib/utils';
 // The backend sends AgentMessageChunk objects with message_type ('reasoning' or 'final_answer')
 // which allows the frontend to handle them appropriately without text parsing
 
+function formatDataSummary(ds: { views?: Array<{ name?: string; row_count?: number; columns?: string[]; type?: string }>; source?: string } | null): string | null {
+  if (!ds?.views?.length) return null;
+  const lines = ds.views.map((v) => {
+    if (v.type === 'image') return `${v.name}: dashboard image`;
+    const cols = v.columns?.slice(0, 6).join(', ') || '(none)';
+    const more = (v.columns?.length ?? 0) > 6 ? ` +${(v.columns?.length ?? 0) - 6} more` : '';
+    return `${v.name}: ${v.row_count ?? 0} rows, columns: [${cols}${more}]`;
+  });
+  const src = ds.source ? ` (from ${ds.source})` : '';
+  return `Data pulled${src}:\n${lines.join('\n')}`;
+}
+
+/** Data preview: { id, name, columns, rows }[] - sample rows sent to LLM */
+type DataPreviewItem = { id: string; name: string; columns: string[]; rows: unknown[][] };
+
 export interface ChatInterfaceProps {
   conversationId?: number;
   className?: string;
@@ -61,7 +76,7 @@ export function ChatInterface({
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [lastReasoningSteps, setLastReasoningSteps] = useState<string>('');
-  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string }>>([]);
+  const [stepTimings, setStepTimings] = useState<Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string; viewImages?: Array<{ id: string; name: string; base64: string }>; dataPreview?: DataPreviewItem[] }>>([]);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [reasoningTotalTimeMs, setReasoningTotalTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -196,7 +211,7 @@ export function ChatInterface({
 
   const handleSendMessage = useCallback(
     async (content: string, summaryModeOverride?: SummaryMode) => {
-      if (!conversationId || isLoading) return;
+      if (!conversationId || isLoading || isStreaming) return;
 
       // Create new AbortController for this request
       const abortController = new AbortController();
@@ -216,10 +231,11 @@ export function ChatInterface({
       let reasoningStepsText = '';
       let finalAnswerText = '';
       // Track steps by step_index to handle multiple steps from same node
-      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string }> = [];
+      let finalStepTimings: Array<{ text: string; duration: number; startTime: number; nodeName?: string; stepIndex?: number; toolCalls?: string[]; tokens?: { prompt?: number; completion?: number; total?: number }; queryDraft?: Record<string, any>; toolResultSummary?: string; viewImages?: Array<{ id: string; name: string; base64: string }> }> = [];
       let reasoningStepIndex = 0;
       let storedVizqlQuery: Record<string, any> | null = null; // Store vizql_query from metadata
       let firstReasoningStepTime: number | null = null; // Track when first reasoning step arrives
+      const pendingViewImages: Map<number, Array<{ id: string; name: string; base64: string }>> = new Map(); // Metadata may arrive before step
       let finalAnswerStartTime: number | null = null; // Track when final answer starts
       
       // Map node names to human-readable step names
@@ -468,7 +484,6 @@ export function ChatInterface({
           },
           (structuredChunk: AgentMessageChunk) => {
             // Handle structured message chunks
-            console.log('Received structured chunk:', structuredChunk);
             
             // Use client-side elapsed for consistent step timing (backend timestamp can have clock skew)
             const elapsedTime = Date.now() - startTime;
@@ -492,9 +507,16 @@ export function ChatInterface({
               
               // Extract metadata (tool calls, tokens, tool_result_summary) from the chunk
               const stepMetadata = structuredChunk.metadata || {};
-              const toolCalls = stepMetadata.tool_calls || [];
+              const rawToolCalls = stepMetadata.tool_calls || [];
+              const toolCalls: string[] = rawToolCalls.map((tc: unknown) => {
+                if (typeof tc === 'string') return tc;
+                const t = tc as { tool?: string; name?: string };
+                return t?.tool ?? t?.name ?? 'unknown';
+              });
               const tokens = stepMetadata.tokens || null;
-              const toolResultSummary = stepMetadata.tool_result_summary || null;
+              const toolResultSummary = stepMetadata.tool_result_summary || formatDataSummary(stepMetadata.data_summary) || null;
+              const viewImages = (stepMetadata.view_images || []) as Array<{ id: string; name: string; base64: string }>;
+              const dataPreview = (stepMetadata.data_summary?.data_preview || []) as DataPreviewItem[];
               
               reasoningStepsText += (reasoningStepsText ? ' ' : '') + stepText;
               
@@ -513,9 +535,11 @@ export function ChatInterface({
                 const stepDuration = elapsedTime - existingStep.startTime;
                 // Extract query_draft from metadata if available (for build_query steps)
                 const queryDraft = stepMetadata.query_draft || stepMetadata.vizql_query;
-                
+                // Prefer richer backend content when updating
+                const updatedText = (stepText && stepText.trim()) ? stepText.trim() : existingStep.text;
                 finalStepTimings[existingStepIndex] = {
                   ...existingStep,
+                  text: updatedText,
                   duration: Math.max(50, stepDuration),
                   toolCalls: toolCalls.length > 0 ? toolCalls : existingStep.toolCalls,
                   tokens: tokens ? {
@@ -525,6 +549,8 @@ export function ChatInterface({
                   } : existingStep.tokens,
                   queryDraft: queryDraft || existingStep.queryDraft,  // Update query_draft if available
                   toolResultSummary: toolResultSummary || (existingStep as any).toolResultSummary,  // Update tool_result_summary if available
+                  viewImages: viewImages.length > 0 ? viewImages : existingStep.viewImages,
+                  dataPreview: dataPreview.length > 0 ? dataPreview : existingStep.dataPreview,
                 };
               } else {
                 // New step - calculate when it started and its duration
@@ -557,10 +583,14 @@ export function ChatInterface({
                 // Extract query_draft from metadata if available (for build_query steps)
                 const queryDraft = stepMetadata.query_draft || stepMetadata.vizql_query;
                 
+                // Apply any pending view_images for this step (metadata may have arrived first)
+                const pendingImgs = pendingViewImages.get(stepIndex);
+                if (pendingImgs) pendingViewImages.delete(stepIndex);
+                const viewImagesForStep = pendingImgs || viewImages;
                 // Add new step with calculated start time and duration
-                // Don't enforce minimum duration here - it will be calculated when next step arrives
+                // Use actual backend content (stepText) when available; fallback to node display name
                 finalStepTimings.push({
-                  text: stepDisplayName,
+                  text: (stepText && stepText.trim()) ? stepText.trim() : stepDisplayName,
                   duration: stepDuration,
                   startTime: stepStartTime,
                   nodeName: nodeName,
@@ -573,6 +603,8 @@ export function ChatInterface({
                   } : undefined,
                   queryDraft: queryDraft,  // Include query_draft for build_query steps
                   toolResultSummary: toolResultSummary || undefined,  // Include tool_result_summary if available
+                  viewImages: (viewImagesForStep?.length ? viewImagesForStep : undefined),
+                  dataPreview: dataPreview.length > 0 ? dataPreview : undefined,
                 });
               }
               
@@ -620,12 +652,25 @@ export function ChatInterface({
                 : JSON.stringify(structuredChunk.content.data);
               setError(new Error(errorText));
             } else if (structuredChunk.message_type === 'metadata') {
-              // Handle metadata (e.g., vizql_query)
+              // Handle metadata (e.g., vizql_query, view_images for summary agent)
               const metadata = typeof structuredChunk.content.data === 'object' 
                 ? structuredChunk.content.data 
                 : (typeof structuredChunk.content.data === 'string' 
-                  ? JSON.parse(structuredChunk.content.data) 
+                  ? (() => { try { return JSON.parse(structuredChunk.content.data); } catch { return {}; } })()
                   : {});
+              if (metadata.view_images && Array.isArray(metadata.view_images) && typeof metadata.step_index === 'number') {
+                const idx = metadata.step_index;
+                const imgs = metadata.view_images as Array<{ id: string; name: string; base64: string }>;
+                if (idx >= 0 && idx < finalStepTimings.length) {
+                  finalStepTimings[idx] = { ...finalStepTimings[idx], viewImages: imgs };
+                  setStepTimings([...finalStepTimings]);
+                  if (process.env.NODE_ENV === 'development') {
+                    console.debug('[view_images] applied to step', idx, 'count=', imgs.length);
+                  }
+                } else {
+                  pendingViewImages.set(idx, imgs);
+                }
+              }
               if (metadata.vizql_query) {
                 // Store vizql_query to be added to the message when streaming completes
                 storedVizqlQuery = metadata.vizql_query;
@@ -676,17 +721,19 @@ export function ChatInterface({
         setMessages((prev) => prev.filter((msg) => msg.id !== userMessage.id));
       }
     },
-    [conversationId, selectedModel, isLoading, agentType]
+    [conversationId, selectedModel, isLoading, isStreaming, agentType, context]
   );
 
   const handleSummaryModeClick = useCallback((mode: SummaryMode) => {
+    if (isLoading || isStreaming) return;
     if (mode === 'custom') {
       setSummaryMode('custom');
       messageInputRef.current?.focus();
     } else {
+      setSummaryMode(mode);
       handleSendMessage('Summarize', mode);
     }
-  }, [handleSendMessage]);
+  }, [handleSendMessage, isLoading, isStreaming]);
 
   const handleEditMessage = useCallback(
     async (messageId: string, newContent: string) => {
@@ -828,6 +875,7 @@ export function ChatInterface({
             isReasoningActive={isStreaming}
             streamStartTime={streamStartTime}
             totalTimeMs={reasoningTotalTimeMs}
+            agentType={agentType}
           />
         </div>
       )}
