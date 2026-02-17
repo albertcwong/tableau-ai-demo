@@ -23,11 +23,11 @@ const AUTH_OPTIONS: { value: AuthType; label: string }[] = [
 interface ServerConnectionCardProps {
   config: TableauConfigOption;
   preferredAuthType: AuthType | null;
-  pat: UserTableauPAT | null;
+  pats: UserTableauPAT[];
   password: UserTableauPassword | null;
   onAuthTypeChange: (configId: number, authType: AuthType) => Promise<void>;
   onPatAdd: (configId: number, data: CreateTableauPAT) => Promise<void>;
-  onPatDelete: (configId: number) => Promise<void>;
+  onPatDelete: (patId: number) => Promise<void>;
   onPasswordAdd: (configId: number, data: CreateTableauPassword) => Promise<void>;
   onPasswordDelete: (configId: number) => Promise<void>;
 }
@@ -35,7 +35,7 @@ interface ServerConnectionCardProps {
 function ServerConnectionCard({
   config,
   preferredAuthType,
-  pat,
+  pats,
   password,
   onAuthTypeChange,
   onPatAdd,
@@ -170,24 +170,29 @@ function ServerConnectionCard({
         {config.allow_pat_auth && (
           <div className="space-y-3 border-t pt-4">
             <Label>Personal Access Token</Label>
-            {pat ? (
-              <div className="flex items-center justify-between p-3 rounded-md border">
-                <div>
-                  <p className="font-medium">{pat.pat_name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    Added {new Date(pat.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onPatDelete(config.id)}
-                  title="Remove PAT"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+            {pats.length > 0 ? (
+              <div className="space-y-2">
+                {pats.map((pat) => (
+                  <div key={pat.id} className="flex items-center justify-between p-3 rounded-md border">
+                    <div>
+                      <p className="font-medium">{pat.pat_name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Added {new Date(pat.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onPatDelete(pat.id)}
+                      title="Remove PAT"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ) : showPatForm ? (
+            ) : null}
+            {showPatForm ? (
               <form onSubmit={handlePatSubmit} className="space-y-3 border rounded-lg p-4">
                 <div className="space-y-2">
                   <Label htmlFor={`pat-name-${config.id}`}>PAT Name</Label>
@@ -359,9 +364,9 @@ export function TableauConnectionsManagement() {
     await loadData();
   };
 
-  const handlePatDelete = async (configId: number) => {
+  const handlePatDelete = async (patId: number) => {
     if (!confirm('Remove this PAT? You will need to reconfigure it to use PAT authentication.')) return;
-    await userSettingsApi.deleteTableauPAT(configId);
+    await userSettingsApi.deleteTableauPAT(patId);
     await loadData();
   };
 
@@ -405,7 +410,7 @@ export function TableauConnectionsManagement() {
   return (
     <div className="space-y-4">
       {configs.map((config) => {
-        const pat = pats.find((p) => p.tableau_server_config_id === config.id) || null;
+        const configPats = pats.filter((p) => p.tableau_server_config_id === config.id);
         const password = passwords.find((p) => p.tableau_server_config_id === config.id) || null;
         const preferredAuthType = (preferences[config.id] as AuthType) || null;
         return (
@@ -413,7 +418,7 @@ export function TableauConnectionsManagement() {
             key={config.id}
             config={config}
             preferredAuthType={preferredAuthType}
-            pat={pat}
+            pats={configPats}
             password={password}
             onAuthTypeChange={handleAuthTypeChange}
             onPatAdd={handlePatAdd}

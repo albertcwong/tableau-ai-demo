@@ -27,7 +27,7 @@ export function AuthConfigManagement() {
     auth0_client_secret: '',
     auth0_audience: '',
     auth0_issuer: '',
-    auth0_tableau_metadata_field: '',
+    tableau_username_field: '',
     backend_api_url: '',
     tableau_oauth_frontend_redirect: '',
     eas_jwt_key_pem: '',
@@ -51,7 +51,7 @@ export function AuthConfigManagement() {
         auth0_client_secret: authConfig.auth0_client_secret || '',
         auth0_audience: authConfig.auth0_audience || '',
         auth0_issuer: authConfig.auth0_issuer || '',
-        auth0_tableau_metadata_field: authConfig.auth0_tableau_metadata_field || '',
+        tableau_username_field: authConfig.tableau_username_field || '',
         backend_api_url: authConfig.backend_api_url || '',
         tableau_oauth_frontend_redirect: authConfig.tableau_oauth_frontend_redirect || '',
         eas_jwt_key_pem: '',
@@ -266,18 +266,18 @@ export function AuthConfigManagement() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="auth0_tableau_metadata_field">Auth0 Tableau Metadata Field (Optional)</Label>
+                <Label htmlFor="tableau_username_field">Tableau Username Claim (IdP)</Label>
                 <Input
-                  id="auth0_tableau_metadata_field"
+                  id="tableau_username_field"
                   type="text"
                   placeholder="app_metadata.tableau_username"
-                  value={formData.auth0_tableau_metadata_field || ''}
+                  value={formData.tableau_username_field || ''}
                   onChange={(e) =>
-                    setFormData({ ...formData, auth0_tableau_metadata_field: e.target.value })
+                    setFormData({ ...formData, tableau_username_field: e.target.value })
                   }
                 />
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Field path in Auth0 token to extract Tableau username. Examples:
+                  Claim/field path from your IdP token (e.g. Auth0: app_metadata.tableau_username, Okta: tableau_username). Examples:
                   <br />
                   • <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">app_metadata.tableau_username</code> - for app_metadata
                   <br />

@@ -57,6 +57,7 @@ class TableauAuthRequest(BaseModel):
     """Tableau authentication request."""
     config_id: int
     auth_type: str = "connected_app"  # "connected_app", "pat", "standard", "connected_app_oauth"
+    pat_id: Optional[int] = None  # Required when multiple PATs for config
 
 
 class OAuthAuthorizeUrlResponse(BaseModel):
@@ -141,14 +142,25 @@ async def authenticate_tableau(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="PAT authentication is not enabled for this server"
             )
-        pat_record = db.query(UserTableauPAT).filter(
+        pats = db.query(UserTableauPAT).filter(
             UserTableauPAT.user_id == current_user.id,
             UserTableauPAT.tableau_server_config_id == config.id,
-        ).first()
-        if not pat_record:
+        ).all()
+        if not pats:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No PAT configured for this server. Add one in Settings."
+            )
+        if len(pats) > 1 and not auth_request.pat_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Multiple PATs configured; specify pat_id"
+            )
+        pat_record = pats[0] if len(pats) == 1 else next((p for p in pats if p.id == auth_request.pat_id), None)
+        if not pat_record:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PAT not found or pat_id invalid"
             )
         try:
             pat_secret = decrypt_pat(pat_record.pat_secret)
@@ -577,7 +589,14 @@ async def get_oauth_authorize_url(
     state = generate_state()
     redirect_uri = _oauth_callback_url(db)
     store_oauth_state(state, config_id, current_user.id)
-    authorize_url = await get_authorization_url(config, redirect_uri, state)
+    from app.services.auth_config_service import get_auth_config
+    auth_config = get_auth_config(db)
+    sub_field = (
+        (getattr(config, "eas_sub_claim_field", None) or "")
+        or (getattr(auth_config, "tableau_username_field", None) or "")
+        or "email"
+    ).strip()
+    authorize_url = await get_authorization_url(config, redirect_uri, state, sub_claim=sub_field)
     return OAuthAuthorizeUrlResponse(authorize_url=authorize_url)
 
 
@@ -648,7 +667,13 @@ async def oauth_callback(
             logger.warning("OAuth callback user not found: user_id=%s", user_id)
             return RedirectResponse(url=_frontend_redirect_url(False, db, error="user_not_found"))
         auth0_payload = jwt.decode(eas_jwt, options={"verify_signature": False})
-        sub_field = (getattr(config, "eas_sub_claim_field", None) or "email").strip()
+        from app.services.auth_config_service import get_auth_config
+        auth_config = get_auth_config(db)
+        sub_field = (
+            (getattr(config, "eas_sub_claim_field", None) or "")
+            or (getattr(auth_config, "tableau_username_field", None) or "")
+            or "email"
+        ).strip()
         sub_value = extract_metadata_value(auth0_payload, sub_field) if sub_field else None
         if not sub_value:
             sub_value = resolve_tableau_username(db, config, current_user)

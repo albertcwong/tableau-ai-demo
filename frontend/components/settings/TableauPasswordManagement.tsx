@@ -21,6 +21,7 @@ const PASSWORD_CONFIG: CredentialConfig<UserTableauPassword, CreateTableauPasswo
   listApi: userSettingsApi.listTableauPasswords,
   createApi: userSettingsApi.createTableauPassword,
   deleteApi: userSettingsApi.deleteTableauPassword,
+  deleteKey: 'tableau_server_config_id',
   displayField: 'tableau_username',
   formFields: [
     { key: 'tableau_username', label: 'Tableau username', placeholder: 'tableau_username' },

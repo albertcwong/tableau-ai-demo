@@ -30,7 +30,9 @@ export interface CredentialConfig<T extends CredentialItem, C extends { tableau_
   configFilter: (c: TableauConfigOption) => boolean;
   listApi: () => Promise<T[]>;
   createApi: (data: C) => Promise<T>;
-  deleteApi: (configId: number) => Promise<void>;
+  deleteApi: (id: number) => Promise<void>;
+  deleteKey: keyof T;  // 'id' for PAT (delete by pat_id), 'tableau_server_config_id' for password
+  allowMultiplePerConfig?: boolean;  // true for PAT 1-N
   displayField: keyof T;
   formFields: Array<{
     key: string;
@@ -96,18 +98,20 @@ export function TableauCredentialManagement<
     }
   };
 
-  const handleDelete = async (configId: number) => {
+  const handleDelete = async (item: T) => {
     if (!confirm(config.deleteConfirm)) return;
     try {
       setError(null);
-      await config.deleteApi(configId);
+      await config.deleteApi((item as Record<string, number>)[config.deleteKey as string]);
       loadData();
     } catch (err: unknown) {
       setError(extractErrorMessage(err, 'Failed to delete'));
     }
   };
 
-  const availableConfigs = configs.filter((c) => !items.some((p) => p.tableau_server_config_id === c.id));
+  const availableConfigs = config.allowMultiplePerConfig
+    ? configs
+    : configs.filter((c) => !items.some((p) => p.tableau_server_config_id === c.id));
 
   if (loading) {
     return <div className="text-center py-8">Loading...</div>;
@@ -143,7 +147,7 @@ export function TableauCredentialManagement<
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleDelete(item.tableau_server_config_id)}
+                    onClick={() => handleDelete(item)}
                     title="Remove"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -178,10 +182,10 @@ export function TableauCredentialManagement<
                         <SelectItem
                           key={c.id}
                           value={c.id.toString()}
-                          disabled={items.some((p) => p.tableau_server_config_id === c.id)}
+                          disabled={!config.allowMultiplePerConfig && items.some((p) => p.tableau_server_config_id === c.id)}
                         >
                           {c.name}{' '}
-                          {items.some((p) => p.tableau_server_config_id === c.id) && '(already configured)'}
+                          {!config.allowMultiplePerConfig && items.some((p) => p.tableau_server_config_id === c.id) && '(already configured)'}
                         </SelectItem>
                       ))}
                     </SelectContent>

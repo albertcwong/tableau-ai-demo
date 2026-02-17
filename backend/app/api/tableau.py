@@ -68,6 +68,7 @@ def _is_permission_error(error_msg: str) -> bool:
 async def get_tableau_client(
     x_tableau_config_id: Optional[str] = Header(None, alias="X-Tableau-Config-Id"),
     x_tableau_auth_type: Optional[str] = Header(None, alias="X-Tableau-Auth-Type"),
+    x_tableau_pat_id: Optional[str] = Header(None, alias="X-Tableau-Pat-Id"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TableauClient:
@@ -143,15 +144,32 @@ async def get_tableau_client(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="PAT authentication is not enabled for this server"
                     )
-                pat_record = db.query(UserTableauPAT).filter(
+                pats = db.query(UserTableauPAT).filter(
                     UserTableauPAT.user_id == current_user.id,
                     UserTableauPAT.tableau_server_config_id == config.id,
-                ).first()
-                if not pat_record:
+                ).all()
+                if not pats:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="No PAT configured. Please add one in Settings and connect.",
                         headers={"X-Error-Code": "TABLEAU_PAT_NOT_CONFIGURED"},
+                    )
+                try:
+                    pat_id = int(x_tableau_pat_id) if x_tableau_pat_id else None
+                except (ValueError, TypeError):
+                    pat_id = None
+                if len(pats) > 1 and not pat_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Multiple PATs configured; specify X-Tableau-Pat-Id header",
+                        headers={"X-Error-Code": "TABLEAU_PAT_ID_REQUIRED"},
+                    )
+                pat_record = pats[0] if len(pats) == 1 else next((p for p in pats if p.id == pat_id), None)
+                if not pat_record:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="PAT not found or X-Tableau-Pat-Id invalid",
+                        headers={"X-Error-Code": "TABLEAU_PAT_INVALID"},
                     )
                 try:
                     pat_secret = decrypt_pat(pat_record.pat_secret)

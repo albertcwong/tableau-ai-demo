@@ -16,6 +16,8 @@ const PAT_CONFIG: CredentialConfig<UserTableauPAT, CreateTableauPAT> = {
   listApi: userSettingsApi.listTableauPATs,
   createApi: userSettingsApi.createTableauPAT,
   deleteApi: userSettingsApi.deleteTableauPAT,
+  deleteKey: 'id',
+  allowMultiplePerConfig: true,
   displayField: 'pat_name',
   formFields: [
     { key: 'pat_name', label: 'PAT Name', placeholder: 'My PAT' },

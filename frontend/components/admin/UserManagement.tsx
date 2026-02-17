@@ -373,6 +373,15 @@ export function UserManagement() {
                     <tr>
                       <td colSpan={5} className="px-4 py-4 bg-gray-50 dark:bg-gray-800">
                         <div className="space-y-4">
+                          <Alert className="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
+                            <p className="text-sm font-medium mb-1">Tableau username resolution (highest to lowest):</p>
+                            <ol className="text-sm list-decimal list-inside space-y-0.5 text-muted-foreground">
+                              <li>User mapping below (if set) — overrides everything</li>
+                              <li>IdP claim (Auth → Tableau Username Claim) — from token at login</li>
+                              <li>App username — fallback</li>
+                            </ol>
+                            <p className="text-sm text-muted-foreground mt-2">Add a mapping only when you need to override the IdP value (e.g. different Tableau username than IdP, or no IdP).</p>
+                          </Alert>
                           <div className="flex items-center justify-between">
                             <h3 className="font-semibold flex items-center gap-2">
                               <Server className="h-4 w-4" />
@@ -423,7 +432,9 @@ export function UserManagement() {
                                     </Select>
                                   </div>
                                   <div className="space-y-2">
-                                    <Label htmlFor="tableau_username">Tableau Username</Label>
+                                    <Label htmlFor="tableau_username" title="Overrides IdP-derived username for this user and Connected App. Leave empty or remove mapping to use IdP claim.">
+                                      Tableau Username
+                                    </Label>
                                     <Input
                                       id="tableau_username"
                                       value={mappingFormData.tableau_username}
@@ -431,6 +442,7 @@ export function UserManagement() {
                                       placeholder="Enter Tableau server username"
                                       required
                                     />
+                                    <p className="text-xs text-muted-foreground">Overrides IdP-derived username for this user and Connected App. Leave empty or remove mapping to use IdP claim.</p>
                                   </div>
                                   <div className="flex gap-2">
                                     <Button type="submit">
@@ -469,7 +481,10 @@ export function UserManagement() {
                                             {config?.server_url && (
                                               <span>{config.server_url}{config?.site_id && config.site_id.trim() ? `, Site: ${config.site_id}` : ', Site: Default'} | </span>
                                             )}
-                                            Username: {mapping.tableau_username}
+                                            <span className="inline-flex items-center gap-1">
+                                              <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200">Override</span>
+                                              Username: {mapping.tableau_username}
+                                            </span>
                                           </p>
                                         </div>
                                         <div className="flex gap-2">

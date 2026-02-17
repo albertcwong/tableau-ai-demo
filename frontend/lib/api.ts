@@ -111,6 +111,10 @@ apiClient.interceptors.request.use(
       if (authType) {
         config.headers['X-Tableau-Auth-Type'] = authType;
       }
+      const patId = localStorage.getItem('tableau_pat_id');
+      if (patId && authType === 'pat') {
+        config.headers['X-Tableau-Pat-Id'] = patId;
+      }
     }
     
     return config;
@@ -845,6 +849,7 @@ export interface TableauConfigOption {
 export interface TableauAuthRequest {
   config_id: number;
   auth_type?: 'connected_app' | 'pat' | 'standard' | 'connected_app_oauth';
+  pat_id?: number;  // Required when multiple PATs for config
 }
 
 export interface OAuthAuthorizeUrlResponse {
@@ -1006,8 +1011,8 @@ export const userSettingsApi = {
     const response = await apiClient.post<UserTableauPAT>('/api/v1/user/tableau-pats', data);
     return response.data;
   },
-  deleteTableauPAT: async (configId: number): Promise<void> => {
-    await apiClient.delete(`/api/v1/user/tableau-pats/${configId}`);
+  deleteTableauPAT: async (patId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/user/tableau-pats/${patId}`);
   },
 
   listTableauPasswords: async (): Promise<UserTableauPassword[]> => {
@@ -1231,7 +1236,7 @@ export interface AuthConfigResponse {
   auth0_client_secret?: string | null;
   auth0_audience?: string | null;
   auth0_issuer?: string | null;
-  auth0_tableau_metadata_field?: string | null;
+  tableau_username_field?: string | null;
   backend_api_url?: string | null;
   tableau_oauth_frontend_redirect?: string | null;
   eas_jwt_key_configured: boolean;
@@ -1258,7 +1263,7 @@ export interface AuthConfigUpdate {
   auth0_client_secret?: string;
   auth0_audience?: string;
   auth0_issuer?: string;
-  auth0_tableau_metadata_field?: string;
+  tableau_username_field?: string;
   backend_api_url?: string;
   tableau_oauth_frontend_redirect?: string;
   eas_jwt_key_pem?: string;

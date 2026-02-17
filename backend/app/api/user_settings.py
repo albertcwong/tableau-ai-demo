@@ -45,6 +45,37 @@ def _list_credentials(
     )
 
 
+def _create_credential(
+    db: Session,
+    user_id: int,
+    model_cls: Type[Any],
+    config_attr: str,
+    config_id: int,
+    name_attr: str,
+    name_value: str,
+    secret_attr: str,
+    secret_value: str,
+) -> Tuple[Any, TableauServerConfig]:
+    """Always insert new record (for PAT 1-N)."""
+    config = db.query(TableauServerConfig).filter(
+        TableauServerConfig.id == config_id,
+        TableauServerConfig.is_active == True,
+        getattr(TableauServerConfig, config_attr) == True,
+    ).first()
+    if not config:
+        return None, None
+    encrypted = encrypt_pat(secret_value)
+    record = model_cls(
+        user_id=user_id,
+        tableau_server_config_id=config_id,
+        **{name_attr: name_value, secret_attr: encrypted},
+    )
+    db.add(record)
+    safe_commit(db)
+    db.refresh(record)
+    return record, config
+
+
 def _create_or_update_credential(
     db: Session,
     user_id: int,
@@ -94,6 +125,18 @@ def _delete_credential(
     record = db.query(model_cls).filter(
         model_cls.user_id == user_id,
         model_cls.tableau_server_config_id == config_id,
+    ).first()
+    if not record:
+        return False
+    db.delete(record)
+    safe_commit(db)
+    return True
+
+
+def _delete_pat_by_id(db: Session, user_id: int, pat_id: int) -> bool:
+    record = db.query(UserTableauPAT).filter(
+        UserTableauPAT.id == pat_id,
+        UserTableauPAT.user_id == user_id,
     ).first()
     if not record:
         return False
@@ -161,14 +204,14 @@ async def list_tableau_pats(
 
 
 @router.post("/tableau-pats", response_model=TableauPATResponse, status_code=status.HTTP_201_CREATED)
-async def create_or_update_tableau_pat(
+async def create_tableau_pat(
     data: TableauPATCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create or update PAT for a Tableau server."""
+    """Create new PAT for a Tableau server (allows multiple PATs per config)."""
     cfg = _CREDENTIAL_CONFIG["pat"]
-    pat, config = _create_or_update_credential(
+    pat, config = _create_credential(
         db, current_user.id, cfg["model"], cfg["config_attr"],
         data.tableau_server_config_id, "pat_name", data.pat_name,
         "pat_secret", data.pat_secret,
@@ -185,15 +228,15 @@ async def create_or_update_tableau_pat(
     )
 
 
-@router.delete("/tableau-pats/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/tableau-pats/{pat_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tableau_pat(
-    config_id: int,
+    pat_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Delete PAT for a Tableau server."""
-    if not _delete_credential(db, current_user.id, UserTableauPAT, config_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PAT not found for this server")
+    """Delete PAT by ID."""
+    if not _delete_pat_by_id(db, current_user.id, pat_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PAT not found")
 
 
 class TableauPasswordResponse(BaseModel):

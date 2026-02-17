@@ -204,10 +204,6 @@ class UserTableauPAT(Base):
     user = relationship("User", back_populates="tableau_pats")
     tableau_config = relationship("TableauServerConfig", back_populates="user_pats")
 
-    __table_args__ = (
-        UniqueConstraint('user_id', 'tableau_server_config_id', name='uq_user_tableau_pat'),
-    )
-
     def __repr__(self):
         return f"<UserTableauPAT(id={self.id}, user_id={self.user_id}, tableau_server_config_id={self.tableau_server_config_id}, pat_name={self.pat_name})>"
 
@@ -322,7 +318,7 @@ class AuthConfig(Base):
     auth0_client_secret = Column(String(512), nullable=True, comment="Auth0 client secret (for server-side token exchange, optional for SPAs)")
     auth0_audience = Column(String(255), nullable=True, comment="Auth0 API audience identifier")
     auth0_issuer = Column(String(255), nullable=True, comment="Auth0 issuer URL")
-    auth0_tableau_metadata_field = Column(String(255), nullable=True, comment="Auth0 metadata field name to extract Tableau username (e.g., 'app_metadata.tableau_username' or 'tableau_username')")
+    tableau_username_field = Column(String(255), nullable=True, comment="IdP claim/field path for Tableau username (e.g. app_metadata.tableau_username, tableau_username)")
 
     # App / OAuth config (overrides .env when set)
     backend_api_url = Column(String(500), nullable=True, comment="Backend API URL for OAuth callback and EAS issuer")

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse, type SiteInfo } from '@/lib/api';
+import { authApi, userSettingsApi, type TableauConfigOption, type TableauAuthResponse, type SiteInfo, type UserTableauPAT } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -53,8 +53,10 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
   const [preferredAuthType, setPreferredAuthType] = useState<'connected_app' | 'pat' | 'standard' | 'connected_app_oauth' | null>(null);
   const [perServerPreferences, setPerServerPreferences] = useState<Record<number, AuthType>>({});
   const [authType, setAuthType] = useState<AuthType>('connected_app');
+  const [userPats, setUserPats] = useState<UserTableauPAT[]>([]);
   const [userPatConfigIds, setUserPatConfigIds] = useState<number[]>([]);
   const [userPasswordConfigIds, setUserPasswordConfigIds] = useState<number[]>([]);
+  const [selectedPatId, setSelectedPatId] = useState<number | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<{
     connected: boolean;
     config?: TableauConfigOption;
@@ -193,7 +195,8 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
         userSettingsApi.getTableauAuthPreferences().catch(() => ({})),
       ]);
       setConfigs(configsList);
-      setUserPatConfigIds(pats.map((p) => p.tableau_server_config_id));
+      setUserPats(pats);
+      setUserPatConfigIds([...new Set(pats.map((p) => p.tableau_server_config_id))]);
       setUserPasswordConfigIds(passwords.map((p) => p.tableau_server_config_id));
       setPerServerPreferences(perServerPrefs as Record<number, AuthType>);
       const pref = user?.preferred_tableau_auth_type;
@@ -254,11 +257,21 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
       return;
     }
 
+    const configPats = userPats.filter((p) => p.tableau_server_config_id === selectedConfigId);
+    const req: { config_id: number; auth_type: string; pat_id?: number } = {
+      config_id: selectedConfigId,
+      auth_type: effectiveAuthType,
+    };
+    if (effectiveAuthType === 'pat' && configPats.length > 1) {
+      if (!selectedPatId || !configPats.some((p) => p.id === selectedPatId)) {
+        setError('Please select which PAT to use');
+        setLoading(false);
+        return;
+      }
+      req.pat_id = selectedPatId;
+    }
     try {
-      const authResponse = await authApi.authenticateTableau({
-        config_id: selectedConfigId,
-        auth_type: effectiveAuthType,
-      });
+      const authResponse = await authApi.authenticateTableau(req);
       setConnectionStatus({
         connected: true,
         config,
@@ -293,6 +306,11 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
       localStorage.setItem('tableau_config_id', String(selectedConfigId));
       localStorage.setItem('tableau_auth_type', effectiveAuthType);
       localStorage.setItem('tableau_connected', 'true');
+      if (effectiveAuthType === 'pat' && req.pat_id) {
+        localStorage.setItem('tableau_pat_id', String(req.pat_id));
+      } else {
+        localStorage.removeItem('tableau_pat_id');
+      }
       if (authResponse.expires_at) {
         localStorage.setItem('tableau_token_expires_at', authResponse.expires_at);
       }
@@ -310,12 +328,14 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
   const handleDisconnect = () => {
     setConnectionStatus({ connected: false });
     setSelectedConfigId(null);
+    setSelectedPatId(null);
     setSites([]);
     setSitesPagination(null);
     setSiteSearchTerm('');
     setDebouncedSiteSearch('');
     localStorage.removeItem('tableau_config_id');
     localStorage.removeItem('tableau_auth_type');
+    localStorage.removeItem('tableau_pat_id');
     localStorage.removeItem('tableau_connected');
     localStorage.removeItem('tableau_token_expires_at');
     localStorage.removeItem('tableau_site_content_url');
@@ -352,7 +372,9 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
   const canUsePat = !!selectedConfig?.allow_pat_auth && selectedConfigId != null && userPatConfigIds.includes(selectedConfigId);
   const canUseStandard =
     !!selectedConfig?.allow_standard_auth && selectedConfigId != null && userPasswordConfigIds.includes(selectedConfigId);
+  const configPatsForConnect = selectedConfigId ? userPats.filter((p) => p.tableau_server_config_id === selectedConfigId) : [];
   const needsPatConfig = authType === 'pat' && !canUsePat && !!selectedConfig?.allow_pat_auth;
+  const needsPatSelected = authType === 'pat' && configPatsForConnect.length > 1 && (!selectedPatId || !configPatsForConnect.some((p) => p.id === selectedPatId));
   const needsPwdConfig = authType === 'standard' && !canUseStandard;
 
   const supportedAuthTypes: AuthType[] = [];
@@ -383,6 +405,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             value={selectedConfigId?.toString() || ''}
             onValueChange={(value) => {
               setSelectedConfigId(Number(value));
+              setSelectedPatId(null);
               setError(null);
               if (connectionStatus.connected) handleDisconnect();
             }}
@@ -425,6 +448,7 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
                   setPerServerPreferences((prev) => ({ ...prev, [selectedConfigId]: t }));
                   userSettingsApi.updateTableauAuthPreference(selectedConfigId, t).catch(() => {});
                 }
+                setSelectedPatId(null);
               }}
             >
               <SelectTrigger className="w-[180px]" title="Auth method (standard/PAT allow site switching)">
@@ -440,6 +464,26 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
             </Select>
           )}
 
+          {!connectionStatus.connected && authType === 'pat' && selectedConfigId && (() => {
+            const configPats = userPats.filter((p) => p.tableau_server_config_id === selectedConfigId);
+            return configPats.length > 1 ? (
+              <Select
+                value={selectedPatId?.toString() || ''}
+                onValueChange={(v) => setSelectedPatId(Number(v))}
+                disabled={loading}
+              >
+                <SelectTrigger className="w-[160px]" title="Select PAT">
+                  <SelectValue placeholder="Select PAT" />
+                </SelectTrigger>
+                <SelectContent>
+                  {configPats.map((p) => (
+                    <SelectItem key={p.id} value={p.id.toString()}>{p.pat_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null;
+          })()}
+
           {connectionStatus.connected ? (
             <Button
               onClick={handleDisconnect}
@@ -453,9 +497,9 @@ export function TableauConnectionStatus({ onConnectionChange, onSiteChange }: Ta
           ) : (
             <Button
               onClick={handleConnect}
-              disabled={!selectedConfigId || loading || needsPatConfig || needsPwdConfig}
+              disabled={!selectedConfigId || loading || needsPatConfig || needsPatSelected || needsPwdConfig}
               size="sm"
-              title={needsPatConfig ? 'Add PAT in Settings first' : needsPwdConfig ? 'Add credentials in Settings first' : 'Connect'}
+              title={needsPatConfig ? 'Add PAT in Settings first' : needsPatSelected ? 'Select which PAT to use' : needsPwdConfig ? 'Add credentials in Settings first' : 'Connect'}
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

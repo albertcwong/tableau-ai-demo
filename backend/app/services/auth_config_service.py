@@ -28,7 +28,7 @@ def _orm_to_cache(config: AuthConfig) -> dict:
         "auth0_client_secret": config.auth0_client_secret,
         "auth0_audience": config.auth0_audience,
         "auth0_issuer": config.auth0_issuer,
-        "auth0_tableau_metadata_field": config.auth0_tableau_metadata_field,
+        "tableau_username_field": config.tableau_username_field,
         "backend_api_url": config.backend_api_url,
         "tableau_oauth_frontend_redirect": config.tableau_oauth_frontend_redirect,
         "eas_jwt_key_pem_encrypted": config.eas_jwt_key_pem_encrypted,
@@ -114,7 +114,7 @@ def update_auth_config(
     auth0_client_secret: Optional[str] = None,
     auth0_audience: Optional[str] = None,
     auth0_issuer: Optional[str] = None,
-    auth0_tableau_metadata_field: Optional[str] = None,
+    tableau_username_field: Optional[str] = None,
     backend_api_url: Optional[str] = None,
     tableau_oauth_frontend_redirect: Optional[str] = None,
     eas_jwt_key_pem: Optional[str] = None,
@@ -156,8 +156,8 @@ def update_auth_config(
         config.auth0_audience = auth0_audience
     if auth0_issuer is not None:
         config.auth0_issuer = auth0_issuer
-    if auth0_tableau_metadata_field is not None:
-        config.auth0_tableau_metadata_field = auth0_tableau_metadata_field
+    if tableau_username_field is not None:
+        config.tableau_username_field = tableau_username_field
     if backend_api_url is not None:
         config.backend_api_url = (backend_api_url or "").strip() or None
     if tableau_oauth_frontend_redirect is not None:

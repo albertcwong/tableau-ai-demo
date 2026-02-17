@@ -73,8 +73,9 @@ async def get_authorization_url(
     config: "TableauServerConfig",
     redirect_uri: str,
     state: str,
+    sub_claim: Optional[str] = None,
 ) -> str:
-    """Build EAS OAuth authorize URL."""
+    """Build EAS OAuth authorize URL. sub_claim overrides config.eas_sub_claim_field when provided."""
     auth_endpoint, _ = await _get_config_endpoints(config)
     client_id = getattr(config, "eas_client_id", None) or ""
     params = {
@@ -84,9 +85,9 @@ async def get_authorization_url(
         "scope": DEFAULT_SCOPES,
         "state": state,
     }
-    sub_claim = (getattr(config, "eas_sub_claim_field", None) or "email").strip()
-    if sub_claim:
-        params["sub_claim"] = sub_claim
+    sub = (sub_claim or getattr(config, "eas_sub_claim_field", None) or "email").strip()
+    if sub:
+        params["sub_claim"] = sub
     return f"{auth_endpoint}?{urlencode(params)}"
 
 

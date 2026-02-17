@@ -1400,7 +1400,7 @@ class AuthConfigResponse(BaseModel):
     auth0_client_secret: Optional[str] = None  # Note: Only returned to admins
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
-    auth0_tableau_metadata_field: Optional[str] = None
+    tableau_username_field: Optional[str] = None
     backend_api_url: Optional[str] = None
     tableau_oauth_frontend_redirect: Optional[str] = None
     eas_jwt_key_configured: bool = False  # True if key in DB or EAS_JWT_KEY_PATH set; never expose key
@@ -1428,7 +1428,7 @@ class AuthConfigUpdate(BaseModel):
     auth0_client_secret: Optional[str] = None
     auth0_audience: Optional[str] = None
     auth0_issuer: Optional[str] = None
-    auth0_tableau_metadata_field: Optional[str] = None
+    tableau_username_field: Optional[str] = None
     backend_api_url: Optional[str] = None
     tableau_oauth_frontend_redirect: Optional[str] = None
     eas_jwt_key_pem: Optional[str] = None  # PEM content; empty string to clear
@@ -1587,7 +1587,7 @@ async def get_auth_config_endpoint(
         auth0_client_secret=config.auth0_client_secret,
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
-        auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
+        tableau_username_field=config.tableau_username_field,
         backend_api_url=config.backend_api_url,
         tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
         eas_jwt_key_configured=has_key,
@@ -1655,7 +1655,7 @@ async def update_auth_config_endpoint(
         auth0_client_secret=config_data.auth0_client_secret,
         auth0_audience=config_data.auth0_audience,
         auth0_issuer=config_data.auth0_issuer,
-        auth0_tableau_metadata_field=config_data.auth0_tableau_metadata_field,
+        tableau_username_field=config_data.tableau_username_field,
         backend_api_url=config_data.backend_api_url,
         tableau_oauth_frontend_redirect=config_data.tableau_oauth_frontend_redirect,
         eas_jwt_key_pem=config_data.eas_jwt_key_pem,
@@ -1686,7 +1686,7 @@ async def update_auth_config_endpoint(
         auth0_client_secret=config.auth0_client_secret,
         auth0_audience=config.auth0_audience,
         auth0_issuer=config.auth0_issuer,
-        auth0_tableau_metadata_field=config.auth0_tableau_metadata_field,
+        tableau_username_field=config.tableau_username_field,
         backend_api_url=config.backend_api_url,
         tableau_oauth_frontend_redirect=config.tableau_oauth_frontend_redirect,
         eas_jwt_key_configured=has_key,

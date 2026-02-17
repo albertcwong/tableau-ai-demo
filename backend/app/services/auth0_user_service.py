@@ -1,6 +1,7 @@
 """Auth0 user mapping service."""
 import logging
 from sqlalchemy.orm import Session
+from app.core.database import safe_commit
 from app.models.user import User, UserRole
 from app.services.auth_config_service import get_auth_config
 
@@ -68,16 +69,16 @@ def get_or_create_user_from_auth0(db: Session, auth0_claims: dict) -> User:
     
     # Extract Tableau username from metadata if configured
     tableau_username = None
-    if auth_config.auth0_tableau_metadata_field:
-        logger.info(f"Attempting to extract Tableau username from configured field: '{auth_config.auth0_tableau_metadata_field}'")
+    if auth_config.tableau_username_field:
+        logger.info(f"Attempting to extract Tableau username from configured field: '{auth_config.tableau_username_field}'")
         logger.debug(f"Available claims keys: {list(auth0_claims.keys())}")
-        tableau_username = extract_metadata_value(auth0_claims, auth_config.auth0_tableau_metadata_field)
+        tableau_username = extract_metadata_value(auth0_claims, auth_config.tableau_username_field)
         if tableau_username:
-            logger.info(f"✓ Successfully extracted Tableau username '{tableau_username}' from field '{auth_config.auth0_tableau_metadata_field}'")
+            logger.info(f"✓ Successfully extracted Tableau username '{tableau_username}' from field '{auth_config.tableau_username_field}'")
         else:
             available_keys_str = ', '.join([f"'{k}'" for k in auth0_claims.keys()])
             logger.warning(
-                f"✗ Failed to extract Tableau username from field '{auth_config.auth0_tableau_metadata_field}'. "
+                f"✗ Failed to extract Tableau username from field '{auth_config.tableau_username_field}'. "
                 f"Available claim keys in token: [{available_keys_str}]. "
                 f"If you're using an Auth0 Action/Rule, make sure the field path matches exactly. "
                 f"For namespaced claims, use: 'https://tableau-ai-demo-api/tableau_username'. "
