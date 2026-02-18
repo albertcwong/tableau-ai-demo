@@ -1,17 +1,17 @@
 {
   "setup-worktree-unix": [
-    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env",
-    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/.env\" .env",
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost.pem\" frontend/localhost.pem"
   ],
   "setup-worktree-windows": [
-    "copy \"%ROOT_WORKTREE_PATH%\\.env\" .env",
-    "mklink frontend\\localhost-key.pem \"%ROOT_WORKTREE_PATH%\\frontend\\localhost-key.pem\"",
-    "mklink frontend\\localhost.pem \"%ROOT_WORKTREE_PATH%\\frontend\\localhost.pem\""
+    "copy \"%PROJECT_ROOT%\\shared\\.env\" .env",
+    "mklink frontend\\localhost-key.pem \"%PROJECT_ROOT%\\shared\\localhost-key.pem\"",
+    "mklink frontend\\localhost.pem \"%PROJECT_ROOT%\\shared\\localhost.pem\""
   ],
   "setup-worktree": [
-    "ln -sf \"$ROOT_WORKTREE_PATH/.env\" .env",
-    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"$ROOT_WORKTREE_PATH/frontend/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/.env\" .env",
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost.pem\" frontend/localhost.pem"
   ]
 }
