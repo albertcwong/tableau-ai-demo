@@ -23,13 +23,13 @@ Develop entirely in Docker with hot reload. Use `./scripts/dev-docker.sh` for dy
 **URLs** (dynamic; run `./scripts/dev-docker.sh url` to see yours):
 - Frontend: `https://localhost:<port>` (HTTPS; required for Tableau embed)
 - Backend: `http://localhost:<port>`
-- API Docs: `http://localhost:<port>/docs`
+- API Docs: `http://localhost:<port>/api/v1/docs`
 
 ## Prerequisites
 
 1. **Postgres and Redis**: Running on localhost (default ports 5432, 6379). Containers connect via `host.docker.internal`. Override with `DATABASE_URL` and `REDIS_URL` in `.env` if using different ports. If you need Docker postgres/redis: `docker compose -f docker-compose.infra.yml -p tableau-demo-infra up -d` (then use `postgresql://postgres:postgres@host.docker.internal:5432/tableau_demo`).
 
-2. **Environment**: Copy `.env.example` to `shared/.env` and configure (worktrees symlink from `shared/`).
+2. **Environment**: From repo root, copy `main/.env.example` to `shared/.env` and configure (worktrees symlink from `shared/`).
 
 3. **Worktree setup**:
    - **Cursor worktrees**: `.env` and certs linked via `.cursor/worktrees.json`.

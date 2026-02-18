@@ -155,7 +155,7 @@ Expected events:
 
 **Problem: Connection fails**
 
-1. Check FastAPI server is running: `curl http://localhost:8000/health`
+1. Check FastAPI server is running: `curl http://localhost:8000/api/v1/health`
 2. Check SSE endpoint exists: `curl http://localhost:8000/mcp/sse`
 3. Check browser console for CORS errors
 4. Verify `sse-starlette` is installed: `pip list | grep sse-starlette`

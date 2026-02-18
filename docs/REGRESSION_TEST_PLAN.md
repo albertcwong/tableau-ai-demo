@@ -75,7 +75,7 @@ psql $DATABASE_URL -c "SELECT column_name FROM information_schema.columns WHERE 
 ### Tier 4: Smoke (manual or scripted)
 
 1. **Backend**
-   - `GET /health` → 200
+   - `GET /api/v1/health` → 200
    - `GET /admin/provider-configs` (auth required) → 200
    - `POST /api/chat` with mocked Tableau → 200
 

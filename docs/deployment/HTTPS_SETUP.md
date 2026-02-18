@@ -67,8 +67,7 @@ This project requires HTTPS for the frontend to work with Tableau Server authent
    ```bash
    cd frontend
    mkcert localhost
-   mv localhost.pem localhost.pem
-   mv localhost-key.pem localhost-key.pem
+   # Creates localhost.pem and localhost-key.pem (no rename needed)
    ```
 
 4. **Start the HTTPS dev server:**

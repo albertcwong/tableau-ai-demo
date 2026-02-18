@@ -77,7 +77,7 @@ The application consists of four main services plus supporting infrastructure:
 
 ### 2. Backend (FastAPI)
 **Port:** 8000  
-**Technology:** FastAPI, Python 3.11, SQLAlchemy, Alembic
+**Technology:** FastAPI, Python 3.11+, SQLAlchemy, Alembic
 
 #### Primary Responsibilities
 - **REST API Server**: Main API endpoints for frontend
@@ -117,7 +117,7 @@ Frontend.post("/api/v1/chat/message")
 ### 3. Gateway (Unified LLM Gateway)
 **Port:** Integrated into Backend (8000)  
 **Endpoints:** `/api/v1/gateway/*`  
-**Technology:** FastAPI, Python 3.11, httpx
+**Technology:** FastAPI, Python 3.11+, httpx
 
 #### Primary Responsibilities
 - **Provider Abstraction**: Single OpenAI-compatible interface for all LLM providers
@@ -168,7 +168,7 @@ Backend sends: POST /v1/chat/completions
 
 ### 4. MCP Server
 **Transport:** stdio (IDE) or SSE (web)  
-**Technology:** FastMCP, Python 3.11
+**Technology:** FastMCP, Python 3.11+
 
 #### Primary Responsibilities
 - **Tool Exposure**: Exposes Tableau operations as MCP tools
@@ -520,7 +520,7 @@ LLM Provider Error
 - Structured logging with context
 
 ### Health Checks
-- All services expose `/health` endpoints
+- Backend exposes `/api/v1/health`; gateway at `/api/v1/gateway/health`
 - Docker health checks configured
 - Kubernetes liveness/readiness probes supported
 

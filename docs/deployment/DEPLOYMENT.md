@@ -14,33 +14,39 @@ This guide covers deploying the Tableau AI Demo application using Docker and Doc
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd tableau-ai-demo
+   cd tableau-ai-demo/main
    ```
 
 2. **Set up environment variables**
    ```bash
+   cd main
    cp .env.example .env
    # Edit .env with your configuration
    ```
 
-3. **Set up credentials**
+3. **Start infrastructure (PostgreSQL and Redis)**
+   ```bash
+   docker compose -f docker-compose.infra.yml -p tableau-demo-infra up -d
+   ```
+
+4. **Set up credentials**
    ```bash
    # Place your service account JSON files in credentials/
    # - vertex-sa.json (for Vertex AI)
    # - salesforce-private-key.pem (for Salesforce)
    ```
 
-4. **Start all services**
+5. **Start application services**
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
-5. **Verify services are running**
+6. **Verify services are running**
    ```bash
-   docker-compose ps
+   docker compose ps
    ```
 
-6. **Check health endpoints**
+7. **Check health endpoints**
    ```bash
    curl http://localhost:8000/api/v1/health      # Backend
    curl http://localhost:8000/api/v1/gateway/health  # Gateway (integrated)
@@ -57,7 +63,7 @@ The application consists of the following services:
   - Includes integrated Gateway endpoints at `/api/v1/gateway/*`
   - Includes integrated MCP SSE endpoints at `/mcp/sse`
 - **frontend**: Next.js frontend (port 3000)
-- **mcp-server**: MCP Server (optional, for stdio mode only)
+- **mcp-server**: Not a separate service—MCP SSE is integrated into the backend at `/mcp/sse`
 
 ## Environment Variables
 
@@ -107,52 +113,50 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ### Build all images
 ```bash
-docker-compose build
+docker compose build
 ```
 
 ### Build specific service
 ```bash
-docker-compose build backend
-docker-compose build frontend
-docker-compose build gateway
-docker-compose build mcp-server
+docker compose build backend
+docker compose build frontend
 ```
 
 ### Build without cache
 ```bash
-docker-compose build --no-cache
+docker compose build --no-cache
 ```
 
 ## Running Services
 
 ### Start all services
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Start specific service
 ```bash
-docker-compose up -d backend
+docker compose up -d backend
 ```
 
 ### View logs
 ```bash
 # All services
-docker-compose logs -f
+docker compose logs -f
 
 # Specific service
-docker-compose logs -f backend
-docker-compose logs -f frontend
+docker compose logs -f backend
+docker compose logs -f frontend
 ```
 
 ### Stop services
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ### Stop and remove volumes
 ```bash
-docker-compose down -v
+docker compose down -v
 ```
 
 ## Health Checks
@@ -165,7 +169,7 @@ All services include health checks:
 
 Check health status:
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 ## Database Migrations
@@ -173,12 +177,12 @@ docker-compose ps
 Run migrations on first startup or after schema changes:
 
 ```bash
-docker-compose exec backend alembic upgrade head
+docker compose exec backend alembic upgrade head
 ```
 
 Create new migration:
 ```bash
-docker-compose exec backend alembic revision --autogenerate -m "description"
+docker compose exec backend alembic revision --autogenerate -m "description"
 ```
 
 ## Troubleshooting
@@ -187,12 +191,12 @@ docker-compose exec backend alembic revision --autogenerate -m "description"
 
 1. Check logs:
    ```bash
-   docker-compose logs
+   docker compose logs
    ```
 
 2. Verify environment variables:
    ```bash
-   docker-compose config
+   docker compose config
    ```
 
 3. Check port availability:
@@ -203,39 +207,39 @@ docker-compose exec backend alembic revision --autogenerate -m "description"
 
 ### Database connection errors
 
-1. Verify PostgreSQL is healthy:
+1. Verify PostgreSQL is healthy (infra runs in separate compose):
    ```bash
-   docker-compose exec postgres pg_isready -U postgres
+   docker compose -f docker-compose.infra.yml -p tableau-demo-infra exec postgres pg_isready -U postgres
    ```
 
 2. Check database URL in environment:
    ```bash
-   docker-compose exec backend env | grep DATABASE_URL
+   docker compose exec backend env | grep DATABASE_URL
    ```
 
 ### Redis connection errors
 
-1. Verify Redis is healthy:
+1. Verify Redis is healthy (infra runs in separate compose):
    ```bash
-   docker-compose exec redis redis-cli ping
+   docker compose -f docker-compose.infra.yml -p tableau-demo-infra exec redis redis-cli ping
    ```
 
 2. Check Redis URL:
    ```bash
-   docker-compose exec backend env | grep REDIS_URL
+   docker compose exec backend env | grep REDIS_URL
    ```
 
 ### Frontend build errors
 
 1. Clear Next.js cache:
    ```bash
-   docker-compose exec frontend rm -rf .next
-   docker-compose restart frontend
+   docker compose exec frontend rm -rf .next
+   docker compose restart frontend
    ```
 
 2. Rebuild frontend:
    ```bash
-   docker-compose build --no-cache frontend
+   docker compose build --no-cache frontend
    ```
 
 ## Production Deployment
@@ -264,10 +268,10 @@ Scale services horizontally:
 
 ```bash
 # Scale backend
-docker-compose up -d --scale backend=3
+docker compose up -d --scale backend=3
 
 # Scale frontend
-docker-compose up -d --scale frontend=2
+docker compose up -d --scale frontend=2
 ```
 
 Use a load balancer (nginx, Traefik) in front of scaled services.
@@ -305,12 +309,12 @@ See `.github/workflows/` for details.
 
 ### Backup database
 ```bash
-docker-compose exec postgres pg_dump -U postgres tableau_demo > backup.sql
+docker compose -f docker-compose.infra.yml -p tableau-demo-infra exec postgres pg_dump -U postgres tableau_demo > backup.sql
 ```
 
 ### Restore database
 ```bash
-docker-compose exec -T postgres psql -U postgres tableau_demo < backup.sql
+docker compose -f docker-compose.infra.yml -p tableau-demo-infra exec -T postgres psql -U postgres tableau_demo < backup.sql
 ```
 
 ### Backup volumes
@@ -328,22 +332,22 @@ docker run --rm -v tableau-demo_postgres_data:/data -v $(pwd):/backup \
 
 2. Rebuild images:
    ```bash
-   docker-compose build
+   docker compose build
    ```
 
 3. Restart services:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 4. Run migrations:
    ```bash
-   docker-compose exec backend alembic upgrade head
+   docker compose exec backend alembic upgrade head
    ```
 
 ## Support
 
 For issues and questions:
-- Check logs: `docker-compose logs`
+- Check logs: `docker compose logs`
 - Review [TROUBLESHOOTING.md](../../backend/mcp_server/TROUBLESHOOTING.md)
 - Open an issue on GitHub

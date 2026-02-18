@@ -73,7 +73,7 @@ AI-powered interface for interacting with Tableau via conversational agents. Thi
 
 **Backend:**
 - FastAPI 0.128.0
-- Python 3.12+
+- Python 3.11+
 - PostgreSQL 15 (via Docker)
 - Redis 7 (via Docker)
 - SQLAlchemy 2.0
@@ -101,7 +101,7 @@ AI-powered interface for interacting with Tableau via conversational agents. Thi
 ### Prerequisites
 
 - **Node.js**: ≥20.9.0
-- **Python**: ≥3.12
+- **Python**: ≥3.11
 - **Docker**: For PostgreSQL and Redis services
 - **PostgreSQL**: 15+ (via Docker)
 - **Redis**: 7+ (via Docker)
@@ -110,7 +110,7 @@ AI-powered interface for interacting with Tableau via conversational agents. Thi
 
 ```bash
 git clone <repository-url>
-cd tableau-ai-demo
+cd tableau-ai-demo/main
 ```
 
 ### 2. Environment Configuration
@@ -131,10 +131,10 @@ cp .env.example .env
 
 ```bash
 # Start PostgreSQL and Redis
-docker-compose up -d postgres redis
+docker compose -f docker-compose.infra.yml -p tableau-demo-infra up -d
 
 # Verify services are running
-docker-compose ps
+docker compose -f docker-compose.infra.yml -p tableau-demo-infra ps
 ```
 
 ### 4. Backend Setup
@@ -154,8 +154,8 @@ uv run uvicorn app.main:app --reload --port 8000
 
 Backend will be available at:
 - API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
-- Health Check: http://localhost:8000/health
+- API Docs: http://localhost:8000/api/v1/docs
+- Health Check: http://localhost:8000/api/v1/health
 
 ### 5. Frontend Setup
 
@@ -176,33 +176,32 @@ Frontend will be available at: http://localhost:3000
 ## Project Structure
 
 ```
-├── frontend/                 # Next.js application
-│   ├── app/                  # App Router pages
-│   ├── components/          # React components
-│   ├── lib/                  # Utilities and API client
-│   └── types/               # TypeScript types
-│
-├── backend/                  # FastAPI application
-│   ├── app/
-│   │   ├── api/             # API routes
-│   │   ├── core/            # Configuration, database, cache
-│   │   ├── models/          # SQLAlchemy models
-│   │   ├── services/        # Business logic
-│   │   │   ├── agents/      # Agent implementations
-│   │   │   ├── gateway/     # Unified LLM Gateway
-│   │   │   └── tableau/     # Tableau client
-│   │   └── main.py          # FastAPI app entry
-│   ├── mcp_server/          # MCP Server implementation
-│   ├── alembic/             # Database migrations
-│   └── tests/               # Test suite
-│
-├── credentials/             # Service account credentials (gitignored)
-│   └── .gitkeep            # Placeholder for service account files
-├── backend/mcp_server/credentials/  # MCP server credential storage (gitignored)
-│   ├── .mcp_key.key        # Encryption key for MCP credentials
-│   └── .mcp_auth.json      # Encrypted MCP credentials
-├── docker-compose.yml       # Infrastructure services
-└── .env.example            # Environment variable template
+tableau-ai-demo/
+├── main/                     # Application root (run commands from here)
+│   ├── frontend/             # Next.js application
+│   │   ├── app/              # App Router pages
+│   │   ├── components/      # React components
+│   │   ├── lib/              # Utilities and API client
+│   │   └── types/            # TypeScript types
+│   │
+│   ├── backend/              # FastAPI application
+│   │   ├── app/
+│   │   │   ├── api/          # API routes
+│   │   │   ├── core/         # Configuration, database, cache
+│   │   │   ├── models/      # SQLAlchemy models
+│   │   │   ├── services/    # Business logic (agents, gateway, tableau)
+│   │   │   └── main.py      # FastAPI app entry
+│   │   ├── mcp_server/      # MCP Server implementation
+│   │   ├── alembic/         # Database migrations
+│   │   └── tests/           # Test suite
+│   │
+│   ├── credentials/         # Service account credentials (gitignored)
+│   ├── backend/mcp_server/credentials/  # MCP credential storage (gitignored)
+│   ├── docker-compose.yml   # App services (backend, frontend)
+│   ├── docker-compose.infra.yml  # Postgres, Redis
+│   └── .env.example
+├── shared/                  # Shared .env and certs (worktrees)
+└── ...
 ```
 
 ## Features
@@ -324,7 +323,7 @@ See [Deployment Guide](./docs/deployment/DEPLOYMENT.md) for detailed deployment 
 docker-compose up -d
 
 # Check health
-curl http://localhost:8000/health
+curl http://localhost:8000/api/v1/health
 curl http://localhost:3000
 ```
 
@@ -402,6 +401,7 @@ These are future phases beyond the current demo scope.
 - [MCP Server README](./backend/mcp_server/README.md) - MCP server documentation
 - [MCP Troubleshooting](./backend/mcp_server/TROUBLESHOOTING.md) - MCP troubleshooting guide
 - [Integration Tests](./backend/tests/integration/README.md) - Integration test guide
+- [Documentation Review](./docs/DOCUMENTATION_REVIEW.md) - Technical writer review, fixes, and recommendations
 
 ## License
 

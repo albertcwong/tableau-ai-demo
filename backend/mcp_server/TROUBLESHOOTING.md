@@ -157,7 +157,7 @@ If issues persist:
 2. Run `python mcp_server/test_tools.py` and share output
 3. Run `python mcp_server/check_imports.py` and share output
 4. Check FastMCP version: `pip show fastmcp`
-5. Verify Python version: `python --version` (should be 3.10+)
+5. Verify Python version: `python --version` (should be 3.11+)
 
 ### Expected Behavior
 

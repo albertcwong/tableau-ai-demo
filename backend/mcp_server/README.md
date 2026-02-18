@@ -34,7 +34,7 @@ This MCP (Model Context Protocol) server exposes Tableau operations, conversatio
 
 ### Prerequisites
 
-1. Python 3.10+ installed
+1. Python 3.11+ installed
 2. Backend dependencies installed (`uv sync`)
 3. Environment variables configured (see `.env`)
 
@@ -97,13 +97,14 @@ The MCP server is also accessible via Server-Sent Events (SSE) for web integrati
 
 - **Endpoint**: `GET /mcp/sse`
 - **Protocol**: Server-Sent Events
-- **Test Page**: `http://localhost:3000/mcp-test` (after starting frontend)
+- **Test Page**: `http://localhost:3000/mcp-test` (after starting frontend; connects to backend at `NEXT_PUBLIC_API_URL/mcp/sse`)
 - **Usage**: Connect from frontend using EventSource API
 
 Example frontend connection:
 
 ```javascript
-const eventSource = new EventSource('/mcp/sse');
+// Connect to backend (full URL required; frontend proxies or use NEXT_PUBLIC_API_URL)
+const eventSource = new EventSource(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/mcp/sse`);
 eventSource.onmessage = (event) => {
   const data = JSON.parse(event.data);
   console.log('MCP event:', data);
@@ -229,8 +230,6 @@ This error means the `python` command is not found. Solutions:
    "command": "/path/to/backend/venv/bin/python"
    ```
 3. **Check PATH**: Ensure Python is in your system PATH, or use the full path
-
-### Tools not appearing in IDE
 
 ### Tools not appearing in IDE
 
