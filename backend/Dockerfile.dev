@@ -3,6 +3,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 # Install system dependencies (same as production)
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -10,9 +13,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies only
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies only
+COPY pyproject.toml uv.lock .
+RUN uv sync --locked --no-install-project
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy config files (app/ and mcp_server/ mounted as volumes)
 COPY alembic.ini .

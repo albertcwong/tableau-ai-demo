@@ -1,35 +1,6 @@
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: tableau-demo-postgres
-    environment:
-      POSTGRES_DB: tableau_demo
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: tableau-demo-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   backend:
+    restart: on-failure
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -37,8 +8,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/tableau_demo
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/tableau_demo}
+      - REDIS_URL=${REDIS_URL:-redis://host.docker.internal:6379/0}
       - LOG_DIR=/app/logs
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - TABLEAU_SERVER_URL=${TABLEAU_SERVER_URL:-}
@@ -51,37 +22,12 @@ services:
       - ./credentials:/app/credentials:ro
       - ./backend/mcp_server/credentials:/app/mcp_server/credentials
       - ./logs:/app/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
-      start_period: 10s
-      retries: 3
-
-  # Note: MCP SSE endpoints are integrated into the backend service
-  # This service is optional and only needed for standalone stdio mode
-  # For SSE transport, use backend service endpoints: http://backend:8000/mcp/sse
-  mcp-server:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.mcp
-    container_name: tableau-demo-mcp-server
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/tableau_demo
-      - MCP_SERVER_NAME=tableau-ai-demo-mcp
-      - MCP_TRANSPORT=stdio
-      - MCP_LOG_LEVEL=info
-    volumes:
-      - ./credentials:/app/credentials:ro
-      - ./backend/mcp_server/credentials:/app/mcp_server/credentials
-    depends_on:
-      postgres:
-        condition: service_healthy
+      start_period: 30s
+      retries: 5
 
   frontend:
     build:
@@ -116,11 +62,3 @@ services:
       timeout: 10s
       start_period: 10s
       retries: 3
-
-volumes:
-  postgres_data:
-    external: true
-    name: tableau-ai-demo_postgres_data
-  redis_data:
-    external: true
-    name: tableau-ai-demo_redis_data

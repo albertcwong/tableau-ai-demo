@@ -1,0 +1,65 @@
+You are generating insights from statistical analysis of view data.
+
+## View Information
+- View Name: {{ view_name }}
+- Total Rows: {{ row_count }}
+
+## Statistical Analysis Results
+### Column Statistics
+{{ column_stats }}
+
+### Detected Trends
+{% if trends %}
+{% for trend in trends %}
+- {{ trend.column }}: {{ trend.trend }}
+{% endfor %}
+{% else %}
+No clear trends detected.
+{% endif %}
+
+### Outliers
+{% if outliers %}
+{% for outlier in outliers %}
+- {{ outlier.column }}: {{ outlier.count }} outliers found
+{% endfor %}
+{% else %}
+No significant outliers detected.
+{% endif %}
+
+### Correlations
+{% if correlations %}
+{{ correlations }}
+{% else %}
+No strong correlations detected.
+{% endif %}
+
+## Task
+Generate key insights and recommendations based on this analysis.
+
+## Output Format
+Return a JSON object:
+{
+  "insights": [
+    "Insight 1: Description of finding",
+    "Insight 2: Another important finding"
+  ],
+  "recommendations": [
+    "Recommendation 1: Actionable suggestion",
+    "Recommendation 2: Another suggestion"
+  ],
+  "key_metrics": {
+    "metric_name": "value and interpretation"
+  }
+}
+
+Focus on:
+- Most significant patterns or anomalies
+- Business implications
+- Actionable recommendations
+- Important metrics to track
+
+## Metric Formatting (in insights and key_metrics)
+- **Currency**: Include the symbol ($, €, £, etc.) when citing monetary values. Infer from column names if the data lacks symbols.
+- **Decimals**: Round to 2 decimal places for currency, percentages, and numeric metrics. Avoid raw precision (e.g., 1234.567890).
+
+Return JSON only.

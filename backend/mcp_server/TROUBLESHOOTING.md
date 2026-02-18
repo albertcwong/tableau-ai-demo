@@ -16,7 +16,7 @@ This appears to be a **known bug in FastMCP 2.14.4** where tools are registered 
 ```bash
 cd backend
 source venv/bin/activate
-pip install --upgrade fastmcp
+uv add fastmcp --upgrade
 ```
 
 Then restart Cursor and test again. If the issue persists, check FastMCP GitHub issues for updates.
@@ -112,7 +112,7 @@ Then restart Cursor and test again. If the issue persists, check FastMCP GitHub 
 #### Issue: Import Errors
 
 **Solution:**
-- Verify all dependencies installed: `pip install -r requirements.txt`
+- Verify all dependencies installed: `uv sync`
 - Check PYTHONPATH includes backend directory
 - Test imports manually: `python -c "from mcp_server.server import mcp"`
 
@@ -144,7 +144,7 @@ You can test the MCP protocol manually using `mcp-cli` or similar tools:
 
 ```bash
 # Install mcp-cli if available
-pip install mcp-cli
+uv tool install mcp-cli
 
 # Test server
 mcp-cli test --command "python -m mcp_server.server"

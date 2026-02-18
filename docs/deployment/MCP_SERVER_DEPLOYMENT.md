@@ -235,10 +235,10 @@ From IDE:
 - Check MCP config file syntax
 - Verify environment variables are set
 - Check IDE logs for errors
-- See [TROUBLESHOOTING.md](./backend/mcp_server/TROUBLESHOOTING.md)
+- See [TROUBLESHOOTING.md](../../backend/mcp_server/TROUBLESHOOTING.md)
 
 **Problem**: Import errors
-- Ensure all dependencies installed: `pip install -r requirements.txt`
+- Ensure all dependencies installed: `uv sync`
 - Verify PYTHONPATH is correct
 - Check `python -c "from mcp_server.server import mcp"` works
 
@@ -314,6 +314,6 @@ From IDE:
 
 For issues:
 - Check logs: `docker-compose logs mcp-server`
-- Review [TROUBLESHOOTING.md](./backend/mcp_server/TROUBLESHOOTING.md)
+- Review [TROUBLESHOOTING.md](../../backend/mcp_server/TROUBLESHOOTING.md)
 - Test tools: `python mcp_server/test_tools.py`
 - Open GitHub issue

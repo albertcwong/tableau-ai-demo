@@ -142,18 +142,14 @@ docker-compose ps
 ```bash
 cd backend
 
-# Create virtual environment (Python 3.12+)
-python3.12 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (requires uv: https://docs.astral.sh/uv/)
+uv sync
 
 # Run database migrations
-alembic upgrade head
+uv run alembic upgrade head
 
 # Start backend server
-uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 Backend will be available at:
@@ -245,47 +241,44 @@ Frontend will be available at: http://localhost:3000
 
 ### Docker Development (Recommended for Docker parity)
 
-Develop entirely in Docker with hot reload to catch Docker-specific issues early:
+Develop entirely in Docker with hot reload:
 
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+./scripts/dev-docker.sh up --build
 ```
 
-- Frontend: https://localhost:3000 or http://localhost:3001
-- Backend: http://localhost:8000
+Ports are dynamic (derived from worktree path). Get URLs with `./scripts/dev-docker.sh url`.
 
-See [Docker Development Guide](./docs/development/DOCKER_DEV.md) for details, troubleshooting, and when to use Docker vs local development.
+See [Docker Development Guide](./docs/development/DOCKER_DEV.md) for details.
 
 ### Running Tests
 
 ```bash
 # Backend tests
 cd backend
-source venv/bin/activate
-pytest
+uv run pytest
 
 # Run specific test suite
-pytest tests/unit/agents/vizql/ -v
-pytest tests/integration/ -v
+uv run pytest tests/unit/agents/vizql/ -v
+uv run pytest tests/integration/ -v
 
 # With coverage
-pytest --cov=app --cov-report=html
+uv run pytest --cov=app --cov-report=html
 ```
 
 ### Database Migrations
 
 ```bash
 cd backend
-source venv/bin/activate
 
 # Create a new migration
-alembic revision --autogenerate -m "description"
+uv run alembic revision --autogenerate -m "description"
 
 # Apply migrations
-alembic upgrade head
+uv run alembic upgrade head
 
 # Rollback migration
-alembic downgrade -1
+uv run alembic downgrade -1
 ```
 
 ### Code Quality
@@ -293,9 +286,8 @@ alembic downgrade -1
 ```bash
 # Backend linting
 cd backend
-source venv/bin/activate
-ruff check .
-black .
+uv run flake8 app/ mcp_server/ --max-line-length=120 --exclude=__pycache__,venv,.venv
+uv run black .
 
 # Frontend linting
 cd frontend
@@ -400,12 +392,12 @@ These are future phases beyond the current demo scope.
 - [MCP Server Deployment](./docs/deployment/MCP_SERVER_DEPLOYMENT.md) - MCP-specific deployment
 - [HTTPS Setup](./docs/deployment/HTTPS_SETUP.md) - Frontend HTTPS configuration
 - [Docker Development](./docs/development/DOCKER_DEV.md) - Docker-first development with hot reload
+- [Docker HTTPS Setup](./docs/development/DOCKER_HTTPS_SETUP.md) - Quick reference for Docker HTTPS
 - [Auth0 Setup](./docs/AUTH0_TABLEAU_METADATA_SETUP.md) - Auth0 metadata configuration
 - [OAuth Setup](./docs/OAUTH_2_0_TRUST_SETUP.md) - OAuth 2.0 Connected App setup
 
 ### Component-Specific Documentation
 
-- [Backend README](./backend/README.md) - Backend-specific documentation
 - [Frontend README](./frontend/README.md) - Frontend-specific documentation
 - [MCP Server README](./backend/mcp_server/README.md) - MCP server documentation
 - [MCP Troubleshooting](./backend/mcp_server/TROUBLESHOOTING.md) - MCP troubleshooting guide

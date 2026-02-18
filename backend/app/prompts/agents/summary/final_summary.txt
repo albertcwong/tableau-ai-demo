@@ -1,0 +1,75 @@
+You are creating a final summary report from the view data below.
+
+## CRITICAL CONSTRAINTS
+- Only summarize the data provided below. Do not invent, infer, or add numbers, records, or metrics not present in the data.
+{% if image_only %}
+- The dashboard images attached to THIS message are the ONLY source of truth. Extract all metrics and insights directly from these images only.
+- Do NOT use numbers, metrics, or topics from conversation history. Previous messages may refer to different views—ignore any values from history that do not appear in the attached images.
+- CRITICAL: Describe ONLY what is actually visible in the attached images. Do NOT assume Superstore, sales, ASA, or regional dashboard. The view name does not imply content—describe the real metrics and visualizations you see. If you cannot read the image clearly, say so rather than inventing content.
+{% elif mixed_views %}
+- For views with tabular data: use only metrics from the tables below. For views with dashboard images: use the images as the source of truth—do NOT use tabular data that may conflict with the images.
+- Each sheet/table is labeled with name, row count, and columns. Do not include view id or "Sheet: name" citations. If referencing a sheet, put its name on its own line with relevant bullet points under it.
+{% else %}
+- Do NOT reference any metric, column, or value not explicitly listed in the View Data section below.
+- Each sheet is labeled with name, row count, and columns. Do not include view id or "Sheet: name" citations. If referencing a sheet, put its name on its own line with relevant bullet points under it.
+{% endif %}
+- Recommendations must be grounded in the data shown. Do not add generic business advice.
+
+## View Information
+- View Name: {{ view_name }}
+- Total Rows: {{ row_count }}
+{% if row_count == 0 %}
+
+## Note (0 rows)
+No data was retrieved for this view. In your summary, briefly state this and suggest: 1) Ensure the view is visible in the canvas when summarizing, 2) Verify Tableau connection (Connect button), 3) Try opening the view in the explorer first so it loads before summarizing.
+{% endif %}
+
+## View Data
+{{ view_data }}
+
+## User Query
+{{ user_query }}
+
+{% if message_history %}
+## Conversation History
+{{ message_history }}
+
+Use the conversation history above to understand context. If the user asks a follow-up question (e.g., "what was the total?" or "which region had the highest sales?"), refer to previous messages to provide a coherent answer.
+{% endif %}
+
+## Task
+Generate a comprehensive summary that:
+1. Provides an executive summary (2-3 sentences)
+2. Highlights key findings and metrics from the data
+3. Explains trends and patterns visible in the data
+4. Includes recommendations grounded in the data (if applicable)
+{% if is_specific_question %}
+5. Answer the user's specific question in a separate section at the END (see "Answer Format" below)
+{% else %}
+5. Answers the user's specific question if applicable
+{% endif %}
+
+{% if is_specific_question %}
+## Answer Format
+If the user asked a specific question (e.g., "what is profit?", "which region had the highest sales?"), provide the direct answer in a clearly marked section at the very end of your response, after all summary content.
+
+Format your answer section as:
+  Answer to Your Question: [user's question]
+  [Direct, concise answer using only data from the {% if image_only %}images{% elif mixed_views %}tables and images{% else %}tables{% endif %} above. Use plain text, no bold.]
+
+Important: Do NOT include the answer in the executive summary or in any detailed analysis section. Only in the final "Answer to Your Question" section at the very end.
+{% endif %}
+
+## Output Style
+- Professional but accessible
+- Use specific numbers and data points from the {% if image_only %}images{% elif mixed_views %}tables (for worksheets) and images (for dashboards){% else %}tables{% endif %}
+- Structure with clear sections
+- When referencing a sheet: put its name on its own line with relevant bullet points under it (no view id or "Sheet: name" citation)
+- Use markdown bullet lists for structure. Bold (**) key metrics and values for emphasis.
+
+## Metric Formatting
+- Currency: Include the symbol ($, €, £, etc.) when citing monetary values. Infer from column names (e.g., "Sales", "Profit", "Revenue", "Cost") if the data lacks symbols.
+- Decimals: Round to 2 decimal places for currency, percentages, and most numeric metrics. Avoid raw precision (e.g., 1234.567890).
+- Large numbers: Use K/M/B shorthand when appropriate (e.g., $1.2M, 450K units).
+
+Write the summary in natural language. Use bullet points and bold key metrics. Do not cite view ids or "Sheet: name" format.

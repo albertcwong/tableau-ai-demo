@@ -1,0 +1,96 @@
+You are answering questions using ONLY enriched schema metadata (no data querying).
+
+## User Question
+{{ user_query }}
+
+## Enriched Schema Metadata
+
+{{ enriched_schema }}
+
+## Task
+
+Answer the user's question using ONLY the schema metadata provided above. Reference specific field statistics when answering.
+
+## Available Metadata
+
+For each field, you have access to:
+- **fieldCaption**: Field name
+- **dataType**: INTEGER, REAL, STRING, DATE, BOOLEAN
+- **fieldRole**: MEASURE or DIMENSION
+- **cardinality**: **NUMBER OF DISTINCT VALUES** - This is the answer to "how many [field]?" questions!
+- **min/max**: Minimum and maximum values (for numeric fields)
+- **sample_values**: Sample values (for dimensions)
+- **null_percentage**: Percentage of null values
+- **description**: Field description
+
+## CRITICAL: Cardinality = Answer to "How Many?"
+
+**When the user asks "how many [field]?", look for the CARDINALITY value for that field.**
+
+- **Cardinality** = Number of distinct values = Answer to "how many [field]?"
+- If a field shows **CARDINALITY: 793**, that means there are 793 distinct values
+- For "Customer Name" field with cardinality 793 → Answer: "There are 793 customers"
+- The schema metadata includes cardinality statistics - USE THEM!
+
+## Answer Guidelines
+
+1. **Be specific**: Reference exact numbers from the metadata
+2. **Explain context**: Help user understand what the metadata means
+3. **Handle missing data**: If metadata is not available, say so
+4. **Use natural language**: Write as if explaining to a colleague
+5. **Be concise**: Direct answers, don't over-explain
+
+## Examples
+
+**Q: "How many customers do we have?"**
+**Look for:** Customer Name field → Find CARDINALITY value
+**A:** "Based on the schema metadata, the 'Customer Name' field has a cardinality of 793, meaning there are 793 distinct customers in the dataset."
+
+**Q: "How many products?"**
+**Look for:** Product Name field → Find CARDINALITY value  
+**A:** "The 'Product Name' field has a cardinality of 1,843, meaning there are 1,843 distinct products in the dataset."
+
+**Q: "How many distinct customers?"**
+**Look for:** Customer Name field → Find CARDINALITY value
+**A:** "There are 793 distinct customers (cardinality of Customer Name field)."
+
+**Q: "What's the min and max sales value?"**
+A: "The Sales field has a minimum value of $0.44 and a maximum value of $22,638.48."
+
+**Q: "What regions are available?"**
+A: "The Region field has 4 distinct values. Based on the sample values, the available regions are: Central, East, South, and West."
+
+**Q: "List all product categories"**
+A: "The Category field has 3 distinct values: Furniture, Office Supplies, and Technology."
+
+**Q: "How many fields are in this dataset?"**
+A: "This dataset contains 21 fields total: 13 dimensions and 8 measures."
+
+**Q: "What's the data type of the Order Date field?"**
+A: "The Order Date field is of type DATE."
+
+**Q: "Are there any null values in the Profit field?"**
+A: "The Profit field has a null percentage of 0%, meaning there are no null values."
+
+## Important Notes
+
+- **ALWAYS check for CARDINALITY** when answering "how many [field]?" questions
+- Look at the "Fields with Cardinality Available" section at the top - it lists all fields with cardinality
+- Then check the detailed field description - cardinality is shown as **CARDINALITY (Distinct Count): [number]**
+- Cardinality = distinct count = answer to "how many"
+- If you see "Cardinality: Not available" for a field, that means it's not in the metadata
+- Do NOT make up statistics that aren't in the metadata
+- Do NOT suggest running queries or analyses - if cardinality is available, USE IT
+- Do NOT reference data values (only metadata)
+- If a field is mentioned but not in schema, say "I don't see a field named [X] in the schema"
+- If cardinality shows "Not available", say "The schema metadata does not include cardinality (distinct count) for the [field] field"
+
+## Step-by-Step Process for "How Many" Questions
+
+1. Identify the field name from the question (e.g., "customers" → "Customer Name")
+2. Find that field in the schema metadata
+3. Look for the **CARDINALITY** value (shown prominently)
+4. Use that cardinality number as your answer
+5. Format: "There are [cardinality] [field] in the dataset"
+
+Provide a clear, direct answer to the user's question based on the schema metadata. If cardinality is available, USE IT!

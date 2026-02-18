@@ -1,4 +1,6 @@
-# HTTPS Setup for Development
+# HTTPS Setup for Local Development
+
+This guide covers HTTPS for **local development** (`npm run dev`). For Docker development, see [Docker Development Guide](../development/DOCKER_DEV.md).
 
 This project requires HTTPS for the frontend to work with Tableau Server authentication.
 

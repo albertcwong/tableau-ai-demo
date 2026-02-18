@@ -35,7 +35,7 @@ This MCP (Model Context Protocol) server exposes Tableau operations, conversatio
 ### Prerequisites
 
 1. Python 3.10+ installed
-2. Backend dependencies installed (`pip install -r requirements.txt`)
+2. Backend dependencies installed (`uv sync`)
 3. Environment variables configured (see `.env`)
 
 ### IDE Integration (Cursor/VS Code)

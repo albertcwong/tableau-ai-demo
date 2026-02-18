@@ -43,40 +43,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      
       - name: Install dependencies
         working-directory: ./backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: uv sync --all-extras
       
       - name: Run linting
         working-directory: ./backend
         run: |
-          pip install flake8 black isort
-          flake8 app/ mcp_server/ --max-line-length=120 --exclude=__pycache__,venv
-          black --check app/ mcp_server/
-          isort --check-only app/ mcp_server/
+          uv run flake8 app/ mcp_server/ --max-line-length=120 --exclude=__pycache__,venv,.venv
+          uv run black --check app/ mcp_server/
+          uv run isort --check-only app/ mcp_server/
       
       - name: Run tests
         working-directory: ./backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tableau_demo
           REDIS_URL: redis://localhost:6379/0
-        run: |
-          pytest tests/ -v --tb=short --cov=app --cov=mcp_server --cov-report=xml --cov-report=html
+        run: uv run pytest tests/ -v --tb=short --cov=app --cov=mcp_server --cov-report=xml --cov-report=html
       
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -148,16 +136,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       
-      - name: Build MCP server image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile.mcp
-          push: false
-          tags: tableau-demo-mcp:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -191,21 +169,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
       - name: Install dependencies
         working-directory: ./backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: uv sync
       
       - name: Run integration tests
         working-directory: ./backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tableau_demo
           REDIS_URL: redis://localhost:6379/0
-        run: |
-          pytest tests/integration/ -v --tb=short
+        run: uv run pytest tests/integration/ -v --tb=short

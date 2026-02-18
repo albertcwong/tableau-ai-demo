@@ -1,0 +1,97 @@
+You are validating a VizQL Data Service query against a datasource schema.
+
+## Schema
+{{ schema }}
+
+## Query to Validate
+{{ original_query }}
+
+## Validation Checklist
+Check for:
+1. ✓ All fieldCaption values exist in schema
+2. ✓ Aggregation functions are appropriate for field types
+3. ✓ Filters reference valid fields and values
+4. ✓ Required fields (datasource.datasourceLuid, query.fields) are present
+5. ✓ No syntax errors in JSON structure
+6. ✓ Field names match schema exactly (case-sensitive)
+7. ✓ Filter types are correctly used based on user intent
+8. ✓ Filter-specific required fields are present
+9. ✓ No multiple filters on the same field
+10. ✓ TOP filter used for "top N" queries (not sorting)
+
+## Output Format
+Return a JSON object:
+{
+  "valid": true/false,
+  "errors": ["error1", "error2"],
+  "suggestions": ["suggestion1", "suggestion2"],
+  "corrected_query": { ... }  // Only if errors found, show corrected version
+}
+
+## Filter Type Validation
+
+**TOP Filter Validation:**
+- ✓ If user intent contains "top N" or "bottom N", verify TOP filter is used (not sorting)
+- ✓ Verify TOP filter has: howMany, direction, fieldToMeasure
+- ✓ Verify fieldToMeasure has function property (it's a measure)
+- ✓ Verify direction is "TOP" or "BOTTOM"
+- ❌ If "top N" query uses sortPriority instead of TOP filter → Flag: "Use TOP filter for top N queries, not sorting"
+
+**SET Filter Validation:**
+- ✓ Verify values array is present and not empty
+- ✓ Verify exclude boolean is present
+- ✓ Verify filter field does NOT have function or calculation
+- ❌ If values array is empty → Flag: "SET filter values array cannot be empty"
+
+**MATCH Filter Validation:**
+- ✓ Verify at least one of: startsWith, endsWith, or contains is present
+- ✓ Verify filter field does NOT have function or calculation
+- ❌ If none of startsWith/endsWith/contains present → Flag: "MATCH filter requires at least one of: startsWith, endsWith, contains"
+
+**DATE Filter (Relative) Validation:**
+- ✓ Verify periodType is present (MINUTES/HOURS/DAYS/WEEKS/MONTHS/QUARTERS/YEARS)
+- ✓ Verify dateRangeType is present (LAST/LASTN/CURRENT/NEXT/NEXTN/TODATE)
+- ✓ If dateRangeType is LASTN or NEXTN, verify rangeN is present
+- ✓ Verify filter field does NOT have function or calculation
+- ❌ If LASTN/NEXTN without rangeN → Flag: "DATE filter with LASTN/NEXTN requires rangeN"
+
+**QUANTITATIVE_NUMERICAL Filter Validation:**
+- ✓ Verify quantitativeFilterType is present (MIN/MAX/RANGE/ONLY_NULL/ONLY_NON_NULL)
+- ✓ If quantitativeFilterType is MIN or RANGE, verify min is present
+- ✓ If quantitativeFilterType is MAX or RANGE, verify max is present
+- ✓ If quantitativeFilterType is ONLY_NULL or ONLY_NON_NULL, verify min/max are NOT present
+- ✓ Verify column field has function property (it's a measure)
+- ❌ If MIN without min value → Flag: "QUANTITATIVE_NUMERICAL filter with MIN requires min value"
+
+**QUANTITATIVE_DATE Filter Validation:**
+- ✓ Verify quantitativeFilterType is present (MIN/MAX/RANGE)
+- ✓ If quantitativeFilterType is MIN or RANGE, verify minDate is present
+- ✓ If quantitativeFilterType is MAX or RANGE, verify maxDate is present
+- ❌ If RANGE without both minDate and maxDate → Flag: "QUANTITATIVE_DATE filter with RANGE requires both minDate and maxDate"
+
+**General Filter Validation:**
+- ✓ Verify no multiple filters on the same field
+- ✓ Verify filter field names exist in schema
+- ❌ If multiple filters on same field → Flag: "Cannot have multiple filters for a single field"
+
+## Pattern-Based Validation
+
+**Check if filter type matches user intent:**
+- If user query contains "top N" or "bottom N" → Should use TOP filter
+- If user query contains "contains", "starts with", "ends with" → Should use MATCH filter
+- If user query contains "last N", "next N", "this period" → Should use DATE filter
+- If user query contains "greater than", "less than", "between" (on measures) → Should use QUANTITATIVE_NUMERICAL filter
+- If user query contains "between dates", "after date", "before date" → Should use QUANTITATIVE_DATE filter
+- If user query contains specific value list → Should use SET filter
+
+## Common Errors
+- Field name mismatch: "Sales" vs "Total Sales" → suggest correct name
+- Invalid aggregation: Using SUM on a dimension → suggest ATTR or remove function
+- Missing required field: No datasourceLuid → add it
+- Invalid filter format: Wrong structure → show correct format
+- **Top N query using sorting instead of TOP filter** → suggest using TOP filter
+- **Missing required filter fields** → list missing fields for filter type
+- **Multiple filters on same field** → suggest combining or removing duplicate
+- **Empty values array in SET filter** → suggest removing filter or adding values
+
+Validate the query and return JSON only.

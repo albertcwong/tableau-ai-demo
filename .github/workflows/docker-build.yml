@@ -28,9 +28,6 @@ jobs:
           - name: frontend
             dockerfile: frontend/Dockerfile
             context: frontend
-          - name: mcp-server
-            dockerfile: backend/Dockerfile.mcp
-            context: backend
     
     steps:
       - uses: actions/checkout@v4

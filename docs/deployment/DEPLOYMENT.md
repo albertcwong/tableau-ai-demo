@@ -345,5 +345,5 @@ docker run --rm -v tableau-demo_postgres_data:/data -v $(pwd):/backup \
 
 For issues and questions:
 - Check logs: `docker-compose logs`
-- Review [TROUBLESHOOTING.md](./backend/mcp_server/TROUBLESHOOTING.md)
+- Review [TROUBLESHOOTING.md](../../backend/mcp_server/TROUBLESHOOTING.md)
 - Open an issue on GitHub

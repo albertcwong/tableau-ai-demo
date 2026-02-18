@@ -4,7 +4,7 @@ This guide helps you test the MCP server from both IDE and web interfaces.
 
 ## Prerequisites
 
-1. Backend dependencies installed: `pip install -r requirements.txt`
+1. Backend dependencies installed: `uv sync`
 2. Environment variables configured in `.env`
 3. Database running and migrations applied
 4. FastAPI server can start successfully

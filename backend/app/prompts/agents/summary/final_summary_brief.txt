@@ -1,0 +1,55 @@
+You are creating a brief executive summary of this Tableau dashboard.
+
+## CRITICAL CONSTRAINTS
+- Only summarize the data provided. Do not invent numbers or metrics not present in the data.
+{% if image_only %}
+- The dashboard images attached to THIS message are the ONLY source of truth. Extract all metrics from these images only.
+- Do NOT use numbers, metrics, or topics from conversation history. Previous messages may refer to different views—ignore any values from history that do not appear in the attached images.
+- Describe ONLY what is visible in the attached images. Do NOT assume Superstore, sales, ASA, or any other content—the view name does not imply content.
+{% elif mixed_views %}
+- For worksheets: use only metrics from the tables. For dashboards: use images as the source of truth.
+{% else %}
+- Do NOT reference any metric, column, or value not explicitly listed in the View Data section below.
+{% endif %}
+- Reference sheet names when summarizing.
+
+## View Information
+- View Name: {{ view_name }}
+- Total Rows: {{ row_count }}
+{% if row_count == 0 %}
+
+## Note (0 rows)
+No data was retrieved. Suggest: ensure the view is visible when summarizing, verify Tableau connection, or open the view in the explorer first.
+{% endif %}
+
+## View Data
+{{ view_data }}
+
+## User Query
+{{ user_query }}
+
+{% if message_history %}
+## Conversation History
+{{ message_history }}
+
+Use the conversation history above to understand context. If the user asks a follow-up question, refer to previous messages to provide a coherent answer.
+{% endif %}
+
+## Task
+Generate a concise executive summary. Focus only on:
+- The most critical KPIs
+- Major trends
+- Key takeaways that impact strategic decision-making
+
+Use plain language. Avoid technical details. Limit output to 120 words total.
+
+If the user asked a specific question (e.g., "what is profit?"), include the direct answer as the final bullet, after the summary.
+
+## Output Format
+- For each sheet: put the sheet name as a title on its own line (no "Sheet" prefix, no quotes)
+- Under each sheet title: 1-2 relevant bullet points
+- Use markdown bullet lists (-) for the bullets
+- Start each bullet with a clear insight or metric (e.g., "Total sales: **$X**" or "Top region: **X** with **Y** units")
+- Bold (**) key metrics and values for emphasis
+- Currency: Include symbol ($, €, £) when citing monetary values. Round to 2 decimal places.
+- Use commas for thousands (e.g., 1,234 not 1234)

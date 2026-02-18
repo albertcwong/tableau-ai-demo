@@ -1,0 +1,134 @@
+You are refining a VizQL Data Service query that failed validation{% if has_execution_error %} or execution{% endif %}.
+
+## Original User Query
+{{ user_query }}
+
+## Original Query (Failed)
+{{ original_query }}
+
+{% if has_execution_error %}
+## 🚨 CRITICAL: Query Execution Failed Against Tableau Server
+
+**This query was executed against Tableau Server and FAILED.** The error message from Tableau Server contains critical information about what went wrong.
+
+**Tableau Server Error:**
+```
+{{ tableau_error }}
+```
+
+**IMPORTANT:** 
+- Read the Tableau error message CAREFULLY - it tells you exactly what's wrong with the query structure
+- Common Tableau errors include:
+  - Missing required fields (e.g., "Field 'field' is required")
+  - Invalid field names or references
+  - Incorrect filter structure
+  - Invalid aggregation usage
+  - Schema mismatches
+- The error message often includes the exact field or property that's causing the problem
+- Compare the error message with the query structure above to identify the issue
+
+{% endif %}
+
+## Errors to Fix
+{% if errors %}
+{% if errors|length > 0 %}
+The following errors were found. You MUST fix ALL of them:
+
+{% for error in errors %}
+**Error {{ loop.index }}:** {{ error }}
+{% endfor %}
+{% else %}
+No specific errors listed.
+{% endif %}
+{% else %}
+No errors provided.
+{% endif %}
+
+## Suggestions for Fixes
+{% if suggestions %}
+{% if suggestions|length > 0 %}
+**CRITICAL:** Follow these EXACT suggestions. Each suggestion shows the precise JSON format to use in your corrected query:
+
+{% for suggestion in suggestions %}
+**Suggestion {{ loop.index }}:** {{ suggestion }}
+{% endfor %}
+
+**IMPORTANT:** 
+- The suggestions above contain EXACT JSON snippets (e.g., `{"fieldCaption": "Customer Name"}`)
+- Copy these JSON snippets EXACTLY into your corrected query
+- Replace the incorrect field definition with the suggested JSON format
+- Do NOT modify the suggested JSON format
+{% else %}
+No specific suggestions available. Review the validation errors above and fix accordingly.
+{% endif %}
+{% else %}
+No suggestions provided.
+{% endif %}
+
+## Schema Reference
+{{ schema }}
+
+## VizQL Rules (CRITICAL)
+1. **MEASURES REQUIRE AGGREGATION**: If a field is a MEASURE, it MUST have a "function" field
+2. **DIMENSIONS AND AGGREGATION**: 
+   - If a field is a DIMENSION with dataType STRING/DATE/BOOLEAN, it should NOT have a "function" field
+   - **IMPORTANT**: If a field is a DIMENSION but dataType is REAL or INTEGER, it CAN have a "function" field
+   - This handles cases where numeric fields (like "Sales") are incorrectly categorized as dimensions in Tableau
+   - When user intent requires aggregation of a numeric dimension, use aggregation
+3. **USE EXACT fieldCaption**: Copy field names EXACTLY from schema (case-sensitive)
+4. **MATCH USER INTENT**: The corrected query should match the user's original intent: "{{ user_query }}"
+
+## Task
+Fix the query based on the errors and suggestions above. 
+
+**CRITICAL INSTRUCTIONS:**
+1. **If there's a Tableau execution error** - Read it FIRST and CAREFULLY. It contains the exact problem from Tableau Server
+2. **Read each error carefully** - they tell you exactly what's wrong
+3. **Follow the suggestions** - they provide the exact fix needed
+4. **Apply ALL fixes** - don't miss any errors
+5. **Preserve correct parts** - only fix what's wrong, keep what's correct
+6. **Maintain user intent** - the corrected query should still answer: "{{ user_query }}"
+7. **Check the failed query structure** - Compare it with the error message to identify mismatches
+
+**Common Fix Patterns:**
+- **Tableau error "Field 'X' is required"** → Add the missing required field/property to the query
+- **Tableau error "Field 'X' not found"** → Check field name spelling, use exact fieldCaption from schema
+- **Tableau error mentions filter structure** → Check filter has required "field" and "filterType" properties
+- **Tableau error mentions aggregation** → Verify aggregation functions are valid and correctly applied
+- If error says "MEASURE field requires aggregation" → Add `"function": "SUM"` (or appropriate aggregation)
+- If error says "DIMENSION field should not have aggregation" → Check if field is numeric (REAL/INTEGER):
+  - If numeric AND user wants aggregation → Keep the function (field may be incorrectly categorized)
+  - If non-numeric (STRING/DATE/BOOLEAN) → Remove the `"function"` field entirely
+- If error says "Field not found" → Use the suggested field name from suggestions
+- If suggestion shows exact JSON → Use that exact format
+
+**Example Fix:**
+If error is: "DIMENSION field 'Customer Name' should not have aggregation function"
+And suggestion is: "Remove 'function' from 'Customer Name': {\"fieldCaption\": \"Customer Name\"}"
+
+Then in the query, change:
+```json
+{"fieldCaption": "Customer Name", "function": "SUM"}
+```
+To:
+```json
+{"fieldCaption": "Customer Name"}
+```
+
+## Output Format
+Return ONLY the corrected JSON query object (no markdown, no explanation):
+{
+  "datasource": {
+    "datasourceLuid": "..."
+  },
+  "query": {
+    "fields": [...],
+    "filters": [...]
+  },
+  "options": {
+    "returnFormat": "OBJECTS",
+    "disaggregate": false
+  }
+}
+
+Return ONLY the JSON, nothing else.

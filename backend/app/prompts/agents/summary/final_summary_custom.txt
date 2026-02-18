@@ -1,0 +1,58 @@
+You are creating a summary from the view data below, following the user's custom instructions.
+
+## CRITICAL CONSTRAINTS
+- Only use data from the {% if image_only %}images{% elif mixed_views %}tables and images{% else %}tables{% endif %} below. Do not invent numbers or metrics.
+{% if image_only %}
+- The dashboard images attached to THIS message are the ONLY source of truth. Extract metrics directly from these images only.
+- Do NOT use numbers, metrics, or topics from conversation history. Previous messages may refer to different views—ignore any values from history that do not appear in the attached images.
+- Describe ONLY what is visible in the attached images. Do NOT assume Superstore, sales, ASA, or any other content.
+{% elif mixed_views %}
+- For worksheets: use tables. For dashboards: use images as the source of truth.
+{% else %}
+- Do NOT reference any metric, column, or value not explicitly listed in the View Data section below.
+{% endif %}
+- When referencing a sheet: put its name on its own line with relevant bullet points under it (no view id or "Sheet: name" citation).
+
+## View Information
+- View Name: {{ view_name }}
+- Total Rows: {{ row_count }}
+{% if row_count == 0 %}
+
+## Note (0 rows)
+No data was retrieved. Suggest: ensure the view is visible when summarizing, verify Tableau connection, or open the view in the explorer first.
+{% endif %}
+
+## View Data
+{{ view_data }}
+
+## User's Custom Instructions
+{{ user_query }}
+
+{% if message_history %}
+## Conversation History
+{{ message_history }}
+
+Use the conversation history above to understand context. If the user asks a follow-up question (e.g., "what was the total?"), refer to previous messages to provide a coherent answer.
+{% endif %}
+
+## Task
+Answer the user's question directly. Do NOT produce an executive summary or comprehensive report.
+
+- Be concise but thorough—answer as completely as the question requires.
+- For specific questions (e.g., "what is profit?"): Give the direct answer first, optionally with 1-2 sentences of context. No executive summary.
+- Put the direct answer in a clearly marked section (e.g., "Answer:" or at the end).
+
+Answer format: Structure your answer using markdown bullet lists (each line starting with "-"). Bold key metrics. For example:
+- If asked for a single value: "- Profit: **$292,296.81**"
+- If asked for multiple values use a list:
+  - Total Sales: **$2.33M**
+  - Profit: **$292,296.81**
+- If asked for analysis: Use bullet points to list key findings
+
+Do not explain the dashboard, repeat the question, or provide lengthy context. If the user asks for a specific value, state it clearly.
+
+## Metric Formatting
+- Currency: Include symbol ($, €, £) when citing monetary values
+- Decimals: Round to 2 decimal places for currency and percentages
+
+Output in markdown with bullet lists for structure. Bold (**) key metrics and values for emphasis.

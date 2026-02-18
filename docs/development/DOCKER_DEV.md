@@ -1,51 +1,62 @@
 # Docker Development Guide
 
-Develop entirely in Docker with hot reload. This catches Docker-specific issues during development instead of at deployment.
+Develop entirely in Docker with hot reload. Use `./scripts/dev-docker.sh` for dynamic ports (enables parallel worktrees and agent-created worktrees in arbitrary paths).
 
 ## Quick Start
 
 ```bash
-# Start infrastructure + backend + frontend with hot reload
-docker-compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Ensure Postgres and Redis are running locally (e.g. docker compose up -d postgres redis, or native install)
 
-# Or use the script
-./scripts/dev-docker.sh --build
+# Start stack (ports derived from PWD; URLs printed after start)
+./scripts/dev-docker.sh up --build
 
-# Or run in background
-docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Detached
+./scripts/dev-docker.sh up -d --build
+
+# Get URLs without starting
+./scripts/dev-docker.sh url
+
+# Stop
+./scripts/dev-docker.sh down
 ```
 
-**URLs:**
-- Frontend: https://localhost:3000 (HTTPS; required for Tableau embed; HMR works with Next.js built-in server)
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+**URLs** (dynamic; run `./scripts/dev-docker.sh url` to see yours):
+- Frontend: `https://localhost:<port>` (HTTPS; required for Tableau embed)
+- Backend: `http://localhost:<port>`
+- API Docs: `http://localhost:<port>/docs`
 
 ## Prerequisites
 
-1. **Environment**: Copy `.env.example` to `.env` and configure
+1. **Postgres and Redis**: Running on localhost (default ports 5432, 6379). Containers connect via `host.docker.internal`. Override with `DATABASE_URL` and `REDIS_URL` in `.env` if using different ports. If you need Docker postgres/redis: `docker compose -f docker-compose.infra.yml -p tableau-demo-infra up -d` (then use `postgresql://postgres:postgres@host.docker.internal:5432/tableau_demo`).
 
-### Worktree setup
+2. **Environment**: Copy `.env.example` to `shared/.env` and configure (worktrees symlink from `shared/`).
 
-- **Cursor worktrees**: `.env` is linked automatically via `.cursor/worktrees.json` when Cursor creates a worktree on demand.
-- **Manual worktrees** (`git worktree add`): Run `./scripts/setup-worktree-env.sh` once to symlink `.env` from the main worktree.
-2. **Certificates** (optional): For HTTPS, run `cd frontend && ./generate-cert.sh`
-3. **Database**: Run migrations on first run:
+3. **Worktree setup**:
+   - **Cursor worktrees**: `.env` and certs linked via `.cursor/worktrees.json`.
+   - **Manual worktrees** (`git worktree add`): Run `./scripts/setup-worktree-env.sh` once.
+
+4. **Certificates**: Generate in `shared/` (from project root; worktrees use `../shared`):
    ```bash
-   docker-compose -f docker-compose.yml -f docker-compose.dev.yml run backend alembic upgrade head
+   cd shared && ./generate-cert.sh
+   ```
+   Trust in browser: Keychain Access (macOS) or `chrome://settings/certificates` → Import `localhost.pem`.
+
+5. **Database**: Run migrations on first run:
+   ```bash
+   ./scripts/dev-docker.sh run backend alembic upgrade head
    ```
 
 ## How It Works
 
-| Component | Production | Development |
-|-----------|------------|-------------|
-| Backend | Built image, no reload | Volume mount `./backend/app`, `./backend/mcp_server`, uvicorn `--reload` |
-| Frontend | Built Next.js standalone | Volume mount `./frontend`, `npm run dev`, named volume for `node_modules` |
-| Postgres/Redis | Same | Same |
+| Component | Development |
+|-----------|-------------|
+| Backend | Volume mount `./backend/app`, `./backend/mcp_server`; uvicorn `--reload` |
+| Frontend | Volume mount `./frontend`; `npm run dev`; named volume for `node_modules` |
+| Postgres/Redis | Use local (host.docker.internal:5432, :6379) |
 
-**Volume strategy:**
-- Backend: Source code mounted; changes trigger uvicorn reload
-- Frontend: Source mounted; `node_modules` uses named volume (avoids host/container architecture mismatch)
-- Certificates: Mounted from `frontend/localhost-key.pem`, `frontend/localhost.pem`
+**Dynamic ports**: Ports are derived from `PWD` (same path = same ports). Enables parallel worktrees and agent-created worktrees without port conflicts.
+
+**Certificates**: Mounted from `shared/` via `CERT_PATH` (set by `setup-worktree-env.sh` for manual worktrees).
 
 ## Docker Dev vs Local Dev
 
@@ -54,12 +65,12 @@ docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | Verifying Docker deployment | Faster iteration on one service |
 | Onboarding new developers | Debugging with IDE breakpoints |
 | CI/CD pipeline testing | Prefer native tooling |
-| Catching env/path differences | Working offline with cached deps |
+| Agent-created worktrees | Single worktree workflow |
 
-**Local dev** (existing workflow):
+**Local dev**:
 ```bash
-docker-compose up -d postgres redis
-cd backend && uvicorn app.main:app --reload --port 8000
+# Start postgres/redis first (e.g. docker compose up -d postgres redis from project root)
+cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd frontend && npm run dev
 ```
 
@@ -67,21 +78,19 @@ cd frontend && npm run dev
 
 ### Backend changes not reloading
 - Ensure `./backend/app` and `./backend/mcp_server` exist
-- Check logs: `docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend`
+- Check logs: `./scripts/dev-docker.sh logs -f backend`
 
 ### Frontend "Cannot find module"
-- Rebuild: `docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache frontend`
-- Reset node_modules volume: `docker volume ls` to find it, then `docker volume rm <volume_name>` and `up --build`
+- Rebuild: `./scripts/dev-docker.sh build --no-cache frontend`
+- Reset node_modules: `docker volume ls` → `docker volume rm <wt-*_frontend_node_modules>`
 
-### Containers using old/wrong directory (e.g. after worktree change)
-- Set `PROJECT_ROOT` in `.env` to the **absolute path** of this project, e.g. `PROJECT_ROOT=/Users/you/code/tableau-ai-demo/tableau-ai-demo-main`
-- Stop and remove containers: `docker compose -f docker-compose.yml -f docker-compose.dev.yml down`
-- Restart: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build`
+### Containers using old directory (after worktree change)
+- Run `./scripts/setup-worktree-env.sh` to regenerate `PROJECT_ROOT` and `CERT_PATH`
+- `./scripts/dev-docker.sh down` then `./scripts/dev-docker.sh up --build`
 
 ### Certificates / HTTPS
-- Generate certs: `cd frontend && ./generate-cert.sh` (required for Docker dev; Tableau embed needs HTTPS)
-- Docker dev uses `next dev --experimental-https` with your certs—HMR WebSocket works
+- Generate: `cd shared && ./generate-cert.sh` (Tableau embed requires HTTPS)
+- If missing, frontend falls back to HTTP on port 3001
 
 ### Port conflicts
-- Ensure ports 3000, 3001, 5432, 6379, 8000 are free
-- Stop other Docker stacks: `docker-compose down`
+- Ports are dynamic; conflicts are rare. If needed, `./scripts/dev-docker.sh down` and restart.

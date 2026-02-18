@@ -1,8 +1,8 @@
 # Dependencies
 node_modules/
 venv/
-env/
 .venv/
+env/
 
 # Environment variables
 .env
@@ -82,7 +82,6 @@ tmp/
 # Agent transcripts and terminals (development artifacts)
 agent-transcripts/
 terminals/
-*.txt
 !README.txt
 !CHANGELOG.txt
 

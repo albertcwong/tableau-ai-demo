@@ -20,7 +20,7 @@ These tests verify that the MCP server works correctly across different transpor
 
 1. Install test dependencies:
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
 2. Ensure database is set up (tests use in-memory SQLite):

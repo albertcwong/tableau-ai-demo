@@ -1,0 +1,46 @@
+# Run once for initial setup: docker compose -f docker-compose.infra.yml -p tableau-demo-infra up -d
+# Postgres and redis are shared; backend/frontend connect via tableau-demo-net.
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tableau-demo-postgres
+    environment:
+      POSTGRES_DB: tableau_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tableau-demo-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: tableau-demo-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tableau-demo-net
+
+networks:
+  tableau-demo-net:
+    name: tableau-demo-net
+
+volumes:
+  postgres_data:
+    name: tableau-demo_postgres_data
+  redis_data:
+    name: tableau-demo_redis_data

@@ -1,0 +1,343 @@
+## VizQL Field Role Rules
+
+**MEASURE Fields:**
+- Always require an aggregation function (SUM, AVG, COUNT, etc.)
+- Typical types: INTEGER, REAL
+- Examples: Sales, Revenue, Quantity, Price, Profit
+- Cannot be used without aggregation in queries
+
+**DIMENSION Fields:**
+- Used for grouping (typically no aggregation)
+- Typical types: STRING, DATE, BOOLEAN, INTEGER, REAL
+- Examples: Region, Category, Customer Name, Order Date, State
+- **IMPORTANT**: Non-numeric dimensions (STRING, DATE, BOOLEAN) should NOT have aggregation functions
+- **NUMERIC DIMENSIONS**: If a dimension is numeric (INTEGER, REAL), it CAN have aggregation if:
+  - User intent requires aggregation (e.g., "top sales by region" where "Sales" is marked as dimension)
+  - The field represents a measurable quantity (sales, revenue, quantity, etc.)
+- This handles cases where Tableau datasources incorrectly categorize numeric fields as dimensions
+- Used to group or filter data
+
+## Aggregation Selection Guide
+
+**Numeric Aggregations:**
+- **SUM**: Total of numeric values
+  - Use for: sales, revenue, amount, quantity, total, profit, cost
+  - Compatible types: INTEGER, REAL
+  
+- **AVG**: Average of numeric values
+  - Use for: price, rating, score, duration, average, mean
+  - Compatible types: INTEGER, REAL
+  
+- **MEDIAN**: Median value
+  - Use for: median, middle value, 50th percentile
+  - Compatible types: INTEGER, REAL
+  
+- **MIN**: Minimum value
+  - Use for: earliest date, lowest price, minimum value
+  - Compatible types: INTEGER, REAL, DATE, DATETIME
+  
+- **MAX**: Maximum value
+  - Use for: latest date, highest price, maximum value
+  - Compatible types: INTEGER, REAL, DATE, DATETIME
+  
+- **STDEV**: Standard deviation
+  - Use for: variability, spread of values
+  - Compatible types: INTEGER, REAL
+  
+- **VAR**: Variance
+  - Use for: variability, spread of values
+  - Compatible types: INTEGER, REAL
+
+- **COLLECT**: Collect values into a set
+  - Use for: gathering values into a collection
+  - Compatible types: * (any type)
+
+**Count Aggregations:**
+- **COUNT**: Number of rows
+  - Use for: counting records, entries, rows
+  - Compatible types: * (any type)
+  
+- **COUNTD**: Count distinct values
+  - Use for: unique customers, distinct products, unique IDs
+  - Compatible types: * (any type)
+
+**Date/Time Aggregations:**
+- **YEAR**: Extract year from date
+- **QUARTER**: Extract quarter from date
+- **MONTH**: Extract month from date
+- **WEEK**: Extract week from date
+- **DAY**: Extract day from date
+- **TRUNC_YEAR**: Truncate to year
+- **TRUNC_QUARTER**: Truncate to quarter
+- **TRUNC_MONTH**: Truncate to month
+- **TRUNC_WEEK**: Truncate to week
+- **TRUNC_DAY**: Truncate to day
+
+## Field Name Matching Rules
+
+1. **Use EXACT fieldCaption from schema metadata**
+   - Schema provides exact field names (e.g., "Total Sales", "Region")
+   - These are case-sensitive: "Total Sales" ≠ "total sales"
+
+2. **Match user intent to schema fields**
+   - User says "sales" → Find "Total Sales" in schema
+   - User says "region" → Find "Region" in schema
+   - Use fuzzy matching if exact match not found
+
+3. **Never invent field names**
+   - If field doesn't exist in schema, it cannot be used
+   - Always verify field exists before using in query
+
+4. **Handle field aliases**
+   - Some fields have aliases (e.g., "Sales" → "Total Sales")
+   - Use the canonical fieldCaption from schema
+
+## Query Construction Rules
+
+**CRITICAL Rules:**
+1. MEASURE fields MUST have a "function" field with aggregation
+2. DIMENSION fields:
+   - Non-numeric (STRING, DATE, BOOLEAN): MUST NOT have a "function" field
+   - Numeric (REAL, INTEGER): CAN have a "function" field if user intent requires aggregation
+3. Aggregation must be compatible with field data type
+4. Use exact fieldCaption from schema (case-sensitive)
+5. **Field role is a starting point**: If a numeric field is marked as DIMENSION but user wants aggregation, use it
+
+**Field Constraints:**
+- Must query at least one field
+- Cannot query the same field twice in a single query
+- Cannot have duplicate sort priorities
+- A field cannot contain both a "function" and a "calculation" property
+
+**Field Properties (Optional):**
+- **fieldAlias**: Alternate name for the column in output (OBJECTS format only)
+- **maxDecimalPlaces**: Maximum decimal places (trailing zeros dropped, must be >= 0)
+- **sortDirection**: "ASC" or "DESC" for sorting direction
+- **sortPriority**: Integer ranking for sorting (lower number = higher priority)
+- **binSize**: Create a bin on a measure field (must be a measure field)
+- **calculation**: Tableau calculation syntax string (cannot be used with "function")
+
+**Calculations:**
+- Can use Tableau calculation syntax: `"calculation": "SUM([Profit])/SUM([Sales])"`
+- Can reference parameters: `[Parameter Caption/Name]` syntax
+- Can create ad-hoc calculations (temporary calculations)
+- Must provide unique fieldCaption for new calculations
+- Cannot combine "function" and "calculation" in same field
+
+**Example - CORRECT:**
+```json
+{
+  "fields": [
+    {"fieldCaption": "Total Sales", "function": "SUM"},
+    {"fieldCaption": "Region"}
+  ]
+}
+```
+
+**Example - INCORRECT:**
+```json
+{
+  "fields": [
+    {"fieldCaption": "Total Sales"},  // ❌ Missing function for MEASURE
+    {"fieldCaption": "Region", "function": "SUM"}  // ❌ DIMENSION shouldn't have function
+  ]
+}
+```
+
+## Filter Rules
+
+**Filter Types:**
+- **SET**: Include/exclude specific values (dimensions only)
+  - Requires: `filterType: "SET"`, `values` array, `exclude` boolean
+  - Cannot have functions or calculations
+  
+- **QUANTITATIVE_NUMERICAL**: Filter on aggregated measures
+  - Requires: `filterType: "QUANTITATIVE_NUMERICAL"`, `quantitativeFilterType` (MIN/MAX/RANGE/ONLY_NULL/ONLY_NON_NULL)
+  - Can specify `min`, `max`, `includeNulls`
+  
+- **QUANTITATIVE_DATE**: Filter on date ranges
+  - Requires: `filterType: "QUANTITATIVE_DATE"`, `quantitativeFilterType`, `minDate`/`maxDate`
+  
+- **DATE** (Relative Date): Filter relative to anchor date
+  - Requires: `filterType: "DATE"`, `periodType` (MINUTES/HOURS/DAYS/WEEKS/MONTHS/QUARTERS/YEARS)
+  - Requires: `dateRangeType` (LAST/CURRENT/NEXT/LASTN/NEXTN/TODATE)
+  - Optional: `anchorDate` (defaults to today), `rangeN` (for LASTN/NEXTN)
+  - Cannot have functions or calculations
+  
+- **TOP**: Top N filter
+  - Requires: `filterType: "TOP"`, `howMany`, `fieldToMeasure` (with function), `direction` (TOP/BOTTOM)
+  
+- **MATCH**: Substring matching
+  - Requires: `filterType: "MATCH"`, at least one of: `startsWith`, `endsWith`, `contains`
+  - Optional: `exclude` boolean
+  - Cannot have functions or calculations
+  
+- **Context Filter**: Add `"context": true` to any filter to make it a context filter
+
+**Filter Constraints:**
+- Set Filters, Match Filters, and Relative Date Filters cannot have functions or calculations
+- Cannot have multiple filters for a single field
+- Filter fields do not need to be in the fields array
+
+## Parameters
+
+- Can override default parameter values in query
+- Use in calculated fields: `[Parameter Caption/Name]` syntax
+- Use in ad-hoc calculations: Reference parameters directly
+- Use in bins: Override bin size parameter values
+- Format: `"parameters": [{"parameterCaption": "Name", "value": <value>}]`
+
+## Query Options
+
+- **returnFormat**: "OBJECTS" (human-readable) or "ARRAYS" (compact)
+- **disaggregate**: Boolean - determines whether to aggregate results
+- **debug**: Boolean - returns more detailed error messages
+- **interpretFieldCaptionsAsFieldNames**: Boolean - allows using fieldName instead of fieldCaption
+
+## Common Patterns
+
+**Basic Aggregation Patterns:**
+- "total {measure} by {dimension}" → SUM measure, group by dimension
+- "average {measure} per {dimension}" → AVG measure, group by dimension
+- "count of {dimension}" → COUNT dimension
+- "distinct count of {dimension}" → COUNTD dimension
+- "min/max {field} by {dimension}" → MIN/MAX field, group by dimension
+- "sum of {measure} grouped by {dimension}" → SUM measure, group by dimension
+
+**Top N Patterns (CRITICAL - Use TOP filter, NOT sorting):**
+- "top N {dimension} by {measure}" → TOP filter with howMany=N, direction=TOP, fieldToMeasure=measure
+- "bottom N {dimension} by {measure}" → TOP filter with howMany=N, direction=BOTTOM, fieldToMeasure=measure
+- "highest N {dimension} by {measure}" → TOP filter with howMany=N, direction=TOP, fieldToMeasure=measure
+- "lowest N {dimension} by {measure}" → TOP filter with howMany=N, direction=BOTTOM, fieldToMeasure=measure
+- "best N {dimension} by {measure}" → TOP filter with howMany=N, direction=TOP, fieldToMeasure=measure
+- "worst N {dimension} by {measure}" → TOP filter with howMany=N, direction=BOTTOM, fieldToMeasure=measure
+- "N {dimension} with highest {measure}" → TOP filter with howMany=N, direction=TOP, fieldToMeasure=measure
+- "N {dimension} with lowest {measure}" → TOP filter with howMany=N, direction=BOTTOM, fieldToMeasure=measure
+
+**Filter Patterns:**
+- "{dimension} containing {text}" → MATCH filter with contains=text
+- "{dimension} starting with {text}" → MATCH filter with startsWith=text
+- "{dimension} ending with {text}" → MATCH filter with endsWith=text
+- "{dimension} in [{value1}, {value2}]" → SET filter with values array, exclude=false
+- "{dimension} not in [{value1}, {value2}]" → SET filter with values array, exclude=true
+- "{dimension} equals {value}" → SET filter with values=[value], exclude=false
+- "{measure} greater than {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MIN, min=X
+- "{measure} less than {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MAX, max=X
+- "{measure} between {X} and {Y}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=RANGE, min=X, max=Y
+- "{measure} > {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MIN, min=X
+- "{measure} < {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MAX, max=X
+- "{measure} >= {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MIN, min=X
+- "{measure} <= {X}" → QUANTITATIVE_NUMERICAL filter with quantitativeFilterType=MAX, max=X
+
+**Relative Date Patterns:**
+- "last N {period}" → DATE filter with dateRangeType=LASTN, rangeN=N, periodType={period}
+- "next N {period}" → DATE filter with dateRangeType=NEXTN, rangeN=N, periodType={period}
+- "this {period}" → DATE filter with dateRangeType=CURRENT, periodType={period}
+- "last {period}" → DATE filter with dateRangeType=LAST, periodType={period}
+- "next {period}" → DATE filter with dateRangeType=NEXT, periodType={period}
+- "to date" / "up to now" → DATE filter with dateRangeType=TODATE
+- "year to date" → DATE filter with dateRangeType=TODATE, periodType=YEARS
+- "quarter to date" → DATE filter with dateRangeType=TODATE, periodType=QUARTERS
+- "month to date" → DATE filter with dateRangeType=TODATE, periodType=MONTHS
+
+**Date Range Patterns:**
+- "{date_field} between {date1} and {date2}" → QUANTITATIVE_DATE filter with quantitativeFilterType=RANGE, minDate=date1, maxDate=date2
+- "{date_field} after {date}" → QUANTITATIVE_DATE filter with quantitativeFilterType=MIN, minDate=date
+- "{date_field} before {date}" → QUANTITATIVE_DATE filter with quantitativeFilterType=MAX, maxDate=date
+- "{date_field} in {year}" → QUANTITATIVE_DATE filter with quantitativeFilterType=RANGE, minDate="{year}-01-01", maxDate="{year}-12-31"
+
+**Calculation Patterns:**
+- "{calculated_field} as {formula}" → calculation property with Tableau syntax
+- "profit margin" → calculation: "SUM([Profit])/SUM([Sales])"
+- "{field1} divided by {field2}" → calculation: "SUM([Field1])/SUM([Field2])"
+- "{field1} times {field2}" → calculation: "SUM([Field1])*SUM([Field2])"
+- "{field1} plus {field2}" → calculation: "SUM([Field1])+SUM([Field2])"
+- "{field1} minus {field2}" → calculation: "SUM([Field1])-SUM([Field2])"
+
+**Bin Patterns:**
+- "create bin on {measure} with size {N}" → Add binSize property to measure field
+- "bin {measure} by {size}" → Add binSize property to measure field
+- "{measure} grouped into bins of {size}" → Add binSize property to measure field
+- "histogram of {measure} with bin size {N}" → Add binSize property to measure field
+
+**Sorting Patterns (when NOT using TOP filter):**
+- "sort by {field} ascending" → sortPriority=1, sortDirection=ASC
+- "sort by {field} descending" → sortPriority=1, sortDirection=DESC
+- "sort by {field1} then {field2}" → sortPriority=1 for field1, sortPriority=2 for field2
+
+## Pattern Priority Rules
+
+**Filter Type Priority:**
+1. **TOP filter takes precedence** over sortPriority for "top N" or "bottom N" queries
+   - ❌ WRONG: Using sortPriority + limit for "top 10"
+   - ✅ CORRECT: Using TOP filter with howMany=10
+
+2. **DATE filter preferred** over QUANTITATIVE_DATE for relative dates
+   - ✅ Use DATE filter for "last 3 months", "this year"
+   - Use QUANTITATIVE_DATE only for specific date ranges
+
+3. **MATCH filter** for fuzzy text matching, **SET filter** for exact matches
+   - ✅ Use MATCH for "contains", "starts with", "ends with"
+   - ✅ Use SET for specific value lists
+
+4. **QUANTITATIVE_NUMERICAL** for measure ranges, **QUANTITATIVE_DATE** for date ranges
+   - ✅ Use QUANTITATIVE_NUMERICAL for "sales > 1000"
+   - ✅ Use QUANTITATIVE_DATE for "between 2024-01-01 and 2024-12-31"
+
+## Anti-Patterns (What NOT to Do)
+
+**❌ WRONG: Using sortPriority + limit for "top N" queries**
+```json
+// DON'T DO THIS for "top 10 customers by revenue"
+"fields": [
+  {"fieldCaption": "Customer", "sortPriority": 1, "sortDirection": "DESC"},
+  {"fieldCaption": "Revenue", "function": "SUM"}
+]
+// Missing: TOP filter
+```
+
+**✅ CORRECT: Using TOP filter**
+```json
+"filters": [
+  {
+    "field": {"fieldCaption": "Customer"},
+    "filterType": "TOP",
+    "howMany": 10,
+    "direction": "TOP",
+    "fieldToMeasure": {"fieldCaption": "Revenue", "function": "SUM"}
+  }
+]
+```
+
+**❌ WRONG: Multiple filters on same field**
+```json
+// DON'T DO THIS - can only have one filter per field
+"filters": [
+  {"field": {"fieldCaption": "Region"}, "filterType": "SET", "values": ["North"]},
+  {"field": {"fieldCaption": "Region"}, "filterType": "SET", "values": ["South"]}
+]
+```
+
+**❌ WRONG: Empty values array in SET filter**
+```json
+// DON'T DO THIS - values array cannot be empty
+"filters": [
+  {"field": {"fieldCaption": "Region"}, "filterType": "SET", "values": []}
+]
+```
+
+**❌ WRONG: Missing fieldToMeasure in TOP filter**
+```json
+// DON'T DO THIS - TOP filter requires fieldToMeasure
+"filters": [
+  {"field": {"fieldCaption": "Customer"}, "filterType": "TOP", "howMany": 10}
+]
+```
+
+**❌ WRONG: Functions or calculations on SET/MATCH/DATE filters**
+```json
+// DON'T DO THIS - these filter types cannot have functions
+"filters": [
+  {"field": {"fieldCaption": "Region", "function": "SUM"}, "filterType": "SET", "values": ["North"]}
+]
+```

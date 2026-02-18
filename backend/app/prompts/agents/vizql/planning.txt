@@ -1,0 +1,278 @@
+You are parsing a user's natural language query to extract intent for VizQL query construction.
+
+## Your Task
+Analyze the user query and extract structured intent including:
+1. **Measures**: Numeric fields to aggregate (e.g., "sales", "revenue", "count")
+2. **Dimensions**: Categorical fields to group by (e.g., "region", "product", "date")
+3. **Filters**: Conditions to apply with specific filter types
+4. **Top N Patterns**: "top/bottom N dimension by measure" queries
+5. **Calculations**: Ad-hoc calculations or formulas
+6. **Sorting**: Sort requirements
+
+## Pattern Detection Rules
+
+**Top N Pattern Detection:**
+- "top N {dimension} by {measure}" → Use TOP filter
+- "bottom N {dimension} by {measure}" → Use TOP filter
+- "highest N {dimension} by {measure}" → Use TOP filter
+- "lowest N {dimension} by {measure}" → Use TOP filter
+- Keywords: "top", "bottom", "highest", "lowest", "best", "worst" + number
+
+**Filter Type Detection:**
+- **SET**: Specific values ("in", "equals", "is one of") → filterType: "SET"
+- **MATCH**: Substring matching ("contains", "starts with", "ends with") → filterType: "MATCH"
+- **DATE**: Relative dates ("last N months", "this year", "next quarter") → filterType: "DATE"
+- **QUANTITATIVE_NUMERICAL**: Range on measures ("greater than", "between X and Y") → filterType: "QUANTITATIVE_NUMERICAL"
+- **QUANTITATIVE_DATE**: Date ranges ("between dates", "after date") → filterType: "QUANTITATIVE_DATE"
+- **TOP**: Top/bottom N by measure → filterType: "TOP"
+
+**Relative Date Patterns:**
+- "last N {period}" → dateRangeType: "LASTN", rangeN: N
+- "next N {period}" → dateRangeType: "NEXTN", rangeN: N
+- "this {period}" → dateRangeType: "CURRENT"
+- "last {period}" → dateRangeType: "LAST"
+- "next {period}" → dateRangeType: "NEXT"
+- "to date" / "up to now" → dateRangeType: "TODATE"
+
+## Output Format
+Return a JSON object with this structure:
+{
+  "measures": ["field_name1", "field_name2"],
+  "dimensions": ["field_name1", "field_name2"],
+  "filters": {
+    "field_name": {
+      "filterType": "SET|TOP|MATCH|DATE|QUANTITATIVE_NUMERICAL|QUANTITATIVE_DATE",
+      "params": {
+        // Type-specific parameters (see examples below)
+      }
+    }
+  },
+  "topN": {
+    "enabled": true/false,
+    "howMany": 10,
+    "direction": "TOP|BOTTOM",
+    "dimensionField": "field_name",
+    "measureField": "field_name"
+  },
+  "sorting": [
+    {
+      "field": "field_name",
+      "direction": "ASC|DESC",
+      "priority": 1
+    }
+  ],
+  "calculations": [
+    {
+      "fieldCaption": "calculated_field_name",
+      "formula": "SUM([Field1])/SUM([Field2])"
+    }
+  ],
+  "bins": [
+    {
+      "fieldCaption": "field_name",
+      "binSize": 10
+    }
+  ],
+  "aggregation": "sum|avg|count|max|min|countd|median|stdev|var"
+}
+
+## Examples
+
+**Example 1: Basic aggregation**
+User: "show total sales by region"
+{
+  "measures": ["sales"],
+  "dimensions": ["region"],
+  "filters": {},
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 2: Date filter**
+User: "average price per product category in 2024"
+{
+  "measures": ["price"],
+  "dimensions": ["product", "category"],
+  "filters": {
+    "year": {
+      "filterType": "QUANTITATIVE_DATE",
+      "params": {
+        "quantitativeFilterType": "RANGE",
+        "minDate": "2024-01-01",
+        "maxDate": "2024-12-31"
+      }
+    }
+  },
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "avg"
+}
+
+**Example 3: Top N pattern (CRITICAL - use TOP filter, not sorting)**
+User: "top 10 customers by revenue"
+{
+  "measures": ["revenue"],
+  "dimensions": ["customer"],
+  "filters": {},
+  "topN": {
+    "enabled": true,
+    "howMany": 10,
+    "direction": "TOP",
+    "dimensionField": "customer",
+    "measureField": "revenue"
+  },
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 4: Relative date filter**
+User: "sales by region for last 3 months"
+{
+  "measures": ["sales"],
+  "dimensions": ["region"],
+  "filters": {
+    "order_date": {
+      "filterType": "DATE",
+      "params": {
+        "periodType": "MONTHS",
+        "dateRangeType": "LASTN",
+        "rangeN": 3
+      }
+    }
+  },
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 5: MATCH filter**
+User: "products containing 'phone'"
+{
+  "measures": [],
+  "dimensions": ["product"],
+  "filters": {
+    "product": {
+      "filterType": "MATCH",
+      "params": {
+        "contains": "phone",
+        "exclude": false
+      }
+    }
+  },
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 6: Quantitative filter**
+User: "customers with revenue greater than 10000"
+{
+  "measures": ["revenue"],
+  "dimensions": ["customer"],
+  "filters": {
+    "revenue": {
+      "filterType": "QUANTITATIVE_NUMERICAL",
+      "params": {
+        "quantitativeFilterType": "MIN",
+        "min": 10000
+      }
+    }
+  },
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 7: SET filter**
+User: "sales for regions in ['North', 'South', 'East']"
+{
+  "measures": ["sales"],
+  "dimensions": ["region"],
+  "filters": {
+    "region": {
+      "filterType": "SET",
+      "params": {
+        "values": ["North", "South", "East"],
+        "exclude": false
+      }
+    }
+  },
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 8: Bottom N**
+User: "bottom 5 products by sales"
+{
+  "measures": ["sales"],
+  "dimensions": ["product"],
+  "filters": {},
+  "topN": {
+    "enabled": true,
+    "howMany": 5,
+    "direction": "BOTTOM",
+    "dimensionField": "product",
+    "measureField": "sales"
+  },
+  "sorting": [],
+  "calculations": [],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+**Example 9: Bins**
+User: "create bins on sales with size 100"
+{
+  "measures": ["sales"],
+  "dimensions": [],
+  "filters": {},
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [],
+  "bins": [
+    {
+      "fieldCaption": "sales",
+      "binSize": 100
+    }
+  ],
+  "aggregation": "sum"
+}
+
+**Example 10: Calculation**
+User: "show profit margin as profit divided by sales"
+{
+  "measures": ["profit", "sales"],
+  "dimensions": [],
+  "filters": {},
+  "topN": {"enabled": false},
+  "sorting": [],
+  "calculations": [
+    {
+      "fieldCaption": "Profit Margin",
+      "formula": "SUM([Profit])/SUM([Sales])"
+    }
+  ],
+  "bins": [],
+  "aggregation": "sum"
+}
+
+## User Query
+{{ user_query }}
+
+Extract the intent and return JSON only.
