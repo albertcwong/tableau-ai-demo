@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronUp, Brain, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Brain, CheckCircle2, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -231,51 +231,47 @@ function StreamingTextArea({ content, isActive, label, className, skipStreaming 
   );
 }
 
+function toCsv(columns: string[], rows: unknown[][]): string {
+  const escape = (v: unknown) => {
+    const s = v != null ? String(v) : '';
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const header = columns.map(escape).join(',');
+  const body = rows.map((row) => {
+    const arr = Array.isArray(row) ? row : (typeof row === 'object' && row !== null) ? columns.map((c) => (row as Record<string, unknown>)[c]) : [row];
+    return arr.map(escape).join(',');
+  }).join('\n');
+  return header + (body ? '\n' + body : '');
+}
+
 function DataPreviewSection({ items }: { items: DataPreviewItem[] }) {
-  const [expanded, setExpanded] = useState(true);
   return (
     <div className="space-y-2">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="text-[10px] font-semibold text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 flex items-center gap-1"
-      >
-        Raw data sent to LLM (first 8 rows per view) {expanded ? '▼' : '▶'}
-      </button>
-      {expanded && (
-        <div className="space-y-3">
-          {items.map((preview) => (
-            <div key={preview.id} className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
-              <div className="bg-gray-100 dark:bg-gray-800 px-2 py-1 text-[10px] font-medium text-gray-700 dark:text-gray-300">
-                {preview.name} (id: {preview.id})
-              </div>
-              <div className="overflow-x-auto max-h-48 overflow-y-auto">
-                <table className="w-full text-[10px] border-collapse">
-                  <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800">
-                    <tr>
-                      {preview.columns.map((c, i) => (
-                        <th key={i} className="border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 text-left font-medium whitespace-nowrap">
-                          {c}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.rows.map((row, ri) => (
-                      <tr key={ri} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                        {(row as unknown[]).map((v, vi) => (
-                          <td key={vi} className="border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 whitespace-nowrap">
-                            {v != null ? String(v).slice(0, 30) : ''}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">Raw data sent to LLM (download CSV):</span>
+      <div className="flex flex-wrap gap-2">
+        {items.map((preview) => (
+          <Button
+            key={preview.id}
+            variant="outline"
+            size="sm"
+            className="h-7 text-[10px] gap-1"
+            onClick={() => {
+              const csv = toCsv(preview.columns, preview.rows);
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${preview.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            <Download className="h-3 w-3" />
+            {preview.name}.csv
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }

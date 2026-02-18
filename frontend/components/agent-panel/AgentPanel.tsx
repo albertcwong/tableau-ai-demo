@@ -104,6 +104,59 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
     }
   }, [activeThreadId]);
 
+  // Sync context with main panel: datasource overrides; views = canvas grid (n×m)
+  useEffect(() => {
+    if (!activeThreadId || !renderedState) return;
+    const desired: Array<{ object_id: string; object_type: 'datasource' | 'view'; object_name?: string }> = [];
+    if (renderedState.selectedObject?.type === 'datasource') {
+      desired.push({
+        object_id: renderedState.selectedObject.data.id,
+        object_type: 'datasource',
+        object_name: renderedState.selectedObject.data.name,
+      });
+    } else if (renderedState.multiViews?.length) {
+      for (const v of renderedState.multiViews) {
+        if (v) {
+          desired.push({
+            object_id: sanitizeViewId(v.id),
+            object_type: 'view',
+            object_name: v.name,
+          });
+        }
+      }
+    }
+    (async () => {
+      try {
+        const { objects: current } = await chatContextApi.getContext(activeThreadId);
+        const desiredSet = new Set(desired.map((d) => `${d.object_type}:${d.object_id}`));
+        const currentSet = new Set(current.map((c) => `${c.object_type}:${c.object_id}`));
+        if (desiredSet.size === currentSet.size && desired.every((d) => currentSet.has(`${d.object_type}:${d.object_id}`))) return;
+        for (const c of current) {
+          if (!desiredSet.has(`${c.object_type}:${c.object_id}`)) {
+            await chatContextApi.removeContext({ conversation_id: activeThreadId, object_id: c.object_id });
+          }
+        }
+        const added: ChatContextObject[] = [];
+        for (const d of desired) {
+          if (!currentSet.has(`${d.object_type}:${d.object_id}`)) {
+            const obj = await chatContextApi.addContext({
+              conversation_id: activeThreadId,
+              object_id: d.object_id,
+              object_type: d.object_type,
+              object_name: d.object_name,
+            });
+            added.push(obj);
+          }
+        }
+        const updated = [...current.filter((c) => desiredSet.has(`${c.object_type}:${c.object_id}`)), ...added];
+        setContext(updated);
+        onContextChange?.(updated);
+      } catch (err) {
+        console.error('Failed to sync context with main panel:', err);
+      }
+    })();
+  }, [activeThreadId, renderedState, onContextChange]);
+
   // Notify parent of active thread changes separately to avoid infinite loops
   useEffect(() => {
     onActiveThreadChange?.(activeThreadId);
@@ -154,73 +207,11 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
 
   const handleCreateThread = async () => {
     try {
-      // Store current thread's context before creating new thread
-      const currentThreadContext = activeThreadId && context.length > 0 ? [...context] : [];
-      
       const newThread = await chatApi.createConversation(agentType);
       setThreads([newThread, ...threads]);
       setActiveThreadId(newThread.id);
-      // Reload context for the new thread (will be empty initially)
       setContext([]);
-      
-      // Restore context based on what's currently rendered and what was in previous thread
-      if (renderedState && currentThreadContext.length > 0) {
-        const contextToAdd: ChatContextObject[] = [];
-        
-        // Check if datasource is rendered and was in previous context
-        if (renderedState.selectedObject?.type === 'datasource') {
-          const datasourceId = renderedState.selectedObject.data.id;
-          const wasInContext = currentThreadContext.some(
-            (ctx) => ctx.object_id === datasourceId && ctx.object_type === 'datasource'
-          );
-          if (wasInContext) {
-            try {
-              const obj = await chatContextApi.addContext({
-                conversation_id: newThread.id,
-                object_id: datasourceId,
-                object_type: 'datasource',
-                object_name: renderedState.selectedObject.data.name,
-              });
-              contextToAdd.push(obj);
-            } catch (err) {
-              console.error('Failed to add datasource to context:', err);
-            }
-          }
-        }
-        
-        // Check if views are rendered and were in previous context
-        if (renderedState.multiViews && renderedState.multiViews.length > 0) {
-          for (const view of renderedState.multiViews) {
-            if (view) {
-              const wasInContext = currentThreadContext.some(
-                (ctx) => ctx.object_id === view.id && ctx.object_type === 'view'
-              );
-              if (wasInContext) {
-                try {
-                  const obj = await chatContextApi.addContext({
-                    conversation_id: newThread.id,
-                    object_id: view.id,
-                    object_type: 'view',
-                    object_name: view.name,
-                  });
-                  contextToAdd.push(obj);
-                } catch (err) {
-                  console.error('Failed to add view to context:', err);
-                }
-              }
-            }
-          }
-        }
-        
-        if (contextToAdd.length > 0) {
-          setContext(contextToAdd);
-          onContextChange?.(contextToAdd);
-          // Notify parent of context additions
-          contextToAdd.forEach((obj) => {
-            onAddToContext?.(obj.object_id, obj.object_type);
-          });
-        }
-      }
+      // Sync effect will populate context from renderedState
     } catch (err) {
       console.error('Failed to create thread:', err);
     }

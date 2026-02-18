@@ -269,6 +269,7 @@ export interface MessageRequest {
   embedded_state?: Record<string, import('@/lib/tableauEmbeddedState').EmbeddedViewState>;
   summary_mode?: SummaryMode;
   invalidate_cache?: boolean;
+  tableau_auth_type?: 'connected_app' | 'connected_app_oauth' | 'pat' | 'standard';
 }
 
 export const chatApi = {
@@ -936,12 +937,14 @@ export const authApi = {
   },
 
   authenticateTableau: async (request: TableauAuthRequest): Promise<TableauAuthResponse> => {
-    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/authenticate', request);
+    // Auth can take up to ~30s if the Tableau server is slow to respond; use a 60s timeout
+    // so we always receive the backend's error message rather than hitting the default 30s client timeout first.
+    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/authenticate', request, { timeout: 60000 });
     return response.data;
   },
 
   switchSite: async (request: SwitchSiteRequest): Promise<TableauAuthResponse> => {
-    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/switch-site', request);
+    const response = await apiClient.post<TableauAuthResponse>('/api/v1/tableau-auth/switch-site', request, { timeout: 60000 });
     return response.data;
   },
 

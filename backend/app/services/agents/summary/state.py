@@ -35,6 +35,9 @@ class SummaryAgentState(BaseAgentState):
     
     # Summary mode: brief, full, or custom
     summary_mode: Optional[str]
+
+    # Tableau auth type: connected_app, connected_app_oauth, pat, standard (controls REST fallback)
+    tableau_auth_type: Optional[str]
     
     # Output
     executive_summary: Optional[str]

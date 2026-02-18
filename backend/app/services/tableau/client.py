@@ -278,6 +278,8 @@ class TableauClient:
         try:
             # Tableau REST API accepts JSON but returns XML by default
             # Request JSON format in Accept header
+            # Use a 15s timeout so we can return a descriptive error to the caller well before
+            # any upstream (frontend) timeouts fire.
             logger.info("Sending POST request to Tableau sign-in endpoint...")
             logger.debug("Sending POST request to Tableau sign-in endpoint...")
             response = await self._client.post(
@@ -286,7 +288,8 @@ class TableauClient:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json"
-                }
+                },
+                timeout=15,
             )
             logger.debug(f"Received response: Status {response.status_code}")
             response.raise_for_status()
@@ -585,8 +588,16 @@ class TableauClient:
             raise TableauAuthenticationError(
                 f"Authentication failed: {e.response.status_code} - {error_detail}"
             ) from e
+        except httpx.TimeoutException as e:
+            msg = f"Connection to Tableau server timed out ({sign_in_url}). Check that the server URL is correct and reachable from the backend."
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
         except httpx.RequestError as e:
-            raise TableauAuthenticationError(f"Network error during authentication: {str(e)}") from e
+            err_type = type(e).__name__
+            err_detail = str(e) or "(no detail)"
+            msg = f"Network error reaching Tableau server ({sign_in_url}): {err_type} - {err_detail}"
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
 
     async def sign_in_with_pat(self, pat_name: str, pat_secret: str) -> Dict[str, Any]:
         """
@@ -610,7 +621,8 @@ class TableauClient:
             response = await self._client.post(
                 sign_in_url,
                 json=payload,
-                headers={"Content-Type": "application/json", "Accept": "application/json"}
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                timeout=15,
             )
             response.raise_for_status()
             data = response.json()
@@ -636,8 +648,16 @@ class TableauClient:
             raise TableauAuthenticationError(
                 f"PAT authentication failed: {e.response.status_code} - {e.response.text}"
             ) from e
+        except httpx.TimeoutException as e:
+            msg = f"Connection to Tableau server timed out ({sign_in_url}). Check that the server URL is correct and reachable."
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
         except httpx.RequestError as e:
-            raise TableauAuthenticationError(f"Network error during PAT authentication: {str(e)}") from e
+            err_type = type(e).__name__
+            err_detail = str(e) or "(no detail)"
+            msg = f"Network error reaching Tableau server ({sign_in_url}): {err_type} - {err_detail}"
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
 
     async def sign_in_with_eas_jwt(self, eas_jwt: str) -> Dict[str, Any]:
         """
@@ -709,7 +729,8 @@ class TableauClient:
             response = await self._client.post(
                 sign_in_url,
                 json=payload,
-                headers={"Content-Type": "application/json", "Accept": "application/json"}
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                timeout=15,
             )
             response.raise_for_status()
             data = response.json()
@@ -736,8 +757,16 @@ class TableauClient:
             raise TableauAuthenticationError(
                 f"Standard authentication failed: {e.response.status_code} - {e.response.text}"
             ) from e
+        except httpx.TimeoutException as e:
+            msg = f"Connection to Tableau server timed out ({sign_in_url}). Check that the server URL is correct and reachable."
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
         except httpx.RequestError as e:
-            raise TableauAuthenticationError(f"Network error during standard authentication: {str(e)}") from e
+            err_type = type(e).__name__
+            err_detail = str(e) or "(no detail)"
+            msg = f"Network error reaching Tableau server ({sign_in_url}): {err_type} - {err_detail}"
+            logger.error(msg)
+            raise TableauAuthenticationError(msg) from e
 
     async def switch_site(self, content_url: str) -> Dict[str, Any]:
         """

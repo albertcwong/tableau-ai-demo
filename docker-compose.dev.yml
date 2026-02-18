@@ -1,10 +1,8 @@
 # Development overrides - use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
 # Hot reload enabled; source code mounted as volumes
 #
-# If frontend fails with ENOENT package.json (e.g. after moving project):
-# 1. Set PROJECT_ROOT in .env to absolute path: PROJECT_ROOT=/full/path/to/tableau-ai-demo-main
-# 2. Remove stale volume: docker volume rm tableau-ai-demo-main_frontend_node_modules
-# 3. Rebuild: docker compose -f docker-compose.yml -f docker-compose.dev.yml build frontend --no-cache
+# Set PROJECT_ROOT in .env to absolute path if using worktrees or running from different dir.
+# All volume mounts use PROJECT_ROOT (defaults to . when unset).
 
 services:
   backend:
@@ -14,12 +12,12 @@ services:
     environment:
       - LOG_DIR=/app/logs
     volumes:
-      - ./backend/app:/app/app
-      - ./backend/mcp_server:/app/mcp_server
-      - ./backend/alembic:/app/alembic
-      - ./credentials:/app/credentials:ro
-      - ./backend/mcp_server/credentials:/app/mcp_server/credentials
-      - ./logs:/app/logs
+      - ${PROJECT_ROOT:-.}/backend/app:/app/app
+      - ${PROJECT_ROOT:-.}/backend/mcp_server:/app/mcp_server
+      - ${PROJECT_ROOT:-.}/backend/alembic:/app/alembic
+      - ${PROJECT_ROOT:-.}/credentials:/app/credentials:ro
+      - ${PROJECT_ROOT:-.}/backend/mcp_server/credentials:/app/mcp_server/credentials
+      - ${PROJECT_ROOT:-.}/logs:/app/logs
 
   frontend:
     build:

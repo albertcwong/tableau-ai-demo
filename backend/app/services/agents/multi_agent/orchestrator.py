@@ -289,6 +289,7 @@ Return ONLY the JSON array, no other text."""
                 "provider": self.provider,
                 "embedded_state": context.get("embedded_state"),
                 "summary_mode": context.get("summary_mode") or "full",
+                "tableau_auth_type": context.get("tableau_auth_type") or "connected_app",
             }
             if input_data and "query_results" in input_data:
                 state["view_data"] = input_data["query_results"]

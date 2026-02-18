@@ -24,6 +24,7 @@ declare global {
 
 interface ViewEmbedderProps {
   viewId: string;
+  viewName?: string;
   filters?: Record<string, string>;
   hideTabs?: boolean;
   hideToolbar?: boolean;
@@ -41,10 +42,10 @@ interface ViewEmbedderProps {
 function extractEventDescriptionSync(event: Event, eventType: string): string {
   const d = (event as CustomEvent).detail;
   if (!d || typeof d !== 'object') return eventType;
-  const field = d.fieldName ?? d.field_name;
-  const vals = d.appliedValues ?? d.applied_values;
+  const field = d.fieldName ?? d.field_name ?? d.field ?? d.filterField;
+  const vals = d.appliedValues ?? d.applied_values ?? d.values ?? d.selectedValues;
   const sheet = d.sheetName ?? d.sheet_name ?? d.name;
-  const param = d.parameterName ?? d.parameter_name;
+  const param = d.parameterName ?? d.parameter_name ?? d.parameter;
   const val = d.value ?? d.formattedValue ?? d.formatted_value;
   if (eventType === 'filterchanged' && field) {
     const v = Array.isArray(vals) ? vals.map((x: { value?: string } | string) => (typeof x === 'object' && x && 'value' in x ? (x as { value?: string }).value : x)).filter(Boolean).join(', ') : vals;
@@ -126,6 +127,7 @@ async function extractEventDescriptionAsync(
 
 export function ViewEmbedder({
   viewId,
+  viewName,
   filters,
   hideTabs = false,
   hideToolbar = false,
@@ -143,8 +145,10 @@ export function ViewEmbedder({
   const vizRef = useRef<HTMLElement | null>(null);
   const [containerHeight, setContainerHeight] = useState<number | null>(null);
   const onUserActionRef = useRef(onUserAction);
+  const onErrorRef = useRef(onError);
   const lastFilterStateRef = useRef<Record<string, string> | null>(null);
   onUserActionRef.current = onUserAction;
+  onErrorRef.current = onError;
 
   useEffect(() => {
     let mounted = true;
@@ -165,7 +169,7 @@ export function ViewEmbedder({
             const errorMsg = 'Mixed Content Error: This page is served over HTTPS, but the Tableau server is configured with HTTP. Please configure your Tableau server to use HTTPS, or update the server URL in the Tableau Connected App configuration to use HTTPS.';
             setError(errorMsg);
             setLoading(false);
-            onError?.(new Error(errorMsg));
+            onErrorRef.current?.(new Error(errorMsg));
             return;
           }
         }
@@ -188,12 +192,12 @@ export function ViewEmbedder({
           const patErrorMsg = 'View embedding is not supported with PAT. Connect with Connected App to embed views.';
           setError(patErrorMsg);
           setLoading(false);
-          onError?.(new Error(patErrorMsg));
+          onErrorRef.current?.(new Error(patErrorMsg));
           return;
         }
         setError(errorMessage);
         setLoading(false);
-        onError?.(err instanceof Error ? err : new Error(errorMessage));
+        onErrorRef.current?.(err instanceof Error ? err : new Error(errorMessage));
       }
     }
 
@@ -305,16 +309,18 @@ export function ViewEmbedder({
           }
         };
 
-        viz.addEventListener('firstinteractive', () => {
+        const onFirstInteractive = () => {
           markLoaded();
           initFilterState();
-        });
-        viz.addEventListener('tabswitched', () => {
+        };
+        const onTabSwitched = () => {
           markLoaded();
           initFilterState();
-        });
+        };
+        viz.addEventListener('firstinteractive', onFirstInteractive);
+        viz.addEventListener('tabswitched', onTabSwitched);
 
-        const eventTypes = ['filterchanged', 'markselectionchanged', 'tabswitched', 'parameterchanged'];
+        const eventTypes = ['firstinteractive', 'filterchanged', 'markselectionchanged', 'tabswitched', 'parameterchanged'];
         const tsRef = lastEventTsRef ?? { current: Date.now() };
         const handleUserAction = async (e: Event) => {
           const now = Date.now();
@@ -348,7 +354,7 @@ export function ViewEmbedder({
               '2) Use a reverse proxy (nginx/Apache) with a valid certificate, or 3) Access over HTTP if security allows.';
             setError(certErrorMsg);
             setLoading(false);
-            onError?.(new Error(certErrorMsg));
+            onErrorRef.current?.(new Error(certErrorMsg));
             return;
           }
 
@@ -360,13 +366,13 @@ export function ViewEmbedder({
             }
             setError(msg);
             setLoading(false);
-            onError?.(new Error(msg));
+            onErrorRef.current?.(new Error(msg));
             return;
           }
 
           setError(msg);
           setLoading(false);
-          onError?.(new Error(msg));
+          onErrorRef.current?.(new Error(msg));
         };
 
         viz.addEventListener('error', handleVizError);
@@ -382,7 +388,7 @@ export function ViewEmbedder({
               '3) Access the application over HTTP if security allows.';
             setError(certErrorMsg);
             setLoading(false);
-            onError?.(new Error(certErrorMsg));
+            onErrorRef.current?.(new Error(certErrorMsg));
           }
         }, 15000);
 
@@ -394,8 +400,8 @@ export function ViewEmbedder({
         }, 5000);
 
         return () => {
-          viz.removeEventListener('firstinteractive', markLoaded);
-          viz.removeEventListener('tabswitched', markLoaded);
+          viz.removeEventListener('firstinteractive', onFirstInteractive);
+          viz.removeEventListener('tabswitched', onTabSwitched);
           if (onUserActionRef.current) {
             eventTypes.forEach((t) => viz.removeEventListener(t, handleUserAction));
           }
@@ -410,20 +416,21 @@ export function ViewEmbedder({
         const errorMessage = err instanceof Error ? err.message : 'Failed to embed view';
         setError(errorMessage);
         setLoading(false);
-        onError?.(err instanceof Error ? err : new Error(errorMessage));
+        onErrorRef.current?.(err instanceof Error ? err : new Error(errorMessage));
       }
     }
 
-    embedView();
+    const cleanup = embedView();
 
     return () => {
+      if (typeof cleanup === 'function') cleanup();
       mounted = false;
       if (containerRef.current) {
         containerRef.current.innerHTML = '';
       }
       vizRef.current = null;
     };
-  }, [embedInfo, hideTabs, hideToolbar, device, onError, iframeAuthRetry]);
+  }, [embedInfo, hideTabs, hideToolbar, device, iframeAuthRetry]);
 
   return (
     <div className={`relative w-full h-full ${className}`}>
@@ -437,12 +444,15 @@ export function ViewEmbedder({
       )}
 
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center p-4 z-10">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20 max-w-md">
-            <p className="text-sm font-medium text-red-800 dark:text-red-200">
-              Error loading view
+        <div className="absolute inset-0 flex flex-col items-center justify-center p-4 z-10 bg-gray-50 dark:bg-gray-900">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20 max-w-md text-center">
+            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {viewName || viewId}
             </p>
-            <p className="mt-1 text-sm text-red-600 dark:text-red-300">{error}</p>
+            <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-200">
+              Unable to load — still in context
+            </p>
+            <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">{error}</p>
           </div>
         </div>
       )}

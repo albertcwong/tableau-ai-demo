@@ -73,6 +73,11 @@ cd frontend && npm run dev
 - Rebuild: `docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache frontend`
 - Reset node_modules volume: `docker volume ls` to find it, then `docker volume rm <volume_name>` and `up --build`
 
+### Containers using old/wrong directory (e.g. after worktree change)
+- Set `PROJECT_ROOT` in `.env` to the **absolute path** of this project, e.g. `PROJECT_ROOT=/Users/you/code/tableau-ai-demo/tableau-ai-demo-main`
+- Stop and remove containers: `docker compose -f docker-compose.yml -f docker-compose.dev.yml down`
+- Restart: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build`
+
 ### Certificates / HTTPS
 - Generate certs: `cd frontend && ./generate-cert.sh` (required for Docker dev; Tableau embed needs HTTPS)
 - Docker dev uses `next dev --experimental-https` with your certs—HMR WebSocket works

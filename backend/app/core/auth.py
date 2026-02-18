@@ -105,9 +105,22 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
+def _normalize_auth0_domain(domain: Optional[str]) -> str:
+    """Strip protocol and path so domain is host-only (e.g. tenant.auth0.com)."""
+    if not domain:
+        return ""
+    d = domain.strip().rstrip("/")
+    for prefix in ("https://", "http://"):
+        if d.lower().startswith(prefix):
+            d = d[len(prefix) :].split("/")[0]
+            break
+    return d
+
+
 def get_auth0_jwks(auth0_domain: Optional[str] = None) -> dict:
     """Fetch Auth0 JWKS (JSON Web Key Set) for token verification."""
-    domain = auth0_domain or settings.AUTH0_DOMAIN
+    raw = auth0_domain or settings.AUTH0_DOMAIN
+    domain = _normalize_auth0_domain(raw)
     if not domain:
         raise ValueError("AUTH0_DOMAIN not configured")
     
@@ -135,7 +148,8 @@ def validate_auth0_token(token: str, auth0_domain: Optional[str] = None, auth0_a
         Decoded token claims or None if validation fails
     """
     # Use provided values or fall back to settings
-    domain = auth0_domain or settings.AUTH0_DOMAIN
+    raw_domain = auth0_domain or settings.AUTH0_DOMAIN
+    domain = _normalize_auth0_domain(raw_domain)
     audience = auth0_audience or settings.AUTH0_AUDIENCE
     issuer = auth0_issuer or settings.AUTH0_ISSUER
     

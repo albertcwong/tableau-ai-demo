@@ -323,9 +323,13 @@ async def authenticate_tableau(
         )
     except TableauAuthenticationError as e:
         logger.error(f"Tableau authentication error: {e}")
+        err_str = str(e)
+        hint = ""
+        if "(16)" in err_str or "LOGIN_FAILED" in err_str:
+            hint = " Code 16 = LOGIN_FAILED: verify the username exists on Tableau Server and matches your auth format (e.g. email vs domain\\user). Set a per-server username in Settings > Tableau Server Mapping if needed."
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Tableau authentication failed for '{tableau_username}': {e}",
+            detail=f"Tableau authentication failed for '{tableau_username}': {e}{hint}",
         )
     except Exception as e:
         logger.error(f"Unexpected error during Tableau authentication: {e}")

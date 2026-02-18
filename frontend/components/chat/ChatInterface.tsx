@@ -24,9 +24,8 @@ function formatDataSummary(ds: { views?: Array<{ name?: string; row_count?: numb
   if (!ds?.views?.length) return null;
   const lines = ds.views.map((v) => {
     if (v.type === 'image') return `${v.name}: dashboard image`;
-    const cols = v.columns?.slice(0, 6).join(', ') || '(none)';
-    const more = (v.columns?.length ?? 0) > 6 ? ` +${(v.columns?.length ?? 0) - 6} more` : '';
-    return `${v.name}: ${v.row_count ?? 0} rows, columns: [${cols}${more}]`;
+    const colCount = v.columns?.length ?? 0;
+    return `${v.name}: ${v.row_count ?? 0} rows, ${colCount} columns`;
   });
   const src = ds.source ? ` (from ${ds.source})` : '';
   return `Data pulled${src}:\n${lines.join('\n')}`;
@@ -256,7 +255,6 @@ export function ChatInterface({
         'error_handler': 'Handling errors',
         // Tool-use VizQL agent nodes
         'start': 'Starting analysis',
-        'get_data': 'Retrieving data',
         'summarize': 'Generating response',
         // Streamlined VizQL agent nodes
         'build_query': 'Building query',
@@ -328,6 +326,7 @@ export function ChatInterface({
           }
         }
 
+        const tableauAuthType = typeof window !== 'undefined' ? localStorage.getItem('tableau_auth_type') : null;
         await chatApi.sendMessageStream(
           {
             conversation_id: conversationId,
@@ -339,6 +338,7 @@ export function ChatInterface({
             embedded_state,
             ...(agentType === 'summary' && { summary_mode: summaryModeOverride ?? summaryMode }),
             ...(agentType === 'summary' && viewDataMayHaveChanged && { invalidate_cache: true }),
+            ...(tableauAuthType && { tableau_auth_type: tableauAuthType as 'connected_app' | 'connected_app_oauth' | 'pat' | 'standard' }),
           },
           (chunk: string) => {
             // Legacy text chunk handler (for backward compatibility)
@@ -510,8 +510,10 @@ export function ChatInterface({
               const rawToolCalls = stepMetadata.tool_calls || [];
               const toolCalls: string[] = rawToolCalls.map((tc: unknown) => {
                 if (typeof tc === 'string') return tc;
-                const t = tc as { tool?: string; name?: string };
-                return t?.tool ?? t?.name ?? 'unknown';
+                const t = tc as { tool?: string; name?: string; view_name?: string; view_id?: string };
+                const tool = t?.tool ?? t?.name ?? 'unknown';
+                const viewRef = t?.view_name || t?.view_id;
+                return viewRef ? `${tool}(${viewRef})` : tool;
               });
               const tokens = stepMetadata.tokens || null;
               const toolResultSummary = stepMetadata.tool_result_summary || formatDataSummary(stepMetadata.data_summary) || null;

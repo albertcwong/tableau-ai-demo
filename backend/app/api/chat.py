@@ -68,6 +68,7 @@ class MessageRequest(BaseModel):
     embedded_state: Optional[dict] = Field(None, description="Per-view embedded dashboard state (filters, summary_data, sheets_data) from client capture")
     summary_mode: Optional[str] = Field(None, description="'brief', 'full', or 'custom'. Only used when agent_type is 'summary'")
     invalidate_cache: Optional[bool] = Field(None, description="If true, invalidate cached view data for this conversation before processing. Used when view data may have changed (e.g., filters applied).")
+    tableau_auth_type: Optional[str] = Field(None, description="Tableau auth: connected_app, connected_app_oauth, pat, standard. Used for summary agent data retrieval path.")
 
 
 class MessageResponse(BaseModel):
@@ -474,6 +475,7 @@ async def send_message(
     request: MessageRequest,
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_tableau_auth_type: Optional[str] = Header(None, alias="X-Tableau-Auth-Type"),
     current_user: User = Depends(get_current_user),
     tableau_client: Optional[TableauClient] = Depends(get_tableau_client_optional)
 ):
@@ -605,6 +607,7 @@ async def send_message(
                                 "views": view_ids,
                                 "embedded_state": request.embedded_state,
                                 "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
+                                "tableau_auth_type": (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower(),
                             },
                             tableau_client=tableau_client
                         )
@@ -663,6 +666,7 @@ async def send_message(
                         "views": view_ids,
                         "embedded_state": request.embedded_state,
                         "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
+                        "tableau_auth_type": (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower(),
                     },
                     tableau_client=tableau_client
                 )
@@ -1536,8 +1540,9 @@ async def send_message(
             
             logger.info(f"Summary agent: stream={request.stream}, tableau_client={'present' if tableau_client else 'None'}, views={len(view_ids)}")
 
-            # Initialize state for Summary agent
+            # Initialize state for Summary agent (body preferred: Next.js rewrites may not forward custom headers)
             summary_mode = request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full"
+            tableau_auth_type = (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower()
             initial_state = {
                 "user_query": refined_query,
                 "agent_type": "summary",
@@ -1557,6 +1562,7 @@ async def send_message(
                 "embedded_state": request.embedded_state or None,
                 "summary_mode": summary_mode,
                 "conversation_id": request.conversation_id,
+                "tableau_auth_type": tableau_auth_type,
             }
             
             if request.stream:

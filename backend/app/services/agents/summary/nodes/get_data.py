@@ -17,7 +17,28 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 5
 
 
-PREVIEW_ROWS = 8  # Rows to include in data_preview for debugging
+PREVIEW_ROWS = 50  # Rows per view for CSV download (matches summarizer MAX_DATA_ROWS)
+
+
+def _resolve_view_name(
+    view_id: str,
+    views_metadata: Dict[str, Any],
+    embedded_state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Resolve view_id (LUID) to display name."""
+    if not view_id:
+        return ""
+    cid = _sanitize_view_id(view_id)
+    meta = views_metadata.get(cid) or views_metadata.get(view_id)
+    if meta and meta.get("name"):
+        return meta["name"]
+    if embedded_state:
+        emb = embedded_state.get(cid) or embedded_state.get(view_id)
+        if emb:
+            name = (emb.get("active_sheet") or {}).get("name")
+            if name:
+                return name
+    return view_id
 
 
 def _build_data_thought(
@@ -26,33 +47,33 @@ def _build_data_thought(
     view_images: Dict[str, str],
     source: str,
     tool_calls: Optional[list] = None,
+    embedded_state: Optional[Dict[str, Any]] = None,
 ) -> tuple:
     """Build detailed reasoning text and data_summary for UI. Returns (thought_str, data_summary_dict)."""
     parts = []
     data_summary = {"views": [], "source": source, "tool_calls": [], "data_preview": []}
     if tool_calls:
-        def _view_id(tc):
-            a = tc.get("arguments")
-            return a.get("view_id") if isinstance(a, dict) else None
-        data_summary["tool_calls"] = [{"tool": tc.get("tool"), "view_id": _view_id(tc)} for tc in tool_calls]
+        def _tc_entry(tc):
+            a = tc.get("arguments") or {}
+            vid = a.get("view_id") if isinstance(a, dict) else None
+            name = _resolve_view_name(vid or "", views_metadata, embedded_state) if vid else None
+            return {"tool": tc.get("tool"), "view_id": vid, "view_name": name or vid}
+        data_summary["tool_calls"] = [_tc_entry(tc) for tc in tool_calls]
 
-    # Tabular data + sample rows for debugging
+    # Tabular data
     for view_id, v_data in (views_data or {}).items():
         if not v_data:
             continue
         meta = views_metadata.get(view_id, {})
         name = meta.get("name") or meta.get("id") or view_id
-        cols = v_data.get("columns", [])
-        rows = v_data.get("data", [])
+        cols_raw = v_data.get("columns", [])
+        rows_raw = v_data.get("data", [])
         row_count = v_data.get("row_count", 0)
-        col_preview = ", ".join(str(c) for c in cols[:6]) if cols else "(none)"
-        if len(cols) > 6:
-            col_preview += f", +{len(cols) - 6} more"
-        parts.append(f"{name}: {row_count} rows, columns: [{col_preview}]")
-        data_summary["views"].append({"id": view_id, "name": name, "row_count": row_count, "columns": cols, "type": "tabular"})
-        # Include sample rows so user can see exactly what data was sent
-        preview_rows = (rows if isinstance(rows, list) else [])[:PREVIEW_ROWS]
-        data_summary["data_preview"].append({"id": view_id, "name": name, "columns": cols, "rows": preview_rows})
+        col_count = len(cols_raw)
+        parts.append(f"{name}: {row_count} rows, {col_count} columns")
+        data_summary["views"].append({"id": view_id, "name": name, "row_count": row_count, "columns": cols_raw, "type": "tabular"})
+        preview_rows = (rows_raw if isinstance(rows_raw, list) else [])[:PREVIEW_ROWS]
+        data_summary["data_preview"].append({"id": view_id, "name": name, "columns": cols_raw, "rows": preview_rows})
 
     # Image data (dashboards)
     for view_id, _ in (view_images or {}).items():
@@ -137,28 +158,93 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
 
         views_needing_data = [v for v in view_ids if not _has_data_for_view(v)]
         logger.info(f"get_data after_embedded views_data_keys={list(views_data.keys())} views_needing_data={views_needing_data}")
+
+        tableau_auth_type = (state.get("tableau_auth_type") or "connected_app").lower()
+        logger.info(f"get_data tableau_auth_type={tableau_auth_type} (from state); views_needing_data={views_needing_data}")
+
+        def _is_embed_load_failure(vid: str) -> bool:
+            """True when the view itself failed to render (mixed content, SSL, element not found, etc.)
+            as opposed to the view loading fine but data capture failing (user needs to make it visible)."""
+            cid = _sanitize_view_id(vid)
+            emb = embedded_state.get(vid) or embedded_state.get(cid)
+            if not emb:
+                # View was never captured at all — likely not embedded/visible
+                return False
+            err = (emb.get("capture_error") or "").lower()
+            if not err:
+                # No error recorded, but no data — view was visible but data wasn't captured
+                return False
+            load_failure_keywords = [
+                "mixed content",
+                "viz element not found",
+                "workbook or activesheet not available",
+                "session not ready",
+                "ssl",
+                "certificate",
+                "failed to load",
+                "could not read dashboard worksheets",
+                "could not read metadata",
+                "unable to load",
+            ]
+            return any(kw in err for kw in load_failure_keywords)
+
+        if tableau_auth_type in ("connected_app", "connected_app_oauth") and views_needing_data:
+            # Split: views whose embedded render failed vs views that were just not visible
+            views_load_failed = [v for v in views_needing_data if _is_embed_load_failure(v)]
+            views_capture_failed = [v for v in views_needing_data if not _is_embed_load_failure(v)]
+
+            logger.info(
+                f"get_data connected_app: views_load_failed={views_load_failed} "
+                f"views_capture_failed={views_capture_failed}"
+            )
+
+            if views_capture_failed:
+                # View loaded but data wasn't captured — user must make it visible first
+                err_msg = (
+                    "Data could not be retrieved from the embedded view. "
+                    "Ensure the view is visible on the canvas when summarizing, wait for it to load fully, and try again. "
+                    "Connected App embedding provides the best data quality."
+                )
+                logger.info(f"get_data connected_app: data capture failure, returning error")
+                thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="embedded", embedded_state=embedded_state)
+                return {
+                    **state,
+                    "error": err_msg,
+                    "views_data": views_data,
+                    "views_metadata": views_metadata,
+                    "view_images": view_images,
+                    "current_thought": err_msg,
+                    "step_metadata": {"data_summary": data_summary},
+                }
+
+            # All failures are render-level (mixed content, SSL, etc.) — fall through to REST/image fallback
+            logger.info(f"get_data connected_app: all failures are render/load failures, using REST fallback")
+
         if not views_needing_data:
-            # Always fetch images for display in reasoning steps (embedded capture has no screenshots)
+            # Fetch images for display in reasoning steps UI only (do NOT put in view_images —
+            # that would cause the summarizer to discard the embedded tabular data in favour of the image).
+            display_images: Dict[str, str] = {}
             if tableau_client:
                 for vid in view_ids:
                     cid = _sanitize_view_id(vid)
-                    if cid not in view_images:
-                        try:
-                            res = await tools._get_exported_image(cid, None, None)  # Full resolution for better summaries
-                            if "error" not in res and res.get("image_base64"):
-                                view_images[cid] = res["image_base64"]
-                                if cid not in views_metadata:
-                                    meta = await tools._query_view_metadata(cid)
-                                    views_metadata[cid] = {"id": cid, "name": meta.get("name", cid)}
-                                logger.info(f"get_data embedded: fetched image for {cid} ({len(res['image_base64'])} b64 chars)")
-                            else:
-                                logger.info(f"get_data embedded: no image for {cid} error={res.get('error')}")
-                        except Exception as e:
-                            logger.warning(f"get_data image fetch for {vid}: {e}")
-            thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="embedded")
+                    try:
+                        res = await tools._get_exported_image(cid, None, None)  # Full resolution for UI display
+                        if "error" not in res and res.get("image_base64"):
+                            display_images[cid] = res["image_base64"]
+                            if cid not in views_metadata:
+                                meta = await tools._query_view_metadata(cid)
+                                views_metadata[cid] = {"id": cid, "name": meta.get("name", cid)}
+                            logger.info(f"get_data embedded: fetched display image for {cid} ({len(res['image_base64'])} b64 chars)")
+                        else:
+                            logger.info(f"get_data embedded: no display image for {cid} error={res.get('error')}")
+                    except Exception as e:
+                        logger.warning(f"get_data image fetch for {vid}: {e}")
+            # view_images stays empty — summarizer uses tabular data from embedded capture
+            thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="embedded", embedded_state=embedded_state)
             sm = {"tool_calls": [], "data_summary": data_summary}
-            if view_images:
-                sm["view_images"] = [{"id": vid, "name": views_metadata.get(vid, {}).get("name", vid), "base64": b64} for vid, b64 in view_images.items()]
+            if display_images:
+                # Include display images in step_metadata for UI only (not passed to summarizer)
+                sm["view_images"] = [{"id": vid, "name": views_metadata.get(vid, {}).get("name", vid), "base64": b64} for vid, b64 in display_images.items()]
             return {**state, "views_data": views_data, "views_metadata": views_metadata, "view_images": view_images, "current_thought": thought, "step_metadata": sm}
 
         # Views not on canvas or capture failed: fetch via REST (per rest_api_view_summary_fallback)
@@ -206,7 +292,7 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         views_needing_data = [v for v in views_needing_data if not _has_data_for_view(v)]
         logger.info(f"get_data after_REST views_data_keys={list(views_data.keys())} view_images_keys={list(view_images.keys())} views_needing_data={views_needing_data}")
         if not views_needing_data:
-            thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="REST")
+            thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="REST", embedded_state=embedded_state)
             sm = {"tool_calls": [], "data_summary": data_summary}
             if view_images:
                 view_imgs_list = [{"id": vid, "name": views_metadata.get(vid, {}).get("name", vid), "base64": b64} for vid, b64 in view_images.items()]
@@ -227,7 +313,12 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 messages.append({"role": role, "content": content})
 
         embedded_keys_success = [k for k, v in (embedded_state or {}).items() if not v.get("capture_error") and (v.get("summary_data") or v.get("sheets_data"))]
-        ctx = f"Views in context: {view_ids}. Views ALREADY have embedded data (skip these): {embedded_keys_success}. Views needing data via REST: {views_needing_data}. User query: {user_query}"
+        def _names(ids_or_keys):
+            return [_resolve_view_name(v, views_metadata, embedded_state) or v for v in ids_or_keys]
+        ctx_ids = _names(view_ids) if view_ids else []
+        ctx_embedded = _names(embedded_keys_success) if embedded_keys_success else []
+        ctx_needing = _names(views_needing_data) if views_needing_data else []
+        ctx = f"Views in context: {ctx_ids}. Views ALREADY have embedded data (skip these): {ctx_embedded}. Views needing data via REST: {ctx_needing}. User query: {user_query}"
         messages.append({"role": "user", "content": ctx})
 
         model = state.get("model", "gpt-4")
@@ -329,7 +420,7 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
                 break
 
         logger.info(f"get_data EXIT iter={iteration} views_data={bool(views_data)} view_images={bool(view_images)} tool_calls_count={len(tool_calls_made)}")
-        thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="tools", tool_calls=tool_calls_made)
+        thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="tools", tool_calls=tool_calls_made, embedded_state=embedded_state)
         step_metadata = {"tool_calls": tool_calls_made, "data_summary": data_summary}
         if view_images:
             step_metadata["view_images"] = [{"id": vid, "name": views_metadata.get(vid, {}).get("name", vid), "base64": b64} for vid, b64 in view_images.items()]
