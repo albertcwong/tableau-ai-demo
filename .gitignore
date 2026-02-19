@@ -10,6 +10,13 @@ env/
 .env.*.local
 .env.worktree
 
+# SSL certificates
+*.pem
+*.key
+*.crt
+*.p12
+shared/
+
 # Credentials
 credentials/
 !credentials/.gitkeep
