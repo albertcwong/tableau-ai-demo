@@ -117,10 +117,10 @@ async def global_exception_handler(request: Request, exc: Exception):
     # Log the full exception details for debugging
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
 
-    # Always include actual error to aid debugging (e.g. missing column -> run: alembic upgrade heads)
+    # Always include actual error to aid debugging (e.g. missing column -> run: alembic upgrade head)
     err_str = str(exc)
     if "does not exist" in err_str.lower():
-        detail = f"{err_str} Run: alembic upgrade heads"
+        detail = f"{err_str} Run: alembic upgrade head"
     else:
         detail = err_str
     content = {"detail": detail}

@@ -11,8 +11,8 @@ services:
       - default
       - tableau-demo-net
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/tableau_demo}
-      - REDIS_URL=${REDIS_URL:-redis://host.docker.internal:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/tableau_demo}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
       - LOG_DIR=/app/logs
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - TABLEAU_SERVER_URL=${TABLEAU_SERVER_URL:-}

@@ -5,9 +5,13 @@
 cd "$(dirname "$0")/.."
 PROJECT_ROOT=$(pwd)
 
-# Deterministic ports from PWD - same path = same ports, different paths = no collision
-HASH=$(echo -n "$PWD" | cksum 2>/dev/null | awk '{print $1}' || echo "0")
-OFFSET=$((HASH % 1000))
+# Main worktree uses port 3000; other paths get deterministic offset to avoid collision
+if [ "$(basename "$PWD")" = "main" ]; then
+  OFFSET=0
+else
+  HASH=$(echo -n "$PWD" | cksum 2>/dev/null | awk '{print $1}' || echo "0")
+  OFFSET=$((HASH % 1000))
+fi
 
 export PROJECT_ROOT
 export FRONTEND_HTTPS_PORT=$((3000 + OFFSET))
@@ -29,6 +33,7 @@ case "${1:-up}" in
     COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.dev.yml"
     [ -f .env ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env"
     [ -f .env.worktree ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.worktree"
+    [ -f .env.infra ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.infra"
     docker compose $COMPOSE_ARGS down --remove-orphans
     exit 0
     ;;
@@ -56,6 +61,7 @@ fi
 COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.dev.yml"
 [ -f .env ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env"
 [ -f .env.worktree ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.worktree"
+[ -f .env.infra ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.infra"
 [ $# -eq 0 ] && set -- up
 
 if [ "${1}" = "up" ]; then

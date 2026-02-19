@@ -198,7 +198,7 @@ def get_resolved_tableau_oauth_frontend_redirect(db: Session) -> str:
     """Frontend redirect URL: DB overrides settings."""
     config = get_auth_config(db, use_cache=False)
     url = (config.tableau_oauth_frontend_redirect or "").strip() if config else ""
-    return url or (settings.TABLEAU_OAUTH_FRONTEND_REDIRECT or "http://localhost:3000")
+    return url or (settings.TABLEAU_OAUTH_FRONTEND_REDIRECT or "https://localhost:3000")
 
 
 def get_resolved_cors_origins(db: Session) -> List[str]:

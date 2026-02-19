@@ -14,7 +14,7 @@ interface Auth0Config {
 
 let cachedConfig: Auth0Config | null = null;
 let cacheTimestamp: number = 0;
-const CACHE_TTL_MS = 60000; // Cache for 60 seconds
+const CACHE_TTL_MS = 5000; // 5 seconds - admin save invalidates DB; server cache can't be invalidated from client
 
 const FETCH_TIMEOUT_MS = 15000; // 15s - backend may be slow to start in Docker
 

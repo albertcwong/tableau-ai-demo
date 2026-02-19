@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
 
+# Detect Docker: container→host needs host.docker.internal; host CLI needs localhost
+_IN_DOCKER = Path("/.dockerenv").exists()
+
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -93,13 +96,12 @@ class Settings(BaseSettings):
     MCP_LOG_LEVEL: str = "info"
     
     # Auth0 Configuration (MVP)
-    # Note: These are fallback values. Primary configuration is now in database (auth_configs table)
-    # Admin can configure via /admin/auth-config endpoint
+    # Note: Primary config is in database (auth_configs). These used for token validation fallback.
     AUTH0_DOMAIN: str = ""
     AUTH0_AUDIENCE: str = ""
     AUTH0_ISSUER: str = ""
     BACKEND_API_URL: str = "http://localhost:8000"  # Backend API URL for MCP Server
-    TABLEAU_OAUTH_FRONTEND_REDIRECT: str = "http://localhost:3000"  # Frontend URL for OAuth callback redirect
+    TABLEAU_OAUTH_FRONTEND_REDIRECT: str = "https://localhost:3000"  # Frontend URL for OAuth callback redirect
 
     # EAS JWT: when Auth0 cannot set aud/sub (restricted claims), backend can construct the JWT.
     # Set path to RSA private key PEM. Tableau must register this backend as EAS (issuer=BACKEND_API_URL).
@@ -142,17 +144,40 @@ class Settings(BaseSettings):
 
     @model_validator(mode='after')
     def apply_database_host(self):
-        """Replace host in DATABASE_URL when DATABASE_HOST is set (unifies localhost vs container access)."""
-        if self.DATABASE_HOST and self.DATABASE_URL.startswith(('postgresql://', 'postgresql+psycopg2://')):
-            parsed = urlparse(self.DATABASE_URL)
-            if ':' in parsed.netloc:
-                _, port = parsed.netloc.rsplit(':', 1)
-                netloc = f"{self.DATABASE_HOST}:{port}"
-            else:
-                netloc = self.DATABASE_HOST
-            return self.model_copy(update={'DATABASE_URL': parsed._replace(netloc=netloc).geturl()})
-        return self
-    
+        """Replace host in DATABASE_URL: Docker→host.docker.internal, host CLI→localhost."""
+        if not self.DATABASE_URL.startswith(('postgresql://', 'postgresql+psycopg2://')):
+            return self
+        parsed = urlparse(self.DATABASE_URL)
+        if ':' not in parsed.netloc:
+            return self
+        host, port = parsed.netloc.rsplit(':', 1)
+        if self.DATABASE_HOST:
+            netloc = f"{self.DATABASE_HOST}:{port}"
+        elif _IN_DOCKER and host in ("localhost", "127.0.0.1"):
+            netloc = f"host.docker.internal:{port}"
+        elif not _IN_DOCKER and host in ("host.docker.internal", "host.docker.internal."):
+            netloc = f"localhost:{port}"
+        else:
+            return self
+        return self.model_copy(update={'DATABASE_URL': parsed._replace(netloc=netloc).geturl()})
+
+    @model_validator(mode='after')
+    def apply_redis_host(self):
+        """Replace host in REDIS_URL: Docker→host.docker.internal, host CLI→localhost."""
+        if not self.REDIS_URL.startswith(('redis://', 'rediss://')):
+            return self
+        parsed = urlparse(self.REDIS_URL)
+        if ':' not in parsed.netloc:
+            return self
+        host, port = parsed.netloc.rsplit(':', 1)
+        if _IN_DOCKER and host in ("localhost", "127.0.0.1"):
+            netloc = f"host.docker.internal:{port}"
+        elif not _IN_DOCKER and host in ("host.docker.internal", "host.docker.internal."):
+            netloc = f"localhost:{port}"
+        else:
+            return self
+        return self.model_copy(update={'REDIS_URL': parsed._replace(netloc=netloc).geturl()})
+
     @field_validator('REDIS_URL')
     @classmethod
     def validate_redis_url(cls, v: str) -> str:

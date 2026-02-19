@@ -147,8 +147,13 @@ async def chat_completions(
                 ProviderConfig.provider_type == context.provider,
                 ProviderConfig.is_active == True
             ).first()
-            if prov_config and getattr(prov_config, 'verify_ssl', None) is False:
-                request_verify_ssl = False
+            if prov_config:
+                v = getattr(prov_config, 'verify_ssl', None)
+                # Salesforce eng-ai-model-gateway uses corp certs; default False when unset
+                if v is not None:
+                    request_verify_ssl = bool(v)
+                elif context.provider == "salesforce":
+                    request_verify_ssl = False
         elif context.auth_type == "service_account":
             authenticator = VertexAuthenticator(
                 project_id=context.project_id,
@@ -520,7 +525,7 @@ async def fetch_salesforce_models(authorization: Optional[str] = None, db: Optio
     """Fetch models from eng-ai-model-gateway API. GET /v1/models with Bearer token. No fallback."""
     base_url = settings.ENG_AI_MODEL_GW_URL.rstrip("/")
     api_key = authorization
-    verify_ssl = False  # corp gateways often need False; override via ProviderConfig.verify_ssl
+    verify_ssl = False  # eng-ai-model-gateway uses corp certs; default False
     if db:
         cfg = db.query(ProviderConfig).filter(
             ProviderConfig.provider_type == "salesforce",
@@ -531,7 +536,8 @@ async def fetch_salesforce_models(authorization: Optional[str] = None, db: Optio
                 api_key = cfg.api_key
             if cfg.salesforce_models_api_url:
                 base_url = cfg.salesforce_models_api_url.rstrip("/")
-            verify_ssl = bool(cfg.verify_ssl) if cfg.verify_ssl is not None else False
+            if cfg.verify_ssl is not None:
+                verify_ssl = bool(cfg.verify_ssl)
     if not api_key and settings.ENG_AI_MODEL_GW_KEY:
         api_key = settings.ENG_AI_MODEL_GW_KEY
     if not api_key or not str(api_key).strip():

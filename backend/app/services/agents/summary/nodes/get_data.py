@@ -162,63 +162,9 @@ async def get_data_node(state: SummaryAgentState) -> Dict[str, Any]:
         tableau_auth_type = (state.get("tableau_auth_type") or "connected_app").lower()
         logger.info(f"get_data tableau_auth_type={tableau_auth_type} (from state); views_needing_data={views_needing_data}")
 
-        def _is_embed_load_failure(vid: str) -> bool:
-            """True when the view itself failed to render (mixed content, SSL, element not found, etc.)
-            as opposed to the view loading fine but data capture failing (user needs to make it visible)."""
-            cid = _sanitize_view_id(vid)
-            emb = embedded_state.get(vid) or embedded_state.get(cid)
-            if not emb:
-                # View was never captured at all — likely not embedded/visible
-                return False
-            err = (emb.get("capture_error") or "").lower()
-            if not err:
-                # No error recorded, but no data — view was visible but data wasn't captured
-                return False
-            load_failure_keywords = [
-                "mixed content",
-                "viz element not found",
-                "workbook or activesheet not available",
-                "session not ready",
-                "ssl",
-                "certificate",
-                "failed to load",
-                "could not read dashboard worksheets",
-                "could not read metadata",
-                "unable to load",
-            ]
-            return any(kw in err for kw in load_failure_keywords)
-
+        # When embedded capture fails (SSL, load error, not visible), always try REST/image fallback
         if tableau_auth_type in ("connected_app", "connected_app_oauth") and views_needing_data:
-            # Split: views whose embedded render failed vs views that were just not visible
-            views_load_failed = [v for v in views_needing_data if _is_embed_load_failure(v)]
-            views_capture_failed = [v for v in views_needing_data if not _is_embed_load_failure(v)]
-
-            logger.info(
-                f"get_data connected_app: views_load_failed={views_load_failed} "
-                f"views_capture_failed={views_capture_failed}"
-            )
-
-            if views_capture_failed:
-                # View loaded but data wasn't captured — user must make it visible first
-                err_msg = (
-                    "Data could not be retrieved from the embedded view. "
-                    "Ensure the view is visible on the canvas when summarizing, wait for it to load fully, and try again. "
-                    "Connected App embedding provides the best data quality."
-                )
-                logger.info(f"get_data connected_app: data capture failure, returning error")
-                thought, data_summary = _build_data_thought(views_data, views_metadata, view_images, source="embedded", embedded_state=embedded_state)
-                return {
-                    **state,
-                    "error": err_msg,
-                    "views_data": views_data,
-                    "views_metadata": views_metadata,
-                    "view_images": view_images,
-                    "current_thought": err_msg,
-                    "step_metadata": {"data_summary": data_summary},
-                }
-
-            # All failures are render-level (mixed content, SSL, etc.) — fall through to REST/image fallback
-            logger.info(f"get_data connected_app: all failures are render/load failures, using REST fallback")
+            logger.info(f"get_data connected_app: {len(views_needing_data)} view(s) need data, will try REST fallback")
 
         if not views_needing_data:
             # Fetch images for display in reasoning steps UI only (do NOT put in view_images —

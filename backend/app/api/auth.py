@@ -329,7 +329,6 @@ async def get_auth0_config_public(db: Session = Depends(get_db)):
     config = get_auth_config(db)
     if not config.enable_oauth_auth:
         return Auth0ConfigPublicResponse(enabled=False)
-    
     return Auth0ConfigPublicResponse(
         domain=config.auth0_domain,
         client_id=config.auth0_client_id,

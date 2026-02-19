@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { Save, Loader2 } from 'lucide-react';
 import { extractErrorMessage } from '@/lib/utils';
+import { invalidateAuth0ConfigCache } from '@/lib/auth0-config';
 
 export function AuthConfigManagement() {
   const [config, setConfig] = useState<AuthConfigResponse | null>(null);
@@ -96,6 +97,7 @@ export function AuthConfigManagement() {
       const payload: AuthConfigUpdate = { ...formData };
       if (!easKeyTouched) delete payload.eas_jwt_key_pem;
       const updatedConfig = await adminApi.updateAuthConfig(payload);
+      invalidateAuth0ConfigCache();
       setConfig(updatedConfig);
       setSuccess('Authentication configuration updated successfully. Changes take effect immediately.');
       

@@ -131,7 +131,8 @@ class TableauClient:
                     cert_path = PROJECT_ROOT / cert_path
                 cert_path = cert_path.resolve()
                 if cert_path.exists():
-                    ssl_context = ssl.create_default_context(cafile=str(cert_path))
+                    ssl_context = ssl.create_default_context()
+                    ssl_context.load_verify_locations(cafile=str(cert_path))
                     ssl_context.check_hostname = False
                     ssl_context.verify_mode = ssl.CERT_REQUIRED
                     self.verify_ssl = ssl_context

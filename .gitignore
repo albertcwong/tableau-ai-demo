@@ -9,6 +9,7 @@ env/
 .env.local
 .env.*.local
 .env.worktree
+.env.infra
 
 # SSL certificates
 *.pem

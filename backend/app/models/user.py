@@ -136,10 +136,7 @@ class TableauServerConfig(Base):
     eas_token_endpoint = Column(String(500), nullable=True, comment="EAS token endpoint (optional, from discovery)")
     eas_sub_claim_field = Column(String(100), nullable=True, comment="Auth0 claim/field for JWT sub (e.g. email, tableau_username, name). Passed to authorize URL.")
     skip_ssl_verify = Column(Boolean, default=False, nullable=False, comment="Skip SSL certificate verification for Tableau API calls")
-    # ssl_cert_path will be added by migration ae_add_unique_server_url_and_ssl_cert_path
-    # Temporarily commented out until migration runs to avoid SQLAlchemy errors
-    # Uncomment after running: alembic upgrade head
-    # ssl_cert_path = Column(String(500), nullable=True, comment="Path to SSL certificate file (.pem or .crt) for verifying Tableau server certificate")
+    ssl_cert_path = Column(String(500), nullable=True, comment="Path to SSL certificate file (.pem or .crt) for verifying Tableau server certificate")
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)

@@ -2,7 +2,7 @@ from logging.config import fileConfig
 import sys
 from pathlib import Path
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import create_engine
 from sqlalchemy import pool
 
 from alembic import context
@@ -67,13 +67,10 @@ def run_migrations_online() -> None:
 
     In this scenario we need to create an Engine
     and associate a connection with the context.
-
+    Use settings.DATABASE_URL directly to ensure same DB as app.
     """
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    url = config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+    connectable = create_engine(url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(

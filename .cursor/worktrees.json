@@ -2,16 +2,20 @@
   "setup-worktree-unix": [
     "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/.env\" .env",
     "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem",
+    "mkdir -p backend/credentials && ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/server.crt\" backend/credentials/server.crt"
   ],
   "setup-worktree-windows": [
     "copy \"%PROJECT_ROOT%\\shared\\.env\" .env",
     "mklink frontend\\localhost-key.pem \"%PROJECT_ROOT%\\shared\\localhost-key.pem\"",
-    "mklink frontend\\localhost.pem \"%PROJECT_ROOT%\\shared\\localhost.pem\""
+    "mklink frontend\\localhost.pem \"%PROJECT_ROOT%\\shared\\localhost.pem\"",
+    "if not exist backend\\credentials mkdir backend\\credentials",
+    "mklink backend\\credentials\\server.crt \"%PROJECT_ROOT%\\shared\\server.crt\""
   ],
   "setup-worktree": [
     "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/.env\" .env",
     "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem",
+    "mkdir -p backend/credentials && ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/server.crt\" backend/credentials/server.crt"
   ]
 }

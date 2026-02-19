@@ -51,11 +51,11 @@ export function AuthProvider({ children, oauthEnabled }: { children: ReactNode; 
               setBackendUser(null);
               setLoading(false);
             });
-        } else {
-          // No password auth token, set loading to false
-          // If OAuth is enabled, the second useEffect will handle Auth0 auth
+        } else if (!config.enable_oauth_auth) {
+          // No password token and OAuth disabled - we're done
           setLoading(false);
         }
+        // OAuth enabled + no password token: keep loading=true until Auth0 sync completes
       })
       .catch(() => {
         setLoading(false);
@@ -82,8 +82,9 @@ export function AuthProvider({ children, oauthEnabled }: { children: ReactNode; 
           setLoading(false);
           return;
         }
-        // If on login page but no logout param and auth0User exists, still don't auto-sync
-        // User should explicitly click login button
+        // If on login page but no logout param and auth0User exists, don't auto-sync
+        // User should explicitly click login button - show login form
+        setLoading(false);
         return;
       }
 

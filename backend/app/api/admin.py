@@ -519,8 +519,7 @@ async def create_tableau_config(
         eas_token_endpoint=(config_data.eas_token_endpoint or "").strip() or None,
         eas_sub_claim_field=(config_data.eas_sub_claim_field or "").strip() or None,
         skip_ssl_verify=config_data.skip_ssl_verify or False,
-        # ssl_cert_path will be available after migration runs
-        # ssl_cert_path=(config_data.ssl_cert_path or "").strip() or None if config_data.ssl_cert_path else None,
+        ssl_cert_path=(config_data.ssl_cert_path or "").strip() or None if config_data.ssl_cert_path else None,
         is_active=True,
         created_by=current_user.id
     )
@@ -701,9 +700,8 @@ async def update_tableau_config(
         config.eas_sub_claim_field = (config_data.eas_sub_claim_field or "").strip() or None
     if config_data.skip_ssl_verify is not None:
         config.skip_ssl_verify = config_data.skip_ssl_verify
-    # ssl_cert_path will be available after migration runs
-    # if config_data.ssl_cert_path is not None:
-    #     config.ssl_cert_path = (config_data.ssl_cert_path or "").strip() or None
+    if config_data.ssl_cert_path is not None:
+        config.ssl_cert_path = (config_data.ssl_cert_path or "").strip() or None
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
 

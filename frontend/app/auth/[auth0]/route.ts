@@ -307,10 +307,8 @@ export async function GET(req: NextRequest) {
           // User has Auth0 session, perform Auth0 logout
           // Clear the session cookie
           cookieStore.delete('appSession');
-          
-          // Build Auth0 logout URL with normalized returnTo URL
-          // Add logout parameter to prevent auto-login on redirect
-          const returnTo = encodeURIComponent(`${baseUrl}/login?logout=true`);
+          // Use request-derived base URL (protocol/host from how user reached the app)
+          const returnTo = encodeURIComponent(`${baseUrl.replace(/\/$/, '')}/login?logout=true`);
           const logoutUrl = `https://${config.domain}/v2/logout?client_id=${config.clientId}&returnTo=${returnTo}`;
           return NextResponse.redirect(logoutUrl);
         } else {

@@ -1,0 +1,12 @@
+---
+description: Never delete or wipe database data without explicit user consent
+alwaysApply: true
+---
+
+# Database Data Protection
+
+- **Never** run `docker compose down -v` or equivalent volume-removing commands unless the user explicitly requests it.
+- **Never** drop tables, truncate data, or run destructive migrations without explicit user confirmation.
+- **Never** suggest or execute commands that would wipe Postgres/Redis volumes (e.g. `-v` flag on compose down).
+- When proposing schema changes, prefer additive migrations (add columns, add tables) over destructive ones (drop, truncate).
+- If a fix requires data loss, warn the user clearly and require explicit confirmation before proceeding.

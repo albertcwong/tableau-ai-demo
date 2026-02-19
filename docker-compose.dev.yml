@@ -14,14 +14,18 @@ services:
       - default
       - tableau-demo-net
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/tableau_demo}
-      - REDIS_URL=${REDIS_URL:-redis://host.docker.internal:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/tableau_demo}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
       - LOG_DIR=/app/logs
+      - TABLEAU_SSL_CERT_PATH=/app/shared/server.crt
     volumes:
       - ${PROJECT_ROOT:-.}/backend/app:/app/app
       - ${PROJECT_ROOT:-.}/backend/mcp_server:/app/mcp_server
       - ${PROJECT_ROOT:-.}/backend/alembic:/app/alembic
       - ${PROJECT_ROOT:-.}/credentials:/app/credentials:ro
+      - ${PROJECT_ROOT:-.}/backend/credentials:/app/backend/credentials:ro
+      # shared/ contains server.crt; symlinks resolve to host paths, so mount the real file
+      - ${CERT_PATH:-${PROJECT_ROOT:-.}/../shared}:/app/shared:ro
       - ${PROJECT_ROOT:-.}/backend/mcp_server/credentials:/app/mcp_server/credentials
       - ${PROJECT_ROOT:-.}/logs:/app/logs
 

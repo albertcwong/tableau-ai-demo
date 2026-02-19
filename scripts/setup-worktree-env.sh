@@ -11,6 +11,8 @@ fi
 ln -sf "$SHARED/.env" .env
 ln -sf "$SHARED/localhost-key.pem" frontend/localhost-key.pem
 ln -sf "$SHARED/localhost.pem" frontend/localhost.pem
+mkdir -p backend/credentials
+ln -sf "$SHARED/server.crt" backend/credentials/server.crt
 {
   echo "CERT_PATH=$SHARED"
   echo "PROJECT_ROOT=$(pwd)"
