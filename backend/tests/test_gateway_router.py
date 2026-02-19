@@ -29,10 +29,10 @@ def test_resolve_context_anthropic():
 
 
 def test_resolve_context_salesforce():
-    """Test resolving Salesforce model context."""
-    context = resolve_context("sfdc-xgen")
+    """Test resolving Salesforce model context (provider required - not in static mapping)."""
+    context = resolve_context("sfdc_ai__DefaultGPT4Omni", "salesforce")
     assert context.provider == "salesforce"
-    assert context.auth_type == "jwt_oauth"
+    assert context.auth_type == "direct"
     assert context.requires_trust_header is True
 
 
@@ -45,7 +45,7 @@ def test_resolve_context_vertex():
 
 
 def test_resolve_context_unknown_model():
-    """Test that unknown models raise ValueError."""
+    """Test that unknown models raise ValueError when provider not given."""
     with pytest.raises(ValueError, match="Unknown model"):
         resolve_context("invalid-model")
 
@@ -108,21 +108,15 @@ def test_provider_context_dataclass():
 
 
 def test_provider_context_salesforce_fields(monkeypatch):
-    """Test ProviderContext with Salesforce-specific fields."""
-    monkeypatch.setenv("SALESFORCE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("SALESFORCE_PRIVATE_KEY_PATH", "./test-key.pem")
-    monkeypatch.setenv("SALESFORCE_USERNAME", "test@example.com")
-    
-    # Reload settings to pick up env vars
+    """Test ProviderContext with Salesforce-specific fields (direct auth: api_key + endpoint)."""
+    monkeypatch.setenv("ENG_AI_MODEL_GW_URL", "https://test.salesforce.com/api")
     from app.core.config import Settings
-    settings = Settings()
-    
-    context = resolve_context("sfdc-xgen")
+    Settings()
+
+    context = resolve_context("sfdc_ai__DefaultGPT4Omni", "salesforce")
     assert context.provider == "salesforce"
-    assert context.auth_type == "jwt_oauth"
+    assert context.auth_type == "direct"
     assert context.requires_trust_header is True
-    # Note: These fields are set from settings, so they'll be empty in test
-    # unless we mock the settings object
 
 
 def test_provider_context_vertex_fields(monkeypatch):
@@ -165,18 +159,15 @@ def test_multiple_models_per_provider():
     
     # All should resolve to same provider
     for model in openai_models[:3]:  # Test first 3
-        context = resolve_context(model)
+        context = resolve_context(model, "openai")
         assert context.provider == "openai"
         assert context.auth_type == "direct"
 
 
 def test_salesforce_trust_header():
-    """Test that Salesforce models require trust header."""
-    sfdc_models = get_available_models(provider="salesforce")
-    
-    for model in sfdc_models:
-        context = resolve_context(model)
-        assert context.requires_trust_header is True
+    """Test that Salesforce models require trust header (real model, provider from API)."""
+    context = resolve_context("sfdc_ai__DefaultGPT4Omni", "salesforce")
+    assert context.requires_trust_header is True
 
 
 def test_vertex_service_account_auth():
@@ -195,11 +186,11 @@ def test_vertex_service_account_auth():
     ("claude-3-sonnet", "anthropic", "direct"),
     ("gemini-pro", "vertex", "service_account"),
     ("gemini-1.5-pro", "vertex", "service_account"),
-    ("sfdc-xgen", "salesforce", "jwt_oauth"),
-    ("einstein-gpt", "salesforce", "jwt_oauth"),
+    ("sfdc_ai__DefaultGPT4Omni", "salesforce", "direct"),
+    ("sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet", "salesforce", "direct"),
 ])
 def test_model_resolution_parametrized(model_name, expected_provider, expected_auth):
     """Parametrized test for model resolution."""
-    context = resolve_context(model_name)
+    context = resolve_context(model_name, expected_provider)
     assert context.provider == expected_provider
     assert context.auth_type == expected_auth

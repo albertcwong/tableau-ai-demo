@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.services.gateway.router import resolve_context, get_available_models
 from app.services.gateway.auth.direct import DirectAuthenticator
-from app.services.gateway.auth.salesforce import SalesforceAuthenticator
 from app.services.gateway.auth.vertex import VertexAuthenticator
 from app.services.gateway.auth.endor import EndorAuthenticator
 from app.services.gateway.translators import get_translator, normalize_response, normalize_stream_chunk
@@ -143,13 +142,13 @@ async def chat_completions(
         if context.auth_type == "direct":
             authenticator = DirectAuthenticator()
             token = await authenticator.get_token(authorization, context, db=db)
-        elif context.auth_type == "jwt_oauth":
-            authenticator = SalesforceAuthenticator(
-                client_id=context.client_id,
-                private_key_path=context.private_key_path,
-                username=context.username
-            )
-            token = await authenticator.get_token(authorization, context)
+            # Get verify_ssl from ProviderConfig for direct-auth providers (OpenAI, Anthropic, Salesforce)
+            prov_config = db.query(ProviderConfig).filter(
+                ProviderConfig.provider_type == context.provider,
+                ProviderConfig.is_active == True
+            ).first()
+            if prov_config and getattr(prov_config, 'verify_ssl', None) is False:
+                request_verify_ssl = False
         elif context.auth_type == "service_account":
             authenticator = VertexAuthenticator(
                 project_id=context.project_id,
@@ -393,9 +392,8 @@ async def list_models(
     """
     List available models, optionally filtered by provider.
     
-    Fetches models from provider APIs when possible, falls back to static mapping.
-    Uses the user's stored API key from the database (from admin console settings).
-    If no provider is specified, fetches from all available providers.
+    Fetches models from provider APIs only. No static fallback - returns error if endpoint unreachable.
+    Uses API key from Admin → Provider Configs or Authorization header.
     """
     api_fetch_success = False
     fetch_error = None
@@ -423,17 +421,14 @@ async def list_models(
         logger.info(f"Global API key from database: {global_api_key is not None}")
         logger.info(f"Authorization header present: {authorization is not None}")
         try:
-            # Use global key, or fallback to authorization header
             api_key_to_use = global_api_key if global_api_key else authorization
             models = await fetch_models_from_provider(provider, api_key_to_use, db, x_apple_a3_token=x_apple_idms_a3_token)
-            logger.info(f"✓ SUCCESS: Fetched {len(models)} models from {provider} API")
-            logger.info(f"  Sample models: {models[:10]}")
+            logger.info(f"✓ SUCCESS: Fetched {len(models)} models from {provider} API: {models[:10]}{'...' if len(models) > 10 else ''}")
             api_fetch_success = True
         except Exception as e:
             fetch_error = _format_fetch_error(e)
             logger.error(f"✗ FAILED: Could not fetch models from {provider} API: {fetch_error}")
-            models = get_available_models(provider)
-            logger.warning(f"  Falling back to {len(models)} static models for {provider}")
+            raise HTTPException(status_code=502, detail=f"Models API error: {fetch_error}")
     else:
         # Fetch models from all available providers
         all_models = set()
@@ -460,7 +455,6 @@ async def list_models(
                 logger.info(f"✓ Using global API key for {prov} from database")
             
             try:
-                # Use global key, or fallback to authorization header
                 api_key_to_use = global_api_key if global_api_key else authorization
                 provider_models = await fetch_models_from_provider(prov, api_key_to_use, db, x_apple_a3_token=x_apple_idms_a3_token)
                 all_models.update(provider_models)
@@ -468,14 +462,9 @@ async def list_models(
                 api_fetch_success = True
             except Exception as e:
                 fetch_error = f"[{prov}] {_format_fetch_error(e)}"
-                logger.warning(f"✗ Failed to fetch models from {prov} API: {fetch_error}, using static mapping")
-                static_models = get_available_models(prov)
-                all_models.update(static_models)
-        
-        # If we got no models from APIs, fall back to static mapping
-        if not all_models:
-            logger.warning("No models fetched from APIs, using static mapping")
-            all_models = set(get_available_models())
+                logger.warning(f"✗ Failed to fetch models from {prov} API: {fetch_error}")
+                if not all_models:
+                    raise HTTPException(status_code=502, detail=fetch_error)
         
         models = sorted(list(all_models))
         logger.info(f"Total models returned: {len(models)} (API fetch success: {api_fetch_success})")
@@ -483,7 +472,6 @@ async def list_models(
     result = {
         "models": models,
         "provider": provider,
-        "source": "api" if api_fetch_success else "static",
         "count": len(models)
     }
     if fetch_error:
@@ -491,7 +479,7 @@ async def list_models(
     return result
 
 
-async def fetch_models_from_provider(provider: str, authorization: Optional[str] = None, db: Optional[Session] = None, x_apple_a3_token: Optional[str] = None) -> list[str]:
+async def fetch_models_from_provider(provider: str, authorization: Optional[str] = None, db: Optional[Session] = None, x_apple_a3_token: Optional[str] = None, config_id: Optional[int] = None) -> list[str]:
     """
     Fetch available models from a provider's API.
     
@@ -511,16 +499,9 @@ async def fetch_models_from_provider(provider: str, authorization: Optional[str]
     elif provider == "anthropic":
         return await fetch_anthropic_models(authorization)
     elif provider == "vertex":
-        # Try to fetch from Vertex AI API if credentials are available
-        try:
-            return await fetch_vertex_models(authorization)
-        except Exception as e:
-            logger.warning(f"Failed to fetch Vertex models from API: {e}, using static mapping")
-            return get_available_models("vertex")
+        return await fetch_vertex_models(authorization)
     elif provider == "salesforce":
-        # Salesforce models are typically static, return from mapping
-        # Could potentially fetch from Salesforce API in the future
-        return get_available_models("salesforce")
+        return await fetch_salesforce_models(authorization, db)
     elif provider == "apple":
         # Fetch from Endor API - requires provider config in Admin Console
         # Optional: use X-Apple-IDMS-A3-Token from frontend if provided; else generate from app_id+app_password
@@ -532,9 +513,56 @@ async def fetch_models_from_provider(provider: str, authorization: Optional[str]
         # Empty response - re-raise so caller uses static fallback and logs correctly
         raise ValueError("Endor API returned no models")
     else:
-        # Unknown provider, return from static mapping
-        logger.warning(f"Unknown provider {provider}, using static mapping")
-        return get_available_models(provider)
+        raise ValueError(f"Unknown provider '{provider}'. Supported: openai, anthropic, vertex, salesforce, apple")
+
+
+async def fetch_salesforce_models(authorization: Optional[str] = None, db: Optional[Session] = None) -> list[str]:
+    """Fetch models from eng-ai-model-gateway API. GET /v1/models with Bearer token. No fallback."""
+    base_url = settings.ENG_AI_MODEL_GW_URL.rstrip("/")
+    api_key = authorization
+    verify_ssl = False  # corp gateways often need False; override via ProviderConfig.verify_ssl
+    if db:
+        cfg = db.query(ProviderConfig).filter(
+            ProviderConfig.provider_type == "salesforce",
+            ProviderConfig.is_active == True,
+        ).first()
+        if cfg:
+            if cfg.api_key:
+                api_key = cfg.api_key
+            if cfg.salesforce_models_api_url:
+                base_url = cfg.salesforce_models_api_url.rstrip("/")
+            verify_ssl = bool(cfg.verify_ssl) if cfg.verify_ssl is not None else False
+    if not api_key and settings.ENG_AI_MODEL_GW_KEY:
+        api_key = settings.ENG_AI_MODEL_GW_KEY
+    if not api_key or not str(api_key).strip():
+        raise ValueError(
+            "Salesforce/eng-ai-model-gateway API key not configured. "
+            "Set ENG_AI_MODEL_GW_KEY in .env or configure api_key in Admin → Provider Configs (salesforce)."
+        )
+    url = f"{base_url}/v1/models"
+    headers = {"Content-Type": "application/json"}
+    headers["Authorization"] = api_key if str(api_key).startswith("Bearer ") else f"Bearer {api_key}"
+    logger.info(f"[Salesforce models] REQUEST: GET {url} | verify={verify_ssl}")
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=bool(verify_ssl)) as client:
+            response = await client.get(url, headers=headers)
+            logger.info(f"[Salesforce models] RESPONSE: status={response.status_code}")
+            response.raise_for_status()
+            data = response.json()
+    except httpx.ConnectError as e:
+        raise RuntimeError(f"Could not reach endpoint {url}: {e}") from e
+    except httpx.ConnectTimeout as e:
+        raise RuntimeError(f"Endpoint {url} timed out: {e}") from e
+    except Exception as e:
+        err_msg = str(e)
+        if "SSL" in err_msg or "certificate" in err_msg.lower():
+            raise RuntimeError(
+                f"SSL error connecting to {url}. Try setting verify_ssl=False in Admin → Provider Configs (salesforce). {e}"
+            ) from e
+        raise
+    models = [m["id"] for m in data.get("data", []) if m.get("id")]
+    logger.info(f"[Salesforce models] Parsed {len(models)} models from eng-ai-model-gateway")
+    return sorted(models)
 
 
 async def fetch_openai_models(authorization: Optional[str] = None) -> list[str]:

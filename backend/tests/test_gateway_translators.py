@@ -67,34 +67,31 @@ def test_openai_translator_stream_chunk():
 # ===== Salesforce Translator Tests =====
 
 def test_salesforce_translator_nested_params():
-    """Test Salesforce translator creates nested parameters."""
+    """Test Salesforce translator passes OpenAI-compatible params."""
     translator = SalesforceTranslator()
     request = {
-        "model": "sfdc-xgen",
+        "model": "sfdc_ai__DefaultGPT4Omni",
         "messages": [{"role": "user", "content": "Hello"}],
         "temperature": 0.8,
-        "top_p": 0.95
+        "max_tokens": 100,
     }
-    
     url, payload, headers = translator.transform_request(request)
-    assert url.endswith("/models/sfdc-xgen/chat-generations")
-    assert "parameters" in payload
-    assert payload["parameters"]["temperature"] == 0.8
-    assert payload["parameters"]["top_p"] == 0.95
+    assert "sfdc_ai__DefaultGPT4Omni" in url and url.endswith("/chat-generations")
     assert payload["messages"] == request["messages"]
+    assert payload["temperature"] == 0.8
+    assert payload["max_tokens"] == 100
     assert headers["x-sfdc-app-context"] == "EinsteinGPT"
 
 
 def test_salesforce_translator_no_params():
-    """Test Salesforce translator works without parameters."""
+    """Test Salesforce translator works with minimal params."""
     translator = SalesforceTranslator()
     request = {
-        "model": "einstein-gpt",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "model": "sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet",
+        "messages": [{"role": "user", "content": "Hello"}],
     }
-    
     url, payload, headers = translator.transform_request(request)
-    assert "parameters" not in payload or len(payload.get("parameters", {})) == 0
+    assert "sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet" in url and url.endswith("/chat-generations")
     assert payload["messages"] == request["messages"]
     assert headers["x-sfdc-app-context"] == "EinsteinGPT"
 
@@ -117,7 +114,7 @@ def test_salesforce_translator_response_with_all_fields():
     translator = SalesforceTranslator()
     response = {
         "id": "chat-123",
-        "model": "sfdc-xgen",
+        "model": "sfdc_ai__DefaultGPT4Omni",
         "created": 1234567890,
         "choices": [{
             "index": 0,
@@ -133,7 +130,7 @@ def test_salesforce_translator_response_with_all_fields():
     
     normalized = translator.normalize_response(response)
     assert normalized["id"] == "chat-123"
-    assert normalized["model"] == "sfdc-xgen"
+    assert normalized["model"] == "sfdc_ai__DefaultGPT4Omni"
     assert normalized["created"] == 1234567890
     assert normalized["usage"]["prompt_tokens"] == 10
     assert normalized["usage"]["completion_tokens"] == 20
@@ -146,7 +143,7 @@ def test_salesforce_translator_stream_chunk():
     chunk = {
         "id": "chat-123",
         "created": 1234567890,
-        "model": "sfdc-xgen",
+        "model": "sfdc_ai__DefaultGPT4Omni",
         "choices": [{
             "index": 0,
             "delta": {"content": "Hello"},
@@ -411,9 +408,24 @@ def test_salesforce_translator_custom_base_url():
     """Test Salesforce translator with custom base URL."""
     translator = SalesforceTranslator(base_url="https://custom.salesforce.com/api")
     request = {
-        "model": "sfdc-xgen",
+        "model": "sfdc_ai__DefaultGPT4Omni",
         "messages": [{"role": "user", "content": "Hello"}]
     }
-    
+
     url, payload, headers = translator.transform_request(request)
     assert url.startswith("https://custom.salesforce.com/api")
+
+
+def test_salesforce_translator_uses_context_endpoint():
+    """Test Salesforce translator uses context.endpoint when provided."""
+    translator = SalesforceTranslator(base_url="https://default.salesforce.com/api")
+    request = {"model": "sfdc_ai__DefaultGPT4Omni", "messages": [{"role": "user", "content": "Hi"}]}
+    context = ProviderContext(
+        provider="salesforce",
+        auth_type="direct",
+        model_name="sfdc_ai__DefaultGPT4Omni",
+        endpoint="https://custom-context.salesforce.com/v1",
+    )
+    url, payload, headers = translator.transform_request(request, context)
+    assert url.startswith("https://custom-context.salesforce.com/v1")
+    assert url.endswith("/chat-generations")

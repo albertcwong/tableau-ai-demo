@@ -113,16 +113,17 @@ async def global_exception_handler(request: Request, exc: Exception):
     # Let FastAPI handle HTTPException
     if isinstance(exc, HTTPException):
         raise
-    
+
     # Log the full exception details for debugging
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    
-    # Build response content
-    content = {"detail": "Internal server error"}
-    
-    # Only include error details in DEBUG mode
-    if settings.DEBUG:
-        content["error"] = str(exc)
+
+    # Always include actual error to aid debugging (e.g. missing column -> run: alembic upgrade heads)
+    err_str = str(exc)
+    if "does not exist" in err_str.lower():
+        detail = f"{err_str} Run: alembic upgrade heads"
+    else:
+        detail = err_str
+    content = {"detail": detail}
     
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

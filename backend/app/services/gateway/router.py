@@ -79,17 +79,6 @@ DEFAULT_MODEL_MAPPING: Dict[str, Dict[str, Any]] = {
         "provider": "vertex",
         "auth": "service_account"
     },
-    # Salesforce models
-    "sfdc-xgen": {
-        "provider": "salesforce",
-        "auth": "jwt_oauth",
-        "requires_trust_header": True
-    },
-    "einstein-gpt": {
-        "provider": "salesforce",
-        "auth": "jwt_oauth",
-        "requires_trust_header": True
-    },
     # Apple Endor models (if configured)
     "endor": {
         "provider": "apple",
@@ -133,24 +122,27 @@ def get_model_mapping() -> Dict[str, Dict[str, Any]]:
     return _model_mapping_cache
 
 
-def resolve_context(model_name: str, provider: str) -> ProviderContext:
+def resolve_context(model_name: str, provider: Optional[str] = None) -> ProviderContext:
     """
-    Resolve provider context from provider name.
+    Resolve provider context from model name and optional provider.
     
     Args:
-        model_name: The model identifier (e.g., "gpt-4", "gemini-1.5-pro")
-        provider: The provider name (e.g., "openai", "apple", "vertex")
+        model_name: The model identifier (e.g., "gpt-4", "sfdc_ai__DefaultGPT4Omni")
+        provider: Optional provider name. If None, derived from model mapping (for mapped models only).
         
     Returns:
         ProviderContext with provider, auth type, and credentials info
         
     Raises:
-        ValueError: If provider is not recognized
+        ValueError: If provider/model not recognized
     """
     if not model_name:
         raise ValueError("Model name is required")
-    if not provider:
-        raise ValueError("Provider is required")
+    if provider is None or not str(provider).strip():
+        mapping = get_model_mapping()
+        if model_name not in mapping:
+            raise ValueError(f"Unknown model: {model_name}")
+        provider = mapping[model_name]["provider"]
     
     # Map provider to auth type (endor is alias for apple)
     provider_lower = provider.lower().strip()
@@ -164,7 +156,7 @@ def resolve_context(model_name: str, provider: str) -> ProviderContext:
     elif provider_lower == "vertex":
         auth_type = "service_account"
     elif provider_lower == "salesforce":
-        auth_type = "jwt_oauth"
+        auth_type = "direct"
     elif provider_lower == "apple":
         auth_type = "endor_a3"
     else:
@@ -172,9 +164,9 @@ def resolve_context(model_name: str, provider: str) -> ProviderContext:
     
     # Build context based on provider and auth type
     mapping = get_model_mapping()
-    requires_trust_header = False
+    requires_trust_header = provider_lower == "salesforce"  # All Salesforce models need trust header
     if model_name in mapping:
-        requires_trust_header = mapping[model_name].get("requires_trust_header", False)
+        requires_trust_header = mapping[model_name].get("requires_trust_header", requires_trust_header)
     
     context = ProviderContext(
         provider=provider_lower,
@@ -184,12 +176,29 @@ def resolve_context(model_name: str, provider: str) -> ProviderContext:
     )
     
     # Add provider-specific configuration
-    if provider_lower == "salesforce" and auth_type == "jwt_oauth":
-        context.client_id = settings.SALESFORCE_CLIENT_ID
-        context.private_key_path = settings.SALESFORCE_PRIVATE_KEY_PATH
-        context.username = settings.SALESFORCE_USERNAME
-        context.endpoint = settings.SALESFORCE_MODELS_API_URL
-        
+    if provider_lower == "salesforce" and auth_type == "direct":
+        try:
+            from app.core.database import SessionLocal
+            from app.models.user import ProviderConfig
+
+            db = SessionLocal()
+            try:
+                sf_config = db.query(ProviderConfig).filter(
+                    ProviderConfig.provider_type == "salesforce",
+                    ProviderConfig.is_active == True
+                ).first()
+
+                if sf_config:
+                    context.endpoint = sf_config.salesforce_models_api_url or settings.ENG_AI_MODEL_GW_URL
+                    context.config_id = sf_config.id
+                else:
+                    context.endpoint = settings.ENG_AI_MODEL_GW_URL
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Failed to load Salesforce config from database: {e}, using settings")
+            context.endpoint = settings.ENG_AI_MODEL_GW_URL
+
     elif provider_lower == "vertex" and auth_type == "service_account":
         context.project_id = settings.VERTEX_PROJECT_ID
         context.location = settings.VERTEX_LOCATION
@@ -227,10 +236,10 @@ def get_available_providers() -> list[str]:
     """Get list of available providers based on configuration."""
     providers = set()
     mapping = get_model_mapping()
-    
     for model_config in mapping.values():
         providers.add(model_config["provider"])
-    
+    if settings.ENG_AI_MODEL_GW_URL:
+        providers.add("salesforce")
     return sorted(providers)
 
 

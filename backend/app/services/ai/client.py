@@ -238,7 +238,7 @@ class UnifiedAIClient:
         Send chat completion request to gateway.
         
         Args:
-            model: Model name (e.g., "gpt-4", "gemini-pro", "sfdc-xgen")
+            model: Model name (e.g., "gpt-4", "gemini-pro", "sfdc_ai__DefaultGPT4Omni")
             provider: Provider name (e.g., "openai", "apple", "vertex")
             messages: List of message dicts with "role" and "content"
             temperature: Sampling temperature (0-2)

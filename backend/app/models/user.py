@@ -270,7 +270,8 @@ class ProviderConfig(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Common fields
-    api_key = Column(String(500), nullable=True, comment="API key (for OpenAI, Anthropic; not used by Apple Endor)")
+    api_key = Column(String(500), nullable=True, comment="API key (for OpenAI, Anthropic, Salesforce; not used by Apple Endor)")
+    verify_ssl = Column(Boolean, nullable=True, comment="When False, skip SSL verification for outbound requests")
     
     # Salesforce specific
     salesforce_client_id = Column(String(255), nullable=True, comment="Salesforce Connected App client ID")

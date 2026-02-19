@@ -21,6 +21,8 @@ from app.api.models import (
     AgentSettingsResponse, AgentSettingsUpdate
 )
 
+logger = logging.getLogger(__name__)
+
 
 def get_provider_type_value(provider_type) -> str:
     """Safely get provider type value, handling both enum and string."""
@@ -164,6 +166,7 @@ class ProviderConfigCreate(BaseModel):
     name: str
     provider_type: str
     api_key: Optional[str] = None
+    verify_ssl: Optional[bool] = None
     salesforce_client_id: Optional[str] = None
     salesforce_private_key_path: Optional[str] = None
     salesforce_username: Optional[str] = None
@@ -185,6 +188,7 @@ class ProviderConfigUpdate(BaseModel):
     name: Optional[str] = None
     provider_type: Optional[str] = None
     api_key: Optional[str] = None
+    verify_ssl: Optional[bool] = None
     salesforce_client_id: Optional[str] = None
     salesforce_private_key_path: Optional[str] = None
     salesforce_username: Optional[str] = None
@@ -211,6 +215,7 @@ class ProviderConfigResponse(BaseModel):
     created_by: Optional[int]
     created_at: str
     api_key: Optional[str] = None  # Note: In production, consider masking this
+    verify_ssl: Optional[bool] = None
     salesforce_client_id: Optional[str] = None
     salesforce_private_key_path: Optional[str] = None
     salesforce_username: Optional[str] = None
@@ -785,6 +790,7 @@ async def list_provider_configs(
         created_by=c.created_by,
         created_at=c.created_at.isoformat(),
         api_key=c.api_key,
+        verify_ssl=getattr(c, 'verify_ssl', None),
         salesforce_client_id=c.salesforce_client_id,
         salesforce_private_key_path=c.salesforce_private_key_path,
         salesforce_username=c.salesforce_username,
@@ -825,6 +831,7 @@ async def create_provider_config(
         name=config_data.name,
         provider_type=provider_type_value,  # Pass lowercase string directly - TypeDecorator will handle it
         api_key=api_key_val,
+        verify_ssl=config_data.verify_ssl,
         salesforce_client_id=config_data.salesforce_client_id,
         salesforce_private_key_path=config_data.salesforce_private_key_path,
         salesforce_username=config_data.salesforce_username,
@@ -854,6 +861,7 @@ async def create_provider_config(
         created_by=new_config.created_by,
         created_at=new_config.created_at.isoformat(),
         api_key=new_config.api_key,
+        verify_ssl=getattr(new_config, 'verify_ssl', None),
         salesforce_client_id=new_config.salesforce_client_id,
         salesforce_private_key_path=new_config.salesforce_private_key_path,
         salesforce_username=new_config.salesforce_username,
@@ -887,11 +895,12 @@ async def get_provider_config(
     return ProviderConfigResponse(
         id=config.id,
         name=config.name,
-        provider_type=config.provider_type.value,
+        provider_type=get_provider_type_value(config.provider_type),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat(),
         api_key=config.api_key,
+        verify_ssl=getattr(config, 'verify_ssl', None),
         salesforce_client_id=config.salesforce_client_id,
         salesforce_private_key_path=config.salesforce_private_key_path,
         salesforce_username=config.salesforce_username,
@@ -936,7 +945,7 @@ async def update_provider_config(
                 detail=f"Invalid provider type: {config_data.provider_type}"
             )
     # Apple Endor uses A3 token, not API key - ignore api_key for this provider
-    if config_data.api_key is not None and config.provider_type.value != "apple_endor":
+    if config_data.api_key is not None and get_provider_type_value(config.provider_type) != "apple_endor":
         config.api_key = config_data.api_key
     if config_data.salesforce_client_id is not None:
         config.salesforce_client_id = config_data.salesforce_client_id
@@ -967,20 +976,28 @@ async def update_provider_config(
         config.apple_endor_one_time_token = config_data.apple_endor_one_time_token
     if config_data.apple_endor_verify_ssl is not None:
         config.apple_endor_verify_ssl = config_data.apple_endor_verify_ssl
+    if config_data.verify_ssl is not None:
+        config.verify_ssl = config_data.verify_ssl
     if config_data.is_active is not None:
         config.is_active = config_data.is_active
-    
-    safe_commit(db)
-    db.refresh(config)
+
+    try:
+        safe_commit(db)
+        db.refresh(config)
+    except Exception as e:
+        db.rollback()
+        logger.exception("Provider config update failed")
+        raise HTTPException(status_code=500, detail=str(e))
     
     return ProviderConfigResponse(
         id=config.id,
         name=config.name,
-        provider_type=config.provider_type.value,
+        provider_type=get_provider_type_value(config.provider_type),
         is_active=config.is_active,
         created_by=config.created_by,
         created_at=config.created_at.isoformat(),
         api_key=config.api_key,
+        verify_ssl=getattr(config, 'verify_ssl', None),
         salesforce_client_id=config.salesforce_client_id,
         salesforce_private_key_path=config.salesforce_private_key_path,
         salesforce_username=config.salesforce_username,
@@ -1035,7 +1052,7 @@ async def test_provider_config(
             from app.services.gateway.api import fetch_models_from_provider
             provider = "apple" if provider_type == "apple_endor" else provider_type
             api_key = config.api_key if hasattr(config, "api_key") else None
-            models = await fetch_models_from_provider(provider, api_key, db)
+            models = await fetch_models_from_provider(provider, api_key, db, config_id=config_id)
         return {"models": sorted(models), "count": len(models)}
     except Exception as e:
         logger.exception(f"Provider config test failed for config_id={config_id}")

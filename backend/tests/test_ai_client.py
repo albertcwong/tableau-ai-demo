@@ -320,7 +320,7 @@ async def test_stream_chat_stream_flag(ai_client, mock_httpx_client):
 @pytest.mark.asyncio
 async def test_cross_provider_consistency(ai_client, mock_httpx_client):
     """Test that all providers return consistent format."""
-    models = ["gpt-4", "gemini-pro", "sfdc-xgen", "claude-3-opus"]
+    models = ["gpt-4", "gemini-pro", "sfdc_ai__DefaultGPT4Omni", "claude-3-opus"]
     
     for model in models:
         mock_response = Mock()

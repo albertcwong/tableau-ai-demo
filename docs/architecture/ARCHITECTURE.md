@@ -327,12 +327,12 @@ Frontend → connects to Backend:/mcp/sse
 1. Backend → Gateway
    POST /v1/chat/completions
    {
-     "model": "sfdc-xgen",
+     "model": "sfdc_ai__DefaultGPT4Omni",
      "messages": [...]
    }
 
 2. Gateway resolves context
-   "sfdc-xgen" → Salesforce provider, JWT OAuth auth
+   "sfdc_ai__DefaultGPT4Omni" → Salesforce provider, direct auth
 
 3. Gateway checks Redis for cached token
    (if expired or missing, generates new JWT)

@@ -147,8 +147,9 @@ async def test_salesforce_auth_refresh(salesforce_config, mock_httpx_post):
 @pytest.mark.asyncio
 async def test_salesforce_auth_missing_credentials():
     """Test Salesforce auth raises error when credentials are missing."""
+    auth = SalesforceAuthenticator(client_id="")
     with pytest.raises(ValueError, match="SALESFORCE_CLIENT_ID is required"):
-        SalesforceAuthenticator(client_id="")
+        await auth.get_token()
 
 
 @pytest.mark.asyncio

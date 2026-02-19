@@ -27,10 +27,11 @@ export function ProviderConfigManagement() {
   const [editingConfigId, setEditingConfigId] = useState<number | null>(null);
   const [testingConfigId, setTestingConfigId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ configId: number; success: boolean; message: string } | null>(null);
-  const [formData, setFormData] = useState<ProviderConfigCreate>({
+  const [formData, setFormData] = useState<ProviderConfigCreate & { verify_ssl?: boolean }>({
     name: '',
     provider_type: 'openai',
     api_key: '',
+    verify_ssl: true,
     salesforce_client_id: '',
     salesforce_private_key_path: '',
     salesforce_username: '',
@@ -69,6 +70,7 @@ export function ProviderConfigManagement() {
       name: '',
       provider_type: 'openai',
       api_key: '',
+      verify_ssl: true,
       salesforce_client_id: '',
       salesforce_private_key_path: '',
       salesforce_username: '',
@@ -93,6 +95,7 @@ export function ProviderConfigManagement() {
       name: config.name,
       provider_type: config.provider_type,
       api_key: '', // Don't pre-populate secrets for security
+      verify_ssl: config.verify_ssl ?? true,
       salesforce_client_id: config.salesforce_client_id || '',
       salesforce_private_key_path: config.salesforce_private_key_path || '',
       salesforce_username: config.salesforce_username || '',
@@ -117,9 +120,9 @@ export function ProviderConfigManagement() {
     try {
       setError(null);
       
-      // Validate required fields based on provider type
+      // Validate required fields based on provider type (skip api_key when editing - leave blank to keep existing)
       if (formData.provider_type === 'openai' || formData.provider_type === 'anthropic') {
-        if (!formData.api_key) {
+        if (!editingConfigId && !formData.api_key) {
           setError('API key is required for this provider type');
           return;
         }
@@ -133,8 +136,8 @@ export function ProviderConfigManagement() {
           return;
         }
       } else if (formData.provider_type === 'salesforce') {
-        if (!formData.salesforce_client_id || !formData.salesforce_private_key_path || !formData.salesforce_username) {
-          setError('Salesforce requires client ID, private key path, and username');
+        if ((!editingConfigId && !formData.api_key) || !formData.salesforce_models_api_url) {
+          setError('Salesforce requires API key (when creating) and URL');
           return;
         }
       } else if (formData.provider_type === 'vertex') {
@@ -145,30 +148,53 @@ export function ProviderConfigManagement() {
       }
 
       if (editingConfigId) {
-        // Update existing config
-        const updateData: ProviderConfigUpdate = {
+        // Update: only send fields relevant to current provider to avoid unrelated-field errors
+        const base: ProviderConfigUpdate = { name: formData.name, provider_type: formData.provider_type };
+        if (formData.api_key) base.api_key = formData.api_key;
+        const pt = formData.provider_type;
+        if (pt === 'salesforce') {
+          base.salesforce_models_api_url = formData.salesforce_models_api_url || undefined;
+        } else if (pt === 'vertex') {
+          base.vertex_project_id = formData.vertex_project_id || undefined;
+          base.vertex_location = formData.vertex_location || undefined;
+          base.vertex_service_account_path = formData.vertex_service_account_path || undefined;
+        } else         if (pt === 'apple_endor') {
+          base.apple_endor_endpoint = formData.apple_endor_endpoint || undefined;
+          base.apple_endor_app_id = formData.apple_endor_app_id || undefined;
+          if (formData.apple_endor_app_password) base.apple_endor_app_password = formData.apple_endor_app_password;
+          base.apple_endor_other_app = formData.apple_endor_other_app || undefined;
+          base.apple_endor_context = formData.apple_endor_context || undefined;
+          base.apple_endor_one_time_token = formData.apple_endor_one_time_token || undefined;
+          base.apple_endor_verify_ssl = formData.apple_endor_verify_ssl ?? true;
+        }
+        if (['openai', 'anthropic', 'salesforce'].includes(pt) && formData.verify_ssl !== undefined) {
+          base.verify_ssl = formData.verify_ssl;
+        }
+        await adminApi.updateProviderConfig(editingConfigId, base);
+      } else {
+        // Create new config - only send provider-relevant fields
+        const createData: ProviderConfigCreate = {
           name: formData.name,
           provider_type: formData.provider_type,
           ...(formData.api_key ? { api_key: formData.api_key } : {}),
-          salesforce_client_id: formData.salesforce_client_id || undefined,
-          salesforce_private_key_path: formData.salesforce_private_key_path || undefined,
-          salesforce_username: formData.salesforce_username || undefined,
-          salesforce_models_api_url: formData.salesforce_models_api_url || undefined,
-          vertex_project_id: formData.vertex_project_id || undefined,
-          vertex_location: formData.vertex_location || undefined,
-          vertex_service_account_path: formData.vertex_service_account_path || undefined,
-          apple_endor_endpoint: formData.apple_endor_endpoint || undefined,
-          apple_endor_app_id: formData.apple_endor_app_id || undefined,
-          ...(formData.apple_endor_app_password ? { apple_endor_app_password: formData.apple_endor_app_password } : {}),
-          apple_endor_other_app: formData.apple_endor_other_app || undefined,
-          apple_endor_context: formData.apple_endor_context || undefined,
-          apple_endor_one_time_token: formData.apple_endor_one_time_token || undefined,
-          apple_endor_verify_ssl: formData.apple_endor_verify_ssl ?? true,
+          verify_ssl: ['openai', 'anthropic', 'salesforce'].includes(formData.provider_type) ? formData.verify_ssl : undefined,
         };
-        await adminApi.updateProviderConfig(editingConfigId, updateData);
-      } else {
-        // Create new config
-        await adminApi.createProviderConfig(formData);
+        if (formData.provider_type === 'salesforce') {
+          createData.salesforce_models_api_url = formData.salesforce_models_api_url || undefined;
+        } else if (formData.provider_type === 'vertex') {
+          createData.vertex_project_id = formData.vertex_project_id || undefined;
+          createData.vertex_location = formData.vertex_location || undefined;
+          createData.vertex_service_account_path = formData.vertex_service_account_path || undefined;
+        } else if (formData.provider_type === 'apple_endor') {
+          createData.apple_endor_endpoint = formData.apple_endor_endpoint || undefined;
+          createData.apple_endor_app_id = formData.apple_endor_app_id || undefined;
+          createData.apple_endor_app_password = formData.apple_endor_app_password || undefined;
+          createData.apple_endor_other_app = formData.apple_endor_other_app || undefined;
+          createData.apple_endor_context = formData.apple_endor_context || undefined;
+          createData.apple_endor_one_time_token = formData.apple_endor_one_time_token || undefined;
+          createData.apple_endor_verify_ssl = formData.apple_endor_verify_ssl ?? true;
+        }
+        await adminApi.createProviderConfig(createData);
       }
       resetForm();
       loadConfigs();
@@ -182,9 +208,10 @@ export function ProviderConfigManagement() {
       setTestingConfigId(config.id);
       setTestResult(null);
       const result = await adminApi.testProviderConfig(config.id);
+      const modelList = result.models?.length ? result.models.slice(0, 8).join(', ') + (result.models.length > 8 ? '...' : '') : '';
       const msg = result.error
         ? `Fetched ${result.count} models (warning: ${result.error})`
-        : `Success: ${result.count} model(s) available`;
+        : `Success: ${result.count} model(s)${modelList ? ` — ${modelList}` : ''}`;
       setTestResult({ configId: config.id, success: result.count > 0, message: msg });
     } catch (err: unknown) {
       setTestResult({
@@ -215,10 +242,13 @@ export function ProviderConfigManagement() {
   const shouldShowField = (field: string) => {
     const providerType = formData.provider_type;
     if (field === 'api_key') {
-      return ['openai', 'anthropic'].includes(providerType);
+      return ['openai', 'anthropic', 'salesforce'].includes(providerType);
     }
-    if (field.startsWith('salesforce_')) {
+    if (field === 'salesforce_models_api_url') {
       return providerType === 'salesforce';
+    }
+    if (field === 'verify_ssl') {
+      return ['openai', 'anthropic', 'salesforce'].includes(providerType);
     }
     if (field.startsWith('vertex_')) {
       return providerType === 'vertex';
@@ -310,46 +340,37 @@ export function ProviderConfigManagement() {
                 </div>
               )}
 
-              {shouldShowField('salesforce_client_id') && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="salesforce_client_id">Salesforce Client ID</Label>
-                    <Input
-                      id="salesforce_client_id"
-                      value={formData.salesforce_client_id}
-                      onChange={(e) => setFormData({ ...formData, salesforce_client_id: e.target.value })}
-                      required
+              {shouldShowField('salesforce_models_api_url') && (
+                <div className="space-y-2">
+                  <Label htmlFor="salesforce_models_api_url">API URL</Label>
+                  <Input
+                    id="salesforce_models_api_url"
+                    value={formData.salesforce_models_api_url}
+                    onChange={(e) => setFormData({ ...formData, salesforce_models_api_url: e.target.value })}
+                    placeholder="https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl"
+                    required
+                  />
+                </div>
+              )}
+
+              {shouldShowField('verify_ssl') && (
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      id="verify_ssl"
+                      type="checkbox"
+                      checked={formData.verify_ssl !== false}
+                      onChange={(e) => setFormData({ ...formData, verify_ssl: e.target.checked })}
+                      className="h-4 w-4"
                     />
+                    <Label htmlFor="verify_ssl" className="cursor-pointer">
+                      Verify SSL
+                    </Label>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="salesforce_private_key_path">Private Key Path</Label>
-                    <Input
-                      id="salesforce_private_key_path"
-                      value={formData.salesforce_private_key_path}
-                      onChange={(e) => setFormData({ ...formData, salesforce_private_key_path: e.target.value })}
-                      placeholder="./credentials/salesforce-private-key.pem"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="salesforce_username">Username</Label>
-                    <Input
-                      id="salesforce_username"
-                      value={formData.salesforce_username}
-                      onChange={(e) => setFormData({ ...formData, salesforce_username: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="salesforce_models_api_url">Models API URL</Label>
-                    <Input
-                      id="salesforce_models_api_url"
-                      value={formData.salesforce_models_api_url}
-                      onChange={(e) => setFormData({ ...formData, salesforce_models_api_url: e.target.value })}
-                      placeholder="https://api.salesforce.com/einstein/platform/v1"
-                    />
-                  </div>
-                </>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Uncheck to skip SSL certificate verification (e.g. self-signed or corp certs)
+                  </p>
+                </div>
               )}
 
               {shouldShowField('vertex_project_id') && (

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/tableau_demo"
+    DATABASE_HOST: Optional[str] = None  # Override host only; e.g. host.docker.internal for container→host access
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     
@@ -69,6 +70,9 @@ class Settings(BaseSettings):
     SALESFORCE_PRIVATE_KEY_PATH: str = "./credentials/salesforce-private-key.pem"
     SALESFORCE_USERNAME: str = ""
     SALESFORCE_MODELS_API_URL: str = "https://api.salesforce.com/einstein/platform/v1"
+    # Eng AI Model Gateway (real models - GET /v1/models with Bearer token)
+    ENG_AI_MODEL_GW_URL: str = "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl"
+    ENG_AI_MODEL_GW_KEY: str = ""
     
     # Vertex AI
     VERTEX_PROJECT_ID: str = ""
@@ -135,6 +139,19 @@ class Settings(BaseSettings):
         if not v.startswith(('postgresql://', 'postgresql+psycopg2://', 'sqlite:///')):
             raise ValueError('DATABASE_URL must start with postgresql://, postgresql+psycopg2://, or sqlite:///')
         return v
+
+    @model_validator(mode='after')
+    def apply_database_host(self):
+        """Replace host in DATABASE_URL when DATABASE_HOST is set (unifies localhost vs container access)."""
+        if self.DATABASE_HOST and self.DATABASE_URL.startswith(('postgresql://', 'postgresql+psycopg2://')):
+            parsed = urlparse(self.DATABASE_URL)
+            if ':' in parsed.netloc:
+                _, port = parsed.netloc.rsplit(':', 1)
+                netloc = f"{self.DATABASE_HOST}:{port}"
+            else:
+                netloc = self.DATABASE_HOST
+            return self.model_copy(update={'DATABASE_URL': parsed._replace(netloc=netloc).geturl()})
+        return self
     
     @field_validator('REDIS_URL')
     @classmethod

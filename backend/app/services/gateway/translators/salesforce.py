@@ -42,42 +42,25 @@ class SalesforceTranslator(BaseTranslator):
         Returns:
             Tuple of (url, payload, headers)
         """
+        # Salesforce Models API: POST /models/{modelName}/chat-generations
+        base_url = (context.endpoint if context and context.endpoint else self.base_url) or settings.SALESFORCE_MODELS_API_URL
         model_name = request.get("model", "")
-        
-        # Build Salesforce URL: {base_url}/models/{modelName}/chat-generations
-        url = f"{self.base_url.rstrip('/')}/models/{model_name}/chat-generations"
-        
-        # Extract parameters that go into nested object
-        parameters = {}
-        if "temperature" in request:
-            parameters["temperature"] = request["temperature"]
-        if "top_p" in request:
-            parameters["top_p"] = request["top_p"]
-        if "max_tokens" in request:
-            parameters["max_tokens"] = request["max_tokens"]
-        if "stop" in request:
-            parameters["stop"] = request["stop"]
-        
-        # Build Salesforce payload
+        url = f"{base_url.rstrip('/')}/models/{model_name}/chat-generations"
         payload = {
-            "messages": request.get("messages", [])
+            "messages": request.get("messages", []),
+            "stream": request.get("stream", False),
+            "temperature": request.get("temperature"),
+            "max_tokens": request.get("max_tokens"),
+            "max_completion_tokens": request.get("max_completion_tokens"),
         }
-        
-        # Add nested parameters if any
-        if parameters:
-            payload["parameters"] = parameters
-        
-        # Add other OpenAI fields that Salesforce might accept
-        if "stream" in request:
-            payload["stream"] = request["stream"]
-        
-        # Headers with Trust Layer
+        payload = {k: v for k, v in payload.items() if v is not None}
         headers = {
-            "Content-Type": "application/json",
-            "x-sfdc-app-context": SALESFORCE_TRUST_HEADER
+            "Content-Type": "application/json;charset=utf-8",
+            "x-sfdc-app-context": SALESFORCE_TRUST_HEADER,
+            "x-client-feature-id": "ai-platform-models-connected-app",
         }
         
-        logger.debug(f"Salesforce translator: transformed request for model {model_name}")
+        logger.debug(f"Salesforce translator: transformed request for model {request.get('model', '')}")
         return url, payload, headers
     
     def normalize_response(
@@ -107,12 +90,29 @@ class SalesforceTranslator(BaseTranslator):
         Returns:
             OpenAI-compatible response dict
         """
-        normalized = {
-            "choices": [],
-            "usage": {}
-        }
-        
-        # Normalize choices
+        normalized = {"choices": [], "usage": {}}
+        # Salesforce returns generationDetails.generations; OpenAI uses choices
+        if "generationDetails" in response:
+            gd = response["generationDetails"]
+            gens = gd.get("generations", [])
+            params = gd.get("parameters", {})
+            usage = params.get("usage", {})
+            normalized["usage"] = {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            }
+            # Last assistant message is the model reply
+            for g in reversed(gens):
+                if g.get("role") == "assistant":
+                    normalized["choices"] = [{"index": 0, "message": {"content": g.get("content", "")}, "finish_reason": "stop"}]
+                    break
+            if "id" in response:
+                normalized["id"] = response["id"]
+            if "model" in params:
+                normalized["model"] = params["model"]
+            logger.debug("Salesforce translator: normalized generationDetails response")
+            return normalized
         if "choices" in response:
             for choice in response["choices"]:
                 normalized_choice = {

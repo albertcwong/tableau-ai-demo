@@ -16,7 +16,6 @@ export BACKEND_PORT=$((8000 + OFFSET))
 export COMPOSE_PROJECT_NAME="wt-${OFFSET}"
 
 # URLs for frontend (agent discoverability)
-export NEXT_PUBLIC_API_URL="http://localhost:${BACKEND_PORT}"
 export APP_BASE_URL="https://localhost:${FRONTEND_HTTPS_PORT}"
 export AUTH0_BASE_URL="https://localhost:${FRONTEND_HTTPS_PORT}"
 
@@ -28,14 +27,34 @@ case "${1:-up}" in
     ;;
   down)
     COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.dev.yml"
+    [ -f .env ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env"
     [ -f .env.worktree ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.worktree"
     docker compose $COMPOSE_ARGS down --remove-orphans
     exit 0
     ;;
 esac
 
-# Load .env.worktree (CERT_PATH, etc.) when present (manual worktrees)
+# Load .env.worktree first (manual worktrees)
+CERT_ROOT="${PROJECT_ROOT}"
+[ -f .env.worktree ] && set -a && . ./.env.worktree && set +a
+
+# Cert path: prefer repo root shared/ (matches worktrees.json), else worktree shared
+REPO_ROOT=$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd)
+if [ -d "${REPO_ROOT}/shared" ] && [ -f "${REPO_ROOT}/shared/localhost-key.pem" ]; then
+  SHARED_CERT="${REPO_ROOT}/shared"
+elif [ -d "${CERT_ROOT}/shared" ] && [ -f "${CERT_ROOT}/shared/localhost-key.pem" ]; then
+  SHARED_CERT="${CERT_ROOT}/shared"
+else
+  SHARED_CERT="${CERT_ROOT}/../shared"
+fi
+if [ -f "${SHARED_CERT}/localhost-key.pem" ] && [ -f "${SHARED_CERT}/localhost.pem" ]; then
+  export CERT_PATH="${SHARED_CERT}"
+elif [ -z "${CERT_PATH}" ]; then
+  export CERT_PATH="${CERT_ROOT}/frontend"
+fi
+
 COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.dev.yml"
+[ -f .env ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env"
 [ -f .env.worktree ] && COMPOSE_ARGS="$COMPOSE_ARGS --env-file .env.worktree"
 [ $# -eq 0 ] && set -- up
 

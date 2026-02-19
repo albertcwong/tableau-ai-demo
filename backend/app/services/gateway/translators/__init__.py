@@ -31,6 +31,11 @@ def get_translator(provider: str, context=None):
     if provider in ("openai", "anthropic"):
         return OpenAITranslator()
     elif provider == "salesforce":
+        # eng-ai-model-gateway is OpenAI-compatible; endpoint uses /chat/completions (no /v1 prefix)
+        if context and context.auth_type == "direct" and context.endpoint:
+            base = f"{context.endpoint.rstrip('/')}/chat/completions"
+            return OpenAITranslator(base_url=base)
+        # Einstein Platform uses a different request/response shape
         return SalesforceTranslator()
     elif provider == "vertex":
         return VertexTranslator()

@@ -29,7 +29,6 @@ import type {
   PaginatedViewsResponse,
 } from '@/types';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_TIMEOUT = 30000; // 30 seconds
 const LONG_OPERATION_TIMEOUT = 180000; // 3 minutes for schema enrichment, etc.
 
@@ -37,7 +36,7 @@ const LONG_OPERATION_TIMEOUT = 180000; // 3 minutes for schema enrichment, etc.
 let auth0TokenCache: { token: string | null; expiresAt: number } = { token: null, expiresAt: 0 };
 
 export const apiClient = axios.create({
-  baseURL: API_URL,
+  baseURL: '', // Relative URLs - Next.js rewrite proxies /api/v1/* to backend
   timeout: API_TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
@@ -207,7 +206,7 @@ apiClient.interceptors.response.use(
           console.error('Resource not found');
           break;
         case 500:
-          console.error('Server error');
+          console.error('Server error:', typeof message === 'string' ? message : JSON.stringify(message));
           break;
         default:
           console.error(`API error: ${status} - ${message}`);
@@ -395,7 +394,7 @@ export const chatApi = {
           try {
             const tokenHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
             if (token) tokenHeaders['Authorization'] = `Bearer ${token}`;
-            const tokenRes = await fetch(`${API_URL}/api/v1/gateway/endor-token`, {
+            const tokenRes = await fetch('/api/v1/gateway/endor-token', {
               credentials: 'include',
               headers: tokenHeaders,
             });
@@ -409,7 +408,7 @@ export const chatApi = {
         }
       }
       
-      const response = await fetch(`${API_URL}/api/v1/chat/message`, {
+      const response = await fetch('/api/v1/chat/message', {
         method: 'POST',
         headers,
         body: JSON.stringify({ ...request, stream: true }),
@@ -1129,6 +1128,7 @@ export interface ProviderConfigCreate {
   name: string;
   provider_type: string;
   api_key?: string;
+  verify_ssl?: boolean;
   salesforce_client_id?: string;
   salesforce_private_key_path?: string;
   salesforce_username?: string;
@@ -1149,6 +1149,7 @@ export interface ProviderConfigUpdate {
   name?: string;
   provider_type?: string;
   api_key?: string;
+  verify_ssl?: boolean;
   salesforce_client_id?: string;
   salesforce_private_key_path?: string;
   salesforce_username?: string;
@@ -1174,6 +1175,7 @@ export interface ProviderConfigResponse {
   created_by?: number | null;
   created_at: string;
   api_key?: string | null;
+  verify_ssl?: boolean | null;
   salesforce_client_id?: string | null;
   salesforce_private_key_path?: string | null;
   salesforce_username?: string | null;

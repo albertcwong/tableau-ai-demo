@@ -16,6 +16,7 @@ export interface ModelSelectorProps {
   selected: string;
   onSelect: (model: string) => void;
   onProviderChange?: (provider: string) => void;
+  initialProvider?: string;
   className?: string;
   showProvider?: boolean;
 }
@@ -24,154 +25,65 @@ export function ModelSelector({
   selected,
   onSelect,
   onProviderChange,
+  initialProvider,
   className,
   showProvider = true,
 }: ModelSelectorProps) {
   const [providers, setProviders] = useState<Array<{ provider: string; name: string }>>([]);
   const [providerMap, setProviderMap] = useState<Record<string, string>>({});
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(initialProvider ?? null);
   const [models, setModels] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch providers on mount
+  // Fetch providers on mount (once)
   useEffect(() => {
     const fetchProviders = async () => {
-      let providerList: Array<{ provider: string; name: string }> = [];
       try {
-        providerList = await gatewayApi.getProviders();
+        const providerList = await gatewayApi.getProviders();
         setProviders(providerList);
-        
-        // Create a map of provider -> display name for quick lookup
+
         const map: Record<string, string> = {};
-        providerList.forEach(p => {
-          map[p.provider] = p.name;
-        });
+        providerList.forEach(p => { map[p.provider] = p.name; });
         setProviderMap(map);
-        
-        let foundProvider: string | null = null;
-        
-        // If we have a selected model, determine its provider
-        if (selected) {
-          // Find provider for selected model by fetching models for each provider
-          for (const providerConfig of providerList) {
-            const providerModels = await gatewayApi.getModels(providerConfig.provider);
-            if (providerModels.includes(selected)) {
-              foundProvider = providerConfig.provider;
-              setSelectedProvider(providerConfig.provider);
-              if (onProviderChange) {
-                onProviderChange(providerConfig.provider);
-              }
-              setModels(providerModels);
-              break;
-            }
-          }
-          // If not found, fetch all models
-          if (!foundProvider) {
-            const allModels = await gatewayApi.getModels();
-            setModels(allModels);
-            // Default to first provider if model not found
-            if (providerList.length > 0) {
-              const defaultProvider = providerList[0].provider;
-              setSelectedProvider(defaultProvider);
-              if (onProviderChange) {
-                onProviderChange(defaultProvider);
-              }
-            }
-          }
-        } else {
-          // Fetch ALL models from all providers (no provider filter)
-          const allModels = await gatewayApi.getModels();
-          setModels(allModels);
-          // Auto-select first model if none selected
-          if (allModels.length > 0) {
-            onSelect(allModels[0]);
-          }
-          // Set provider to first one for display, but show all models
-          if (providerList.length > 0) {
-            const defaultProvider = providerList[0].provider;
-            setSelectedProvider(defaultProvider);
-            if (onProviderChange) {
-              onProviderChange(defaultProvider);
-            }
-          }
+
+        // Use initialProvider if it's in the list; otherwise fall back to first provider
+        const providerIds = providerList.map(p => p.provider);
+        const startProvider = initialProvider && providerIds.includes(initialProvider)
+          ? initialProvider
+          : providerList[0]?.provider;
+        if (startProvider) {
+          setSelectedProvider(startProvider);
+          if (onProviderChange) onProviderChange(startProvider);
         }
-        } catch (error) {
-          console.error('Failed to fetch providers:', error);
-          // Fallback: try to get models from health endpoint or use minimal defaults
-          try {
-            // Try health endpoint with models included
-            const health = await gatewayApi.health(true);
-            if (health.models && health.models.length > 0) {
-              setModels(health.models);
-            } else {
-              // Try direct models endpoint as fallback
-              const allModels = await gatewayApi.getModels();
-              if (allModels.length > 0) {
-                setModels(allModels);
-              } else {
-                // Minimal fallback - just the most common models
-                setModels(['gpt-4', 'gpt-3.5-turbo', 'claude-3-5-sonnet']);
-              }
-            }
-            // Set default provider in fallback case
-            if (providerList.length > 0) {
-              const defaultProvider = providerList[0].provider;
-              setSelectedProvider(defaultProvider);
-              if (onProviderChange) {
-                onProviderChange(defaultProvider);
-              }
-            }
-          } catch (healthError) {
-            // Last resort: minimal fallback
-            console.error('Failed to fetch from health/models endpoints:', healthError);
-            setModels(['gpt-4', 'gpt-3.5-turbo']);
-            // Still try to set a default provider if we have providers
-            if (providerList.length > 0) {
-              const defaultProvider = providerList[0].provider;
-              setSelectedProvider(defaultProvider);
-              if (onProviderChange) {
-                onProviderChange(defaultProvider);
-              }
-            }
-          }
-        } finally {
+      } catch (error) {
+        console.error('Failed to fetch providers:', error);
+      } finally {
         setIsLoading(false);
       }
     };
 
     fetchProviders();
-  }, [selected]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch models when provider changes
   useEffect(() => {
-    if (selectedProvider) {
-      const fetchModels = async () => {
-        try {
-          const providerModels = await gatewayApi.getModels(selectedProvider);
-          setModels(providerModels);
-          // Auto-select first model if current selection not in new list
-          if (providerModels.length > 0 && !providerModels.includes(selected)) {
-            onSelect(providerModels[0]);
-          }
-        } catch (error) {
-          console.error('Failed to fetch models:', error);
+    if (!selectedProvider) return;
+    const fetchModels = async () => {
+      try {
+        const providerModels = await gatewayApi.getModels(selectedProvider);
+        setModels(providerModels);
+        // Auto-select first model if current selection is not in this provider's list
+        if (providerModels.length > 0 && !providerModels.includes(selected)) {
+          onSelect(providerModels[0]);
         }
-      };
-      fetchModels();
-    } else {
-      // Fetch all models if no provider selected
-      const fetchAllModels = async () => {
-        try {
-          const allModels = await gatewayApi.getModels();
-          setModels(allModels);
-        } catch (error) {
-          console.error('Failed to fetch all models:', error);
-        }
-      };
-      fetchAllModels();
-    }
+      } catch (error) {
+        console.error('Failed to fetch models:', error);
+      }
+    };
+    fetchModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider, selected]);
+  }, [selectedProvider]);
 
   const handleProviderChange = (provider: string) => {
     setSelectedProvider(provider);

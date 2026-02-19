@@ -404,6 +404,7 @@ export function AgentPanel({ isOpen, onClose, onAddToContext, onAddToContextRef,
           <ChatInterface
             conversationId={activeThreadId}
             defaultModel={model}
+            defaultProvider={provider}
             hideModelSelector={true}
             agentType={agentType}
             onAgentTypeChange={(newAgentType) => {

@@ -38,6 +38,7 @@ export interface ChatInterfaceProps {
   conversationId?: number;
   className?: string;
   defaultModel?: string;
+  defaultProvider?: string;
   hideModelSelector?: boolean;
   agentType?: 'summary' | 'vizql';
   onAgentTypeChange?: (agentType: 'summary' | 'vizql') => void;
@@ -55,6 +56,7 @@ export function ChatInterface({
   conversationId: initialConversationId,
   className,
   defaultModel = DEFAULT_MODEL,
+  defaultProvider,
   hideModelSelector = false,
   agentType = 'vizql',
   onAgentTypeChange,
@@ -70,7 +72,7 @@ export function ChatInterface({
   );
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(defaultProvider ?? null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
@@ -98,6 +100,13 @@ export function ChatInterface({
       setSelectedModel(defaultModel);
     }
   }, [defaultModel]);
+
+  // Sync selectedProvider when defaultProvider prop changes (e.g. user preferences loaded async)
+  useEffect(() => {
+    if (defaultProvider) {
+      setSelectedProvider(defaultProvider);
+    }
+  }, [defaultProvider]);
 
   // Initialize conversation - only create if no ID provided
   useEffect(() => {
@@ -275,14 +284,7 @@ export function ChatInterface({
 
       try {
         console.log('Starting stream for conversation:', conversationId, 'model:', selectedModel, 'provider:', selectedProvider);
-        // Stream the response with structured message handling
-        // Infer provider from model when not set (e.g. from preferences before ModelSelector finishes)
-        let providerToUse = selectedProvider;
-        if (!providerToUse && selectedModel) {
-          if (selectedModel.startsWith('gemini-')) providerToUse = 'apple';
-          else if (selectedModel.startsWith('gpt-')) providerToUse = 'openai';
-          else if (selectedModel.startsWith('claude-')) providerToUse = 'anthropic';
-        }
+        const providerToUse = selectedProvider;
         if (!providerToUse) {
           const errorMsg = `Provider not set. Please select a provider from the dropdown. Selected model: ${selectedModel}`;
           console.error(errorMsg);
@@ -820,6 +822,7 @@ export function ChatInterface({
               selected={selectedModel}
               onSelect={setSelectedModel}
               onProviderChange={setSelectedProvider}
+              initialProvider={defaultProvider}
               showProvider={true}
             />
           </div>

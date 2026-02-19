@@ -1,8 +1,8 @@
 {
   "setup-worktree-unix": [
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/.env\" .env",
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/.env\" .env",
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem"
   ],
   "setup-worktree-windows": [
     "copy \"%PROJECT_ROOT%\\shared\\.env\" .env",
@@ -10,8 +10,8 @@
     "mklink frontend\\localhost.pem \"%PROJECT_ROOT%\\shared\\localhost.pem\""
   ],
   "setup-worktree": [
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/.env\" .env",
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost-key.pem\" frontend/localhost-key.pem",
-    "ln -sf \"${PROJECT_ROOT:-$(cd .. && pwd)}/shared/localhost.pem\" frontend/localhost.pem"
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/.env\" .env",
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost-key.pem\" frontend/localhost-key.pem",
+    "ln -sf \"$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" && pwd)/shared/localhost.pem\" frontend/localhost.pem"
   ]
 }
