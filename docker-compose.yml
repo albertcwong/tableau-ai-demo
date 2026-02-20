@@ -7,6 +7,9 @@ services:
     container_name: tableau-demo-backend
     ports:
       - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     networks:
       - default
       - tableau-demo-net

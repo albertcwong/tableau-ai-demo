@@ -5,6 +5,9 @@
 services:
   backend:
     container_name: tableau-demo-${COMPOSE_PROJECT_NAME:-main}-backend
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
