@@ -20,6 +20,13 @@ from fastapi import Request
 from app.services.memory import get_conversation_memory
 from app.services.metrics import get_metrics
 from app.api.chat_helpers import prepare_chat_context
+from app.api.chat_agent_integration import (
+    build_agent_request,
+    build_adapters,
+    invoke_agent,
+    invoke_agent_stream,
+    parse_stream_chunk,
+)
 from app.services.debug import get_debugger
 from app.api.models import AgentMessageChunk, AgentMessageContent
 import time
@@ -567,121 +574,85 @@ async def send_message(
                 agent_type = "multi_agent"
                 logger.info(f"Meta-agent detected multi-agent workflow needed: {selection.get('reasoning')}")
         
-        # Route to Multi-Agent Orchestrator
+        # Route to Multi-Agent Orchestrator (via Agent Service)
         if use_multi_agent:
-            from app.services.agents.multi_agent import MultiAgentOrchestrator
-            
-            logger.info(f"Routing to Multi-Agent orchestrator")
-            
-            # Apply feedback-based refinement to query
+            logger.info("Routing to Multi-Agent orchestrator via Agent Service")
+
             refined_query_result = await feedback_manager.apply_feedback_to_query(
                 query=request.content,
                 conversation_id=request.conversation_id,
                 agent_type="multi_agent"
             )
             refined_query = refined_query_result.get("refined_query", request.content)
-            
             if refined_query != request.content:
                 logger.info(f"Query refined based on feedback: {refined_query_result.get('changes')}")
-            
+
             execution_start = time.time()
             execution_id = str(uuid.uuid4())
             metrics = get_metrics()
-            conversation_memory = get_conversation_memory(request.conversation_id)
-            debugger = get_debugger()
-            
-            orchestrator = MultiAgentOrchestrator(
+            agent_req = build_agent_request(
+                agent_type="multi_agent",
+                user_query=refined_query,
+                datasource_ids=datasource_ids,
+                view_ids=view_ids,
+                message_history=history_messages,
                 model=request.model,
-                provider=provider_for_state
+                provider=provider_for_state,
+                conversation_id=request.conversation_id,
+                embedded_state=request.embedded_state,
+                summary_mode=request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
+                tableau_auth_type=(request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower(),
+                site_id=(tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                stream=request.stream,
             )
-            
+            adapters = build_adapters(tableau_client)
+
             if request.stream:
-                # For streaming, we'll execute and stream the final answer
-                # Multi-agent workflows are complex, so we stream the final combined result
                 async def generate_multi_agent_stream():
+                    full_content = ""
                     try:
-                        result = await orchestrator.execute_workflow(
-                            user_query=refined_query,
-                            context={
-                                "datasources": datasource_ids,
-                                "views": view_ids,
-                                "embedded_state": request.embedded_state,
-                                "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
-                                "tableau_auth_type": (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower(),
-                            },
-                            tableau_client=tableau_client
-                        )
-                        
-                        # Stream the final answer
-                        final_answer = result.get("final_answer", "Workflow completed")
-                        execution_trace = result.get("execution_trace", [])
-                        
-                        # Stream execution trace updates
-                        for step in execution_trace:
-                            if step.get("parallel"):
-                                yield f"data: [PARALLEL] {step.get('agent_type')}: {step.get('action')}\n\n"
-                            else:
-                                yield f"data: [{step.get('agent_type')}] {step.get('action')}\n\n"
-                        
-                        # Stream final answer in chunks
-                        words = final_answer.split()
-                        for word in words:
-                            yield f"data: {word} \n\n"
-                        
-                        yield "data: [DONE]\n\n"
-                        
-                        # Save final message
-                        assistant_message = Message(
-                            conversation_id=request.conversation_id,
-                            role=MessageRole.ASSISTANT,
-                            content=final_answer,
-                            model_used=request.model,
-                            extra_metadata={
-                                "execution_id": execution_id,
-                                "agent_type": "multi_agent",
-                                "agents_used": result.get("agents_used", []),
-                                "execution_trace": execution_trace
-                            }
-                        )
-                        db.add(assistant_message)
-                        conversation.updated_at = conversation.updated_at
-                        safe_commit(db)
-                        
+                        async for chunk in invoke_agent_stream(agent_req, adapters):
+                            yield chunk
+                            if chunk.startswith("data: ") and "final_answer" in chunk and "[DONE]" not in chunk:
+                                try:
+                                    import json
+                                    j = json.loads(chunk[6:].split("\n")[0])
+                                    if j.get("message_type") == "final_answer":
+                                        c = j.get("content", {})
+                                        full_content += str(c.get("data", "")) if isinstance(c, dict) else ""
+                                except Exception:
+                                    pass
+                        if full_content:
+                            assistant_message = Message(
+                                conversation_id=request.conversation_id,
+                                role=MessageRole.ASSISTANT,
+                                content=full_content,
+                                model_used=request.model,
+                                extra_metadata={
+                                    "execution_id": execution_id,
+                                    "agent_type": "multi_agent",
+                                    "agents_used": [],
+                                    "execution_trace": [],
+                                },
+                            )
+                            db.add(assistant_message)
+                            conversation.updated_at = conversation.updated_at
+                            safe_commit(db)
                     except Exception as e:
                         logger.error(f"Error in multi-agent workflow: {e}", exc_info=True)
-                        yield f"data: Error: {str(e)}\n\n"
+                        yield f"data: {{\"message_type\":\"error\",\"content\":{{\"type\":\"text\",\"data\":\"{str(e)}\"}}}}\n\n"
                         yield "data: [DONE]\n\n"
-                
+
                 defer_tableau_close = True
                 return StreamingResponse(
                     _stream_with_tableau_cleanup(generate_multi_agent_stream()),
-                    media_type="text/event-stream"
+                    media_type="text/event-stream",
                 )
             else:
-                # Non-streaming execution
-                result = await orchestrator.execute_workflow(
-                    user_query=refined_query,
-                    context={
-                        "datasources": datasource_ids,
-                        "views": view_ids,
-                        "embedded_state": request.embedded_state,
-                        "summary_mode": request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full",
-                        "tableau_auth_type": (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower(),
-                    },
-                    tableau_client=tableau_client
-                )
-                
-                final_answer = result.get("final_answer", "Workflow completed")
+                result = await invoke_agent(agent_req, adapters)
+                final_answer = result.content or result.error or "Workflow completed"
                 execution_time = time.time() - execution_start
-                
-                # Track metrics
-                metrics.record_agent_execution(
-                    agent_type="multi_agent",
-                    execution_time=execution_time,
-                    success=True
-                )
-                
-                # Save assistant message
+                metrics.record_agent_execution(agent_type="multi_agent", execution_time=execution_time, success=True)
                 assistant_message = Message(
                     conversation_id=request.conversation_id,
                     role=MessageRole.ASSISTANT,
@@ -690,16 +661,15 @@ async def send_message(
                     extra_metadata={
                         "execution_id": execution_id,
                         "agent_type": "multi_agent",
-                        "agents_used": result.get("agents_used", []),
-                        "execution_trace": result.get("execution_trace", []),
-                        "execution_time": execution_time
-                    }
+                        "agents_used": result.metadata.get("agents_used", []),
+                        "execution_trace": result.metadata.get("execution_trace", []),
+                        "execution_time": execution_time,
+                    },
                 )
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
                 safe_commit(db)
                 db.refresh(assistant_message)
-                
                 return ChatResponse(
                     message=MessageResponse(
                         id=assistant_message.id,
@@ -710,12 +680,12 @@ async def send_message(
                         tokens_used=None,
                         feedback=assistant_message.feedback,
                         total_time_ms=assistant_message.total_time_ms,
-                        vizql_query=None,  # Not available for multi-agent
-                        created_at=assistant_message.created_at
+                        vizql_query=None,
+                        created_at=assistant_message.created_at,
                     ),
                     conversation_id=request.conversation_id,
                     model=request.model,
-                    tokens_used=0
+                    tokens_used=0,
                 )
         
         # Route to VizQL agent graph
@@ -766,435 +736,42 @@ async def send_message(
             max_build_retries = retry_settings.get('max_build_retries')
             max_execution_retries = retry_settings.get('max_execution_retries')
             
-            # Create graph with version and retry settings
-            graph = AgentGraphFactory.create_vizql_graph(
-                version=agent_version,
+            agent_req = build_agent_request(
+                agent_type="vizql",
+                user_query=refined_query,
+                datasource_ids=datasource_ids,
+                view_ids=view_ids,
+                message_history=history_messages,
+                model=request.model,
+                provider=provider_for_state,
+                conversation_id=request.conversation_id,
+                agent_version=agent_version,
                 max_build_retries=max_build_retries,
-                max_execution_retries=max_execution_retries
+                max_execution_retries=max_execution_retries,
+                site_id=(tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                stream=request.stream,
             )
-            
-            # Initialize state for VizQL agent based on version
-            if agent_version == "v3":
-                # Streamlined agent state (v3)
-                message_history = []
-                for msg in history_messages:
-                    msg_dict = {
-                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
-                        "content": msg.content
-                    }
-                    # Add query_draft and query_results for prior query reuse
-                    if msg.role == MessageRole.ASSISTANT and msg.extra_metadata:
-                        if isinstance(msg.extra_metadata, dict):
-                            msg_dict["query_draft"] = msg.extra_metadata.get('vizql_query')
-                            msg_dict["query_results"] = msg.extra_metadata.get('query_results')
-                    message_history.append(msg_dict)
-                
-                logger.info(f"Initializing streamlined graph state (v3) with model: {request.model}")
-                initial_state = {
-                    "user_query": refined_query,
-                    "agent_type": "vizql",
-                    "context_datasources": datasource_ids,
-                    "context_views": view_ids,
-                    "messages": message_history,
-                    "tool_calls": [],
-                    "tool_results": [],
-                    "current_thought": None,
-                    "final_answer": None,
-                    "error": None,
-                    "confidence": None,
-                    "processing_time": None,
-                    "model": request.model,
-                    "provider": provider_for_state,
-                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
-                    "build_attempt": 1,
-                    "execution_attempt": 1,
-                    "query_version": 0,
-                    "reasoning_steps": [],
-                    "build_errors": None,
-                    "execution_errors": None,
-                    "enriched_schema": None,  # Optional - can be pre-fetched
-                    "schema": None,  # Will be fetched if needed
-                }
-            elif agent_version == "v2":
-                # Tool-use agent state (v2)
-                tool_use_message_history = []
-                for msg in history_messages:
-                    msg_dict = {
-                        "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
-                        "content": msg.content
-                    }
-                    # Add metadata and dimension values for assistant messages with query results
-                    if msg.role == MessageRole.ASSISTANT and msg.extra_metadata:
-                        if isinstance(msg.extra_metadata, dict):
-                            vizql_query = msg.extra_metadata.get('vizql_query')
-                            query_results = msg.extra_metadata.get('query_results')
-                            if query_results:
-                                row_count = query_results.get('row_count', len(query_results.get('data', [])))
-                                columns = query_results.get('columns', [])
-                                dimension_values = query_results.get('dimension_values', {})
-                                
-                                msg_dict["data_metadata"] = {
-                                    "row_count": row_count,
-                                    "columns": columns,
-                                    "dimension_values": dimension_values
-                                }
-                            if vizql_query:
-                                msg_dict["original_query"] = str(vizql_query)
-                    tool_use_message_history.append(msg_dict)
-                
-                logger.info(f"Initializing tool-use agent state (v2) with model: {request.model}")
-                initial_state = {
-                    "user_query": refined_query,
-                    "message_history": tool_use_message_history,
-                    "site_id": (tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
-                    "datasource_id": datasource_ids[0] if datasource_ids else None,
-                    "tableau_client": tableau_client,
-                    "raw_data": None,
-                    "tool_calls": [],
-                    "final_answer": None,
-                    "error": None,
-                    "model": request.model,
-                    "provider": provider_for_state,
-                }
-            else:  # v1
-                # Graph-based agent state (v1 - original)
-                initial_state = {
-                    "user_query": refined_query,
-                    "agent_type": "vizql",
-                    "context_datasources": datasource_ids,
-                    "context_views": view_ids,
-                    "messages": [],
-                    "tool_calls": [],
-                    "tool_results": [],
-                    "current_thought": None,
-                    "final_answer": None,
-                    "error": None,
-                    "confidence": None,
-                    "processing_time": None,
-                    # AI client configuration
-                    "model": request.model,
-                    "provider": provider_for_state,
-                    # VizQL-specific fields
-                    "schema": None,
-                    "required_measures": [],
-                    "required_dimensions": [],
-                    "required_filters": {},
-                    "query_draft": None,
-                    "query_version": 0,
-                    "is_valid": False,
-                    "validation_errors": [],
-                    "validation_suggestions": [],
-                    "query_results": None,
-                    "execution_error": None,
-                }
-            
+            adapters = build_adapters(tableau_client)
+
             if request.stream:
-                # Stream graph execution
                 async def stream_graph():
                     full_content = ""
-                    last_final_answer = ""
-                    last_state = None
-                    reasoningStepIndex = 0  # Track reasoning step index
-                    stream_start_time = time.time()  # Track when streaming starts
-                    stream_graph._query_sent = False  # Track if query has been sent
-                    stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
+                    stored_vizql_query = None
+                    stored_query_results = None
+                    stream_start_time = time.time()
                     try:
-                        # Log timing before graph execution starts
-                        pre_graph_time = time.time()
-                        logger.info(f"About to start graph execution. Time since stream_start: {(pre_graph_time - stream_start_time) * 1000:.2f}ms")
-                        
-                        # Provide config with thread_id + tableau_client (not in state - not serializable)
-                        config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}", "tableau_client": tableau_client}}
-                        
-                        # Log timing right before astream
-                        pre_astream_time = time.time()
-                        logger.info(f"About to call graph.astream(). Time since stream_start: {(pre_astream_time - stream_start_time) * 1000:.2f}ms")
-                        
-                        async for state_update in graph.astream(initial_state, config=config):
-                            # Log timing when first state update arrives
-                            first_update_time = time.time()
-                            if not hasattr(stream_graph, '_first_update_logged'):
-                                logger.info(f"First state update received. Time since stream_start: {(first_update_time - stream_start_time) * 1000:.2f}ms, since pre_astream: {(first_update_time - pre_astream_time) * 1000:.2f}ms")
-                                stream_graph._first_update_logged = True
-                            # LangGraph astream returns updates keyed by node name
-                            # Each update contains the state dictionary for that node
-                            logger.debug(f"VizQL graph state update - node keys: {list(state_update.keys())}")
-                            
-                            # Iterate through all node updates in this state update
-                            for node_name, node_state in state_update.items():
-                                logger.debug(f"Processing node '{node_name}' - state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'not dict'}")
-                                
-                                # Keep track of the last state for final extraction
-                                if isinstance(node_state, dict):
-                                    last_state = node_state
-                                
-                                # Stream intermediate thoughts as reasoning steps
-                                # Only stream one step per node (from current_thought), not individual tool calls
-                                if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
-                                    thought = node_state["current_thought"]
-                                    
-                                    # For build_query node, use build_attempt to create unique key (allow multiple builds)
-                                    # For other nodes, use node name to prevent duplicates
-                                    if node_name == "build_query":
-                                        build_attempt = node_state.get("build_attempt", 1)
-                                        node_thought_key = f"{node_name}_thought_attempt_{build_attempt}"
-                                    else:
-                                        node_thought_key = f"{node_name}_thought"
-                                    
-                                    if node_thought_key not in stream_graph._streamed_node_thoughts:
-                                        logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
-                                        
-                                        # Extract step metadata if available (tool calls, tokens, query_draft)
-                                        step_metadata = dict(node_state.get("step_metadata") or {})
-                                        # Only include query_draft for build_query and pre_validation
-                                        if node_name == "build_query":
-                                            if "query_draft" in node_state:
-                                                step_metadata["query_draft"] = node_state.get("query_draft")
-                                            step_metadata["build_attempt"] = node_state.get("build_attempt", 1)
-                                        elif node_name in ("validate_query", "execute_query"):
-                                            step_metadata.pop("query_draft", None)
-                                        elif node_name == "pre_validation":
-                                            if "query_draft" in node_state:
-                                                step_metadata["query_draft"] = node_state.get("query_draft")
-                                        
-                                        reasoning_chunk = AgentMessageChunk(
-                                            message_type="reasoning",
-                                            content=AgentMessageContent(type="text", data=thought),
-                                            step_name=node_name,
-                                            timestamp=time.time(),  # Unix timestamp in seconds
-                                            step_index=reasoningStepIndex,
-                                            metadata=step_metadata if step_metadata else None
-                                        )
-                                        reasoningStepIndex += 1
-                                        yield reasoning_chunk.to_sse_format()
-                                        stream_graph._streamed_node_thoughts.add(node_thought_key)
-                                        full_content += " " + thought  # Track to avoid duplicates
-                                
-                                # Stream final answer when available
-                                if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):
-                                    answer = node_state["final_answer"]
-                                    logger.info(f"Found final_answer in {node_name}: {answer[:200]}")
-                                    # Send the full answer if it's new or has changed
-                                    if answer != last_final_answer:
-                                        # If we haven't sent this answer yet, send it all
-                                        if last_final_answer == "":
-                                            logger.info(f"Streaming full final_answer from {node_name}: {len(answer)} chars")
-                                            answer_chunk = AgentMessageChunk(
-                                                message_type="final_answer",
-                                                content=AgentMessageContent(type="text", data=answer),
-                                                timestamp=time.time()
-                                            )
-                                            yield answer_chunk.to_sse_format()
-                                        else:
-                                            # Send only the new part
-                                            new_content = answer[len(last_final_answer):]
-                                            if new_content:
-                                                logger.info(f"Streaming new content from {node_name}: {len(new_content)} chars")
-                                                answer_chunk = AgentMessageChunk(
-                                                    message_type="final_answer",
-                                                    content=AgentMessageContent(type="text", data=new_content),
-                                                    timestamp=time.time()
-                                                )
-                                                yield answer_chunk.to_sse_format()
-                                        last_final_answer = answer
-                                        full_content = answer
-                        
-                        # After streaming completes, check last state for final_answer if we didn't get it
-                        if not full_content:
-                            logger.warning(f"Streaming completed but no full_content received. Last state: {type(last_state)}")
-                            
-                            # last_state should be a dict from the last node update
-                            if last_state and isinstance(last_state, dict):
-                                logger.info(f"Checking last_state for final_answer - keys: {list(last_state.keys())}")
-                                final_answer = last_state.get("final_answer")
-                                if not final_answer:
-                                    # Try to extract error or other info
-                                    error = last_state.get("error")
-                                    execution_error = last_state.get("execution_error")
-                                    validation_errors = last_state.get("validation_errors", [])
-                                    
-                                    logger.info(f"Extracting from last_state - error: {error}, execution_error: {execution_error}, validation_errors: {validation_errors}")
-                                    
-                                    if error:
-                                        final_answer = f"Error: {error}"
-                                    elif execution_error:
-                                        final_answer = f"Execution error: {execution_error}"
-                                    elif validation_errors:
-                                        final_answer = f"Validation errors: {', '.join(validation_errors)}"
-                                    else:
-                                        # Check if we have query_results but no formatted answer
-                                        query_results = last_state.get("query_results")
-                                        if query_results:
-                                            row_count = query_results.get("row_count", 0)
-                                            final_answer = f"Query executed successfully! Retrieved {row_count} row(s)."
-                                        else:
-                                            final_answer = "Query execution completed but no response was generated."
-                                
-                                if final_answer and final_answer != last_final_answer:
-                                    logger.info(f"Sending final_answer after stream: {final_answer[:200]}")
-                                    # Send as structured final_answer chunk
-                                    answer_chunk = AgentMessageChunk(
-                                        message_type="final_answer",
-                                        content=AgentMessageContent(type="text", data=final_answer),
-                                        timestamp=time.time()
-                                    )
-                                    yield answer_chunk.to_sse_format()
-                                    full_content = final_answer
-                        
-                        # Extract VizQL query from last_state for saving and streaming
-                        # Always try to get query_draft, even if there were errors
-                        vizql_query = None
-                        if last_state:
-                            logger.info(f"Extracting VizQL query from last_state. Keys: {list(last_state.keys())}")
-                            
-                            # Try multiple keys where query might be stored
-                            for key in ["query_draft", "query", "validated_query"]:
-                                if key in last_state and last_state.get(key):
-                                    vizql_query = last_state.get(key)
-                                    logger.info(f"Found VizQL query in key '{key}'")
-                                    break
-                            
-                            # For tool-use agent, also check tool_calls for query
-                            if not vizql_query and "tool_calls" in last_state:
-                                tool_calls = last_state.get("tool_calls", [])
-                                logger.info(f"Checking {len(tool_calls)} tool_calls for VizQL query")
-                                for tool_call in tool_calls:
-                                    if tool_call.get("tool") in ["build_query", "query_datasource"]:
-                                        result = tool_call.get("result", {})
-                                        if isinstance(result, dict):
-                                            vizql_query = result.get("query") or result.get("query_draft")
-                                            if vizql_query:
-                                                logger.info(f"Extracted VizQL query from tool_call: {tool_call.get('tool')}")
-                                                break
-                        
-                        # Send vizql_query as metadata chunk if available and not already sent
-                        if vizql_query and not getattr(stream_graph, '_query_sent', False):
-                            logger.info(f"Sending VizQL query as metadata chunk: {str(vizql_query)[:200]}")
-                            metadata_chunk = AgentMessageChunk(
-                                message_type="metadata",
-                                content=AgentMessageContent(type="json", data={"vizql_query": vizql_query}),
-                                timestamp=time.time()
-                            )
-                            yield metadata_chunk.to_sse_format()
-                            stream_graph._query_sent = True
-                        elif not vizql_query:
-                            logger.warning("No VizQL query found to send as metadata")
-                        
-                        # Ensure we have content to save - if not, try to get it from last_state one more time
-                        if not full_content and last_state:
-                            logger.warning("No content after streaming, attempting to extract from last_state")
-                            # Check all possible sources
-                            full_content = (
-                                last_state.get("final_answer") or
-                                last_state.get("formatted_response") or
-                                (f"Error: {last_state.get('error')}" if last_state.get("error") else None) or
-                                (f"Execution error: {last_state.get('execution_error')}" if last_state.get("execution_error") else None) or
-                                "Query execution completed. Please check the conversation messages."
-                            )
-                            if full_content and full_content != "Query execution completed. Please check the conversation messages.":
-                                logger.info(f"Extracted content from last_state: {full_content[:200]}")
-                                # Send as structured final_answer chunk
-                                answer_chunk = AgentMessageChunk(
-                                    message_type="final_answer",
-                                    content=AgentMessageContent(type="text", data=full_content),
-                                    timestamp=time.time()
-                                )
-                                yield answer_chunk.to_sse_format()
-                        
-                        # Save assistant message after streaming completes
+                        async for chunk in invoke_agent_stream(agent_req, adapters):
+                            yield chunk
+                            mt, data, meta = parse_stream_chunk(chunk)
+                            if mt == "final_answer" and data:
+                                full_content += str(data)
+                            elif mt == "metadata" and meta:
+                                if meta.get("vizql_query"):
+                                    stored_vizql_query = meta["vizql_query"]
+
                         if full_content:
                             try:
-                                # Calculate total time (from when user message was created to now)
-                                stream_end_time = time.time()
-                                total_time_ms = (stream_end_time - stream_start_time) * 1000  # Convert to milliseconds
-                                
-                                # Extract VizQL query and query results from last_state for storage
-                                stored_vizql_query = None
-                                stored_query_results = None
-                                
-                                if last_state:
-                                    # Extract query
-                                    for key in ["query_draft", "query", "validated_query"]:
-                                        if key in last_state and last_state.get(key):
-                                            stored_vizql_query = last_state.get(key)
-                                            break
-                                    
-                                    # For tool-use agent, check tool_calls for query
-                                    if not stored_vizql_query and "tool_calls" in last_state:
-                                        tool_calls = last_state.get("tool_calls", [])
-                                        for tool_call in tool_calls:
-                                            if tool_call.get("tool") in ["build_query", "query_datasource"]:
-                                                result = tool_call.get("result", {})
-                                                if isinstance(result, dict):
-                                                    stored_vizql_query = result.get("query") or result.get("query_draft")
-                                                    if stored_vizql_query:
-                                                        break
-                                    
-                                    # Extract query results METADATA and DIMENSION VALUES
-                                    # Priority: Use shown_entities from summarizer (most accurate)
-                                    # Fallback: Extract from raw_data only if small dataset
-                                    
-                                    dimension_values = {}
-                                    
-                                    # PRIORITY 1: Check if summarizer provided shown_entities (most accurate)
-                                    shown_entities = last_state.get("shown_entities")
-                                    if shown_entities and isinstance(shown_entities, dict):
-                                        dimension_values = shown_entities
-                                        logger.info(f"Using shown_entities from summarizer: {len(dimension_values)} dimensions")
-                                    
-                                    # PRIORITY 2: Fallback to extracting from raw_data only if small dataset
-                                    elif not dimension_values:
-                                        raw_data = last_state.get("raw_data")
-                                        if raw_data and isinstance(raw_data, dict):
-                                            if "columns" in raw_data and "data" in raw_data:
-                                                row_count = raw_data.get("row_count", len(raw_data.get("data", [])))
-                                                # Only extract if dataset is small (< 100 rows) to avoid 4,703 city problem
-                                                if row_count < 100:
-                                                    from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
-                                                    dimension_values = extract_dimension_values(raw_data, max_values_per_dimension=50)
-                                                    logger.info(f"Fallback: Extracted from raw_data (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
-                                                else:
-                                                    logger.info(f"Skipping extraction from raw_data: dataset too large ({row_count} rows)")
-                                    
-                                    raw_data = last_state.get("raw_data")
-                                    if raw_data and isinstance(raw_data, dict):
-                                        # Check if raw_data has the query results format
-                                        if "columns" in raw_data and "data" in raw_data:
-                                            stored_query_results = {
-                                                "columns": raw_data.get("columns"),
-                                                "row_count": raw_data.get("row_count", len(raw_data.get("data", []))),
-                                                "dimension_values": dimension_values  # Store dimension values (from summarizer or extracted)
-                                                # NOTE: NOT storing full "data" array - only metadata + dimension values
-                                            }
-                                            logger.info(f"Stored query_results metadata: {stored_query_results.get('row_count', 0)} rows, {len(dimension_values)} dimensions (data array excluded)")
-                                        elif "tool_calls" in last_state:
-                                            # Extract from query_datasource tool call result
-                                            tool_calls = last_state.get("tool_calls", [])
-                                            for tool_call in tool_calls:
-                                                if tool_call.get("tool") == "query_datasource":
-                                                    result = tool_call.get("result", {})
-                                                    if isinstance(result, dict) and "data" in result:
-                                                        # Extract dimension values for context
-                                                        # Only extract if small dataset to avoid 4,703 city problem
-                                                        dimension_values = {}
-                                                        row_count = result.get("row_count", len(result.get("data", [])))
-                                                        
-                                                        if row_count < 100:
-                                                            from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
-                                                            dimension_values = extract_dimension_values(result, max_values_per_dimension=50)
-                                                            logger.info(f"Extracted from query_datasource tool (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
-                                                        else:
-                                                            logger.info(f"Skipping extraction from query_datasource tool: dataset too large ({row_count} rows)")
-                                                        
-                                                        stored_query_results = {
-                                                            "columns": result.get("columns", []),
-                                                            "row_count": row_count,
-                                                            "dimension_values": dimension_values  # Store dimension values (only if small dataset)
-                                                            # NOTE: NOT storing full "data" array - only metadata + dimension values
-                                                        }
-                                                        logger.info(f"Stored query_results metadata from tool call: {row_count} rows, {len(dimension_values)} dimensions (data array excluded)")
-                                                        break
-                                
+                                total_time_ms = (time.time() - stream_start_time) * 1000
                                 assistant_message = Message(
                                     conversation_id=request.conversation_id,
                                     role=MessageRole.ASSISTANT,
@@ -1225,47 +802,6 @@ async def send_message(
                         yield done_chunk.to_sse_format()
                     except Exception as e:
                         logger.error(f"Error in VizQL graph streaming: {e}", exc_info=True)
-                        # Try to extract query_draft even on error if last_state is available
-                        error_vizql_query = None
-                        try:
-                            if 'last_state' in locals() and last_state:
-                                error_vizql_query = last_state.get("query_draft")
-                                # Also check alternative keys
-                                if not error_vizql_query:
-                                    for key in ["query", "validated_query"]:
-                                        if key in last_state:
-                                            error_vizql_query = last_state.get(key)
-                                            break
-                                
-                                # For tool-use agent, also check tool_calls
-                                if not error_vizql_query and "tool_calls" in last_state:
-                                    tool_calls = last_state.get("tool_calls", [])
-                                    for tool_call in tool_calls:
-                                        if tool_call.get("tool") in ["build_query", "query_datasource"]:
-                                            result = tool_call.get("result", {})
-                                            if isinstance(result, dict):
-                                                error_vizql_query = result.get("query") or result.get("query_draft")
-                                                if error_vizql_query:
-                                                    break
-                        except (KeyError, AttributeError, TypeError) as e:
-                            # Expected errors when extracting query from result - continue silently
-                            logger.debug(f"Could not extract query from result: {e}")
-                            pass
-                        except Exception as e:
-                            # Log unexpected errors but continue
-                            logger.warning(f"Unexpected error extracting query from result: {e}", exc_info=True)
-                            pass
-                        
-                        # Send query as metadata even on error if available and not already sent
-                        if error_vizql_query and not getattr(stream_graph, '_query_sent', False):
-                            metadata_chunk = AgentMessageChunk(
-                                message_type="metadata",
-                                content=AgentMessageContent(type="json", data={"vizql_query": error_vizql_query}),
-                                timestamp=time.time()
-                            )
-                            yield metadata_chunk.to_sse_format()
-                            stream_graph._query_sent = True
-                        
                         error_chunk = AgentMessageChunk(
                             message_type="error",
                             content=AgentMessageContent(type="text", data=str(e)),
@@ -1290,184 +826,30 @@ async def send_message(
                     }
                 )
             else:
-                # Non-streaming: execute graph and return result
-                # Provide config with thread_id + tableau_client (not in state - not serializable)
-                config = {"configurable": {"thread_id": f"vizql-{request.conversation_id}", "tableau_client": tableau_client}}
-                
                 try:
-                    logger.info(f"Executing VizQL graph for conversation {request.conversation_id} (execution_id: {execution_id})")
-                    
-                    # Track node states during execution for debugging
-                    if request.stream:
-                        # For streaming, we'll track states from astream
-                        async def track_states():
-                            async for state in graph.astream(initial_state, config=config):
-                                node_states.append({
-                                    "timestamp": time.time(),
-                                    "state_keys": list(state.keys()),
-                                    "has_error": "error" in state,
-                                    "has_final_answer": "final_answer" in state
-                                })
-                                yield state
-                        
-                        # This won't work directly - need to handle differently
-                        # For now, just execute normally
-                        final_state = await graph.ainvoke(initial_state, config=config)
-                    else:
-                        final_state = await graph.ainvoke(initial_state, config=config)
-                    
+                    result = await invoke_agent(agent_req, adapters)
                     execution_time = time.time() - execution_start
-                    logger.info(f"VizQL graph completed in {execution_time:.3f}s. Final state keys: {list(final_state.keys())}")
-                    
-                    # Track metrics
-                    success = final_state.get("error") is None and final_state.get("execution_error") is None
+                    final_answer = result.content or result.error or "Query execution completed."
+                    vizql_query = result.metadata.get("vizql_query")
+                    query_results = result.metadata.get("query_results")
+                    success = result.error is None
                     metrics.record_agent_execution("vizql", execution_time, success=success)
-                    
-                    # Track in debugger
-                    debugger.record_execution(
-                        execution_id=execution_id,
-                        agent_type="vizql",
-                        initial_state=initial_state,
-                        final_state=final_state,
-                        execution_time=execution_time,
-                        node_states=node_states
-                    )
-                    
-                    # Track in memory
-                    query_id = f"vizql-{request.conversation_id}-{int(time.time())}"
                     conversation_memory.add_message(
-                        query_id=query_id,
+                        query_id=f"vizql-{request.conversation_id}-{int(time.time())}",
                         user_query=request.content,
                         agent_type="vizql",
-                        response=final_state.get("final_answer", ""),
+                        response=final_answer,
                         datasource_ids=datasource_ids,
-                        view_ids=view_ids
+                        view_ids=view_ids,
                     )
-                    
-                    # Get final answer or error
-                    final_answer = final_state.get("final_answer")
-                    if not final_answer:
-                        error = final_state.get("error")
-                        execution_error = final_state.get("execution_error")
-                        validation_errors = final_state.get("validation_errors", [])
-                        
-                        if error:
-                            final_answer = f"Error: {error}"
-                        elif execution_error:
-                            final_answer = f"Execution error: {execution_error}"
-                        elif validation_errors:
-                            final_answer = f"Validation errors: {', '.join(validation_errors)}"
-                        else:
-                            final_answer = "Query execution completed but no response was generated. Please check the logs."
-                            logger.warning(f"No final_answer or error in final state: {final_state}")
-                    
-                    # Extract VizQL query and query results from final state - always include it, even on errors
-                    vizql_query = None
-                    query_results = None
-                    
-                    if final_state:
-                        # Try multiple keys where query might be stored
-                        for key in ["query_draft", "query", "validated_query"]:
-                            if key in final_state and final_state.get(key):
-                                vizql_query = final_state.get(key)
-                                break
-                        
-                        # Extract query results METADATA and DIMENSION VALUES
-                        # Priority: Use shown_entities from summarizer, fallback to raw_data if small
-                        
-                        dimension_values = {}
-                        
-                        # PRIORITY 1: Check if summarizer provided shown_entities
-                        shown_entities = final_state.get("shown_entities")
-                        if shown_entities and isinstance(shown_entities, dict):
-                            dimension_values = shown_entities
-                            logger.info(f"Non-streaming: Using shown_entities from summarizer: {len(dimension_values)} dimensions")
-                        
-                        # PRIORITY 2: Fallback to extracting from raw_data only if small dataset
-                        elif not dimension_values:
-                            raw_data = final_state.get("raw_data")
-                            if raw_data and isinstance(raw_data, dict):
-                                if "columns" in raw_data and "data" in raw_data:
-                                    row_count = raw_data.get("row_count", len(raw_data.get("data", [])))
-                                    if row_count < 100:
-                                        from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
-                                        dimension_values = extract_dimension_values(raw_data, max_values_per_dimension=50)
-                                        logger.info(f"Non-streaming: Fallback extraction from raw_data (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
-                                    else:
-                                        logger.info(f"Non-streaming: Skipping extraction from raw_data: dataset too large ({row_count} rows)")
-                        
-                        raw_data = final_state.get("raw_data")
-                        if raw_data and isinstance(raw_data, dict):
-                            if "columns" in raw_data and "data" in raw_data:
-                                query_results = {
-                                    "columns": raw_data.get("columns"),
-                                    "row_count": raw_data.get("row_count", len(raw_data.get("data", []))),
-                                    "dimension_values": dimension_values  # Store dimension values (from summarizer or extracted)
-                                    # NOTE: NOT storing full "data" array - only metadata + dimension values
-                                }
-                                logger.info(f"Non-streaming: Stored query_results metadata: {query_results.get('row_count', 0)} rows, {len(dimension_values)} dimensions (data array excluded)")
-                        
-                        # For tool-use agent, also check tool_calls
-                        if not vizql_query and "tool_calls" in final_state:
-                            tool_calls = final_state.get("tool_calls", [])
-                            for tool_call in tool_calls:
-                                if tool_call.get("tool") in ["build_query", "query_datasource"]:
-                                    result = tool_call.get("result", {})
-                                    if isinstance(result, dict):
-                                        vizql_query = result.get("query") or result.get("query_draft")
-                                        if vizql_query:
-                                            break
-                        
-                        # Extract query results METADATA ONLY from query_datasource tool call if not already found
-                        if not query_results and "tool_calls" in final_state:
-                            tool_calls = final_state.get("tool_calls", [])
-                            for tool_call in tool_calls:
-                                if tool_call.get("tool") == "query_datasource":
-                                    result = tool_call.get("result", {})
-                                    if isinstance(result, dict) and "data" in result:
-                                        # Extract dimension values only if small dataset
-                                        dimension_values = {}
-                                        row_count = result.get("row_count", len(result.get("data", [])))
-                                        
-                                        if row_count < 100:
-                                            from app.services.agents.vizql_tool_use.context_extractor import extract_dimension_values
-                                            dimension_values = extract_dimension_values(result, max_values_per_dimension=50)
-                                            logger.info(f"Non-streaming: Extracted from query_datasource tool (small dataset): {row_count} rows, {len(dimension_values)} dimensions")
-                                        else:
-                                            logger.info(f"Non-streaming: Skipping extraction from query_datasource tool: dataset too large ({row_count} rows)")
-                                        
-                                        query_results = {
-                                            "columns": result.get("columns", []),
-                                            "row_count": row_count,
-                                            "dimension_values": dimension_values  # Store dimension values (only if small dataset)
-                                            # NOTE: NOT storing full "data" array - only metadata + dimension values
-                                        }
-                                        logger.info(f"Non-streaming: Stored query_results metadata from tool call: {row_count} rows, {len(dimension_values)} dimensions (data array excluded)")
-                                        break
                 except Exception as e:
                     execution_time = time.time() - execution_start
-                    logger.error(f"Error executing VizQL graph: {e}", exc_info=True)
+                    logger.error(f"Error executing VizQL: {e}", exc_info=True)
                     metrics.record_agent_execution("vizql", execution_time, success=False)
                     final_answer = f"Error executing query: {str(e)}"
-                    # Try to extract query_draft even on exception if we have partial state
                     vizql_query = None
-                    try:
-                        # Try to get final_state from exception context if available
-                        if 'final_state' in locals() and final_state:
-                            for key in ["query_draft", "query", "validated_query"]:
-                                if key in final_state and final_state.get(key):
-                                    vizql_query = final_state.get(key)
-                                    break
-                    except (KeyError, AttributeError, TypeError) as e:
-                        # Expected errors when extracting query from state - continue silently
-                        logger.debug(f"Could not extract query from final_state: {e}")
-                        pass
-                    except Exception as e:
-                        # Log unexpected errors but continue
-                        logger.warning(f"Unexpected error extracting query from final_state: {e}", exc_info=True)
-                        pass
-                
-                # Save assistant message
+                    query_results = None
+
                 assistant_message = Message(
                     conversation_id=request.conversation_id,
                     role=MessageRole.ASSISTANT,
@@ -1502,218 +884,50 @@ async def send_message(
                     tokens_used=0
                 )
         
-        # Route to Summary agent graph
+        # Route to Summary agent (via Agent Service)
         elif agent_type == 'summary' and view_ids:
-            # Summary agent uses embedded_state only (no REST fallback)
-            from app.services.agents.graph_factory import AgentGraphFactory
-
-            logger.info(f"Routing to Summary agent graph with views: {view_ids}")
-            
-            # Apply feedback-based refinement to query
-            from app.services.agents.feedback import FeedbackManager
-            feedback_manager = FeedbackManager(db=db, model=request.model, provider=provider)
+            logger.info(f"Routing to Summary agent via Agent Service with views: {view_ids}")
             refined_query_result = await feedback_manager.apply_feedback_to_query(
                 query=request.content,
                 conversation_id=request.conversation_id,
                 agent_type="summary"
             )
             refined_query = refined_query_result.get("refined_query", request.content)
-            
             if refined_query != request.content:
                 logger.info(f"Query refined based on feedback: {refined_query_result.get('changes')}")
-            
-            # Track execution start time
             execution_start = time.time()
             metrics = get_metrics()
             conversation_memory = get_conversation_memory(request.conversation_id)
-            
-            # Build message history from conversation messages
-            message_history = []
-            for msg in history_messages:
-                msg_dict = {
-                    "role": msg.role.value.lower() if isinstance(msg.role, MessageRole) else str(msg.role).lower(),
-                    "content": msg.content
-                }
-                message_history.append(msg_dict)
-            
-            graph = AgentGraphFactory.create_summary_graph()
-            
-            logger.info(f"Summary agent: stream={request.stream}, tableau_client={'present' if tableau_client else 'None'}, views={len(view_ids)}")
-
-            # Initialize state for Summary agent (body preferred: Next.js rewrites may not forward custom headers)
             summary_mode = request.summary_mode if request.summary_mode in ("brief", "full", "custom") else "full"
             tableau_auth_type = (request.tableau_auth_type or x_tableau_auth_type or "connected_app").lower()
-            initial_state = {
-                "user_query": refined_query,
-                "agent_type": "summary",
-                "context_datasources": datasource_ids,
-                "context_views": view_ids,
-                "messages": message_history,
-                "tool_calls": [],
-                "tool_results": [],
-                "current_thought": None,
-                "final_answer": None,
-                "error": None,
-                "confidence": None,
-                "processing_time": None,
-                # AI client configuration
-                "model": request.model,
-                "provider": provider_for_state,
-                "embedded_state": request.embedded_state or None,
-                "summary_mode": summary_mode,
-                "conversation_id": request.conversation_id,
-                "tableau_auth_type": tableau_auth_type,
-            }
-            
+            agent_req = build_agent_request(
+                agent_type="summary",
+                user_query=refined_query,
+                datasource_ids=datasource_ids,
+                view_ids=view_ids,
+                message_history=history_messages,
+                model=request.model,
+                provider=provider_for_state,
+                conversation_id=request.conversation_id,
+                embedded_state=request.embedded_state,
+                summary_mode=summary_mode,
+                tableau_auth_type=tableau_auth_type,
+                site_id=(tableau_client.site_id or "") if tableau_client else settings.TABLEAU_SITE_ID,
+                stream=request.stream,
+            )
+            adapters = build_adapters(tableau_client)
+
             if request.stream:
-                # Stream graph execution
                 async def stream_graph():
                     full_content = ""
-                    last_final_answer = ""
-                    last_state = None
-                    reasoningStepIndex = 0
-                    stream_start_time = time.time()  # Track when streaming starts
-                    stream_graph._streamed_node_thoughts = set()  # Track which node thoughts we've already streamed
+                    stream_start_time = time.time()
                     try:
-                        config = {
-                            "configurable": {
-                                "thread_id": f"summary-{request.conversation_id}",
-                                "tableau_client": tableau_client,
-                            }
-                        }
-                        async for state_update in graph.astream(initial_state, config=config):
-                            # LangGraph astream returns updates keyed by node name
-                            # Each update contains the state dictionary for that node
-                            logger.debug(f"Summary graph state update - node keys: {list(state_update.keys())}")
-                            
-                            # Iterate through all node updates in this state update
-                            for node_name, node_state in state_update.items():
-                                logger.debug(f"Processing node '{node_name}' - state keys: {list(node_state.keys()) if isinstance(node_state, dict) else 'not dict'}")
-                                
-                                # Keep track of the last state for final extraction
-                                if isinstance(node_state, dict):
-                                    last_state = node_state
-                                
-                                # Stream intermediate thoughts as reasoning steps
-                                if isinstance(node_state, dict) and "current_thought" in node_state and node_state.get("current_thought"):
-                                    thought = node_state["current_thought"]
-                                    node_thought_key = f"{node_name}_thought"
-                                    
-                                    if node_thought_key not in stream_graph._streamed_node_thoughts:
-                                        logger.info(f"Streaming reasoning step from {node_name}: {thought[:100]}")
-                                        
-                                        step_metadata = dict(node_state.get("step_metadata") or {})
-                                        view_images = step_metadata.pop("view_images", None)  # Send separately to keep reasoning chunk small
-                                        
-                                        reasoning_chunk = AgentMessageChunk(
-                                            message_type="reasoning",
-                                            content=AgentMessageContent(type="text", data=thought),
-                                            step_name=node_name,
-                                            timestamp=time.time(),
-                                            step_index=reasoningStepIndex,
-                                            metadata=step_metadata if step_metadata else None
-                                        )
-                                        reasoningStepIndex += 1
-                                        yield reasoning_chunk.to_sse_format()
-                                        # Only send view_images for get_data - summarizer inherits state and would re-send the same images
-                                        if view_images and node_name == "get_data":
-                                            step_idx = reasoningStepIndex - 1
-                                            logger.info(f"Summary: sending view_images metadata step_index={step_idx} count={len(view_images)}")
-                                            meta_chunk = AgentMessageChunk(
-                                                message_type="metadata",
-                                                content=AgentMessageContent(type="json", data={"view_images": view_images, "step_index": step_idx}),
-                                                timestamp=time.time()
-                                            )
-                                            yield meta_chunk.to_sse_format()
-                                        stream_graph._streamed_node_thoughts.add(node_thought_key)
-                                        full_content += " " + thought
-                                
-                                # Stream final answer when available
-                                if isinstance(node_state, dict) and "final_answer" in node_state and node_state.get("final_answer"):
-                                    answer = node_state["final_answer"]
-                                    logger.info(f"Found final_answer in {node_name}: {answer[:200]}")
-                                    # Send the full answer if it's new or has changed
-                                    if answer != last_final_answer:
-                                        # If we haven't sent this answer yet, send it all
-                                        if last_final_answer == "":
-                                            logger.info(f"Streaming full final_answer from {node_name}: {len(answer)} chars")
-                                            answer_chunk = AgentMessageChunk(
-                                                message_type="final_answer",
-                                                content=AgentMessageContent(type="text", data=answer),
-                                                timestamp=time.time()
-                                            )
-                                            yield answer_chunk.to_sse_format()
-                                        else:
-                                            # Send only the new part
-                                            new_content = answer[len(last_final_answer):]
-                                            if new_content:
-                                                logger.info(f"Streaming new content from {node_name}: {len(new_content)} chars")
-                                                answer_chunk = AgentMessageChunk(
-                                                    message_type="final_answer",
-                                                    content=AgentMessageContent(type="text", data=new_content),
-                                                    timestamp=time.time()
-                                                )
-                                                yield answer_chunk.to_sse_format()
-                                        last_final_answer = answer
-                                        full_content = answer
-                        
-                        # After streaming completes, check last state for final_answer if we didn't get it
-                        if not full_content:
-                            logger.warning(f"Streaming completed but no full_content received. Last state: {type(last_state)}")
-                            
-                            # last_state should be a dict from the last node update
-                            if last_state and isinstance(last_state, dict):
-                                logger.info(f"Checking last_state for final_answer - keys: {list(last_state.keys())}")
-                                final_answer = last_state.get("final_answer")
-                                if not final_answer:
-                                    # Try to extract error or other info
-                                    error = last_state.get("error")
-                                    executive_summary = last_state.get("executive_summary")
-                                    detailed_analysis = last_state.get("detailed_analysis")
-                                    
-                                    logger.info(f"Extracting from last_state - error: {error}, executive_summary: {executive_summary}, detailed_analysis: {detailed_analysis}")
-                                    
-                                    if error:
-                                        final_answer = f"Error: {error}"
-                                    elif executive_summary:
-                                        final_answer = executive_summary
-                                    elif detailed_analysis:
-                                        final_answer = detailed_analysis
-                                    else:
-                                        final_answer = "Summary generation completed but no response was generated."
-                                
-                                if final_answer and final_answer != last_final_answer:
-                                    logger.info(f"Sending final_answer after stream: {final_answer[:200]}")
-                                    # Send as structured final_answer chunk
-                                    answer_chunk = AgentMessageChunk(
-                                        message_type="final_answer",
-                                        content=AgentMessageContent(type="text", data=final_answer),
-                                        timestamp=time.time()
-                                    )
-                                    yield answer_chunk.to_sse_format()
-                                    full_content = final_answer
-                        
-                        # Ensure we have content to save - if not, try to get it from last_state one more time
-                        if not full_content and last_state:
-                            logger.warning("No content after streaming, attempting to extract from last_state")
-                            # Check all possible sources
-                            full_content = (
-                                last_state.get("final_answer") or
-                                last_state.get("executive_summary") or
-                                last_state.get("detailed_analysis") or
-                                (f"Error: {last_state.get('error')}" if last_state.get("error") else None) or
-                                "Summary generation completed. Please check the conversation messages."
-                            )
-                            if full_content and full_content != "Summary generation completed. Please check the conversation messages.":
-                                logger.info(f"Extracted content from last_state: {full_content[:200]}")
-                                # Send as structured final_answer chunk
-                                answer_chunk = AgentMessageChunk(
-                                    message_type="final_answer",
-                                    content=AgentMessageContent(type="text", data=full_content),
-                                    timestamp=time.time()
-                                )
-                                yield answer_chunk.to_sse_format()
-                        
+                        async for chunk in invoke_agent_stream(agent_req, adapters):
+                            yield chunk
+                            mt, data, _ = parse_stream_chunk(chunk)
+                            if mt == "final_answer" and data:
+                                full_content += str(data)
+
                         # Save assistant message after streaming completes
                         if full_content:
                             try:
@@ -1747,24 +961,6 @@ async def send_message(
                         yield done_chunk.to_sse_format()
                     except Exception as e:
                         logger.error(f"Error in Summary graph streaming: {e}", exc_info=True)
-                        # Try to extract query from last_state even on error if available
-                        error_vizql_query = None
-                        try:
-                            if 'last_state' in locals() and last_state:
-                                for key in ["query_draft", "query", "validated_query"]:
-                                    if key in last_state and last_state.get(key):
-                                        error_vizql_query = last_state.get(key)
-                                        break
-                        except (KeyError, AttributeError, TypeError) as e:
-                            # Expected errors when extracting query from state - continue silently
-                            logger.debug(f"Could not extract query from last_state: {e}")
-                            pass
-                        except Exception as e:
-                            # Log unexpected errors but continue
-                            logger.warning(f"Unexpected error extracting query from last_state: {e}", exc_info=True)
-                            pass
-                        
-                        # Send error chunk
                         error_chunk = AgentMessageChunk(
                             message_type="error",
                             content=AgentMessageContent(type="text", data=str(e)),
@@ -1791,32 +987,19 @@ async def send_message(
                     }
                 )
             else:
-                # Non-streaming: execute graph and return result
-                config = {
-                    "configurable": {
-                        "thread_id": f"summary-{request.conversation_id}",
-                        "tableau_client": tableau_client,
-                    }
-                }
-                final_state = await graph.ainvoke(initial_state, config=config)
+                result = await invoke_agent(agent_req, adapters)
                 execution_time = time.time() - execution_start
-                
-                # Track metrics
-                success = final_state.get("error") is None
+                final_answer = result.content or result.error or "Summary generation completed."
+                success = result.error is None
                 metrics.record_agent_execution("summary", execution_time, success=success)
-                
-                # Track in memory
-                query_id = f"summary-{request.conversation_id}-{int(time.time())}"
                 conversation_memory.add_message(
-                    query_id=query_id,
+                    query_id=f"summary-{request.conversation_id}-{int(time.time())}",
                     user_query=request.content,
                     agent_type="summary",
-                    response=final_state.get("final_answer", ""),
+                    response=final_answer,
                     datasource_ids=datasource_ids,
-                    view_ids=view_ids
+                    view_ids=view_ids,
                 )
-                
-                final_answer = final_state.get("final_answer") or final_state.get("error", "Summary generation completed.")
                 
                 # Calculate total time for non-streaming summary agent
                 total_time_ms = (time.time() - execution_start) * 1000

@@ -16,6 +16,7 @@ except ImportError:
     from mcp_server.server import mcp
 
 
+
 def get_db_session():
     """Get database session (synchronous generator for use in async context)."""
     db = SessionLocal()
@@ -293,3 +294,76 @@ async def chat_get_messages(
             "error": str(e),
             "messages": [],
         }
+
+
+@mcp.tool()
+async def chat_send_message(
+    conversation_id: int,
+    content: str,
+    model: str = "gpt-4",
+    provider: str = "openai",
+    agent_type: Optional[str] = None,
+    stream: bool = False,
+    auth0_token: Optional[str] = None,
+    x_tableau_config_id: Optional[str] = None,
+    x_tableau_auth_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Send a message to the chat API and get an AI response. Invokes the agent service via backend HTTP.
+    Requires Auth0 token for authenticated requests. Pass auth0_token or set AUTH0_ACCESS_TOKEN env.
+
+    Args:
+        conversation_id: Conversation ID (required)
+        content: Message content (required)
+        model: AI model to use (default: gpt-4)
+        provider: Provider name e.g. openai, apple, vertex (default: openai)
+        agent_type: Optional - vizql, summary, or multi_agent
+        stream: Whether to stream response (default: False)
+        auth0_token: Auth0 access token (optional, falls back to env AUTH0_ACCESS_TOKEN)
+        x_tableau_config_id: Tableau config ID for datasource/view context
+        x_tableau_auth_type: Tableau auth type e.g. connected_app, pat
+
+    Returns:
+        Dictionary with message, conversation_id, model, tokens_used
+    """
+    try:
+        from mcp_server.utils.backend_client import call_backend_api
+        try:
+            from mcp_server import get_auth0_token
+            token = auth0_token or get_auth0_token()
+        except ImportError:
+            token = auth0_token
+
+        if not token:
+            return {
+                "error": "Auth0 token required. Set AUTH0_ACCESS_TOKEN env or pass auth0_token.",
+                "message": None,
+            }
+
+        payload = {
+            "conversation_id": conversation_id,
+            "content": content,
+            "model": model,
+            "provider": provider,
+            "stream": stream,
+        }
+        if agent_type:
+            payload["agent_type"] = agent_type
+
+        extra = {}
+        if x_tableau_config_id:
+            extra["X-Tableau-Config-Id"] = x_tableau_config_id
+        if x_tableau_auth_type:
+            extra["X-Tableau-Auth-Type"] = x_tableau_auth_type
+
+        result = await call_backend_api(
+            endpoint="/api/v1/chat/message",
+            method="POST",
+            data=payload,
+            auth0_token=token,
+            extra_headers=extra if extra else None,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error sending chat message: {e}", exc_info=True)
+        return {"error": str(e), "message": None}

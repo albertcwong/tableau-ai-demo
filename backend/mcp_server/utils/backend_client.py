@@ -12,35 +12,36 @@ async def call_backend_api(
     method: str = "GET",
     data: Optional[Dict[str, Any]] = None,
     auth0_token: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     timeout: float = 30.0
 ) -> Dict[str, Any]:
     """
     Call backend API with Auth0 token authentication.
-    
+
     Args:
         endpoint: API endpoint path (e.g., "/api/v1/auth/me")
         method: HTTP method (GET, POST, PUT, DELETE)
         data: Request body data (for POST/PUT)
         auth0_token: Auth0 access token
+        extra_headers: Optional extra headers (e.g. X-Tableau-Config-Id)
         timeout: Request timeout in seconds
-    
+
     Returns:
         Response JSON data
-    
+
     Raises:
         httpx.HTTPError: If request fails
     """
     backend_url = settings.BACKEND_API_URL or "http://localhost:8000"
     url = f"{backend_url}{endpoint}"
-    
-    headers = {
-        "Content-Type": "application/json",
-    }
-    
+
+    headers = {"Content-Type": "application/json"}
     if auth0_token:
         headers["Authorization"] = f"Bearer {auth0_token}"
     else:
         logger.warning(f"No Auth0 token provided for API call to {endpoint}")
+    if extra_headers:
+        headers.update(extra_headers)
     
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
